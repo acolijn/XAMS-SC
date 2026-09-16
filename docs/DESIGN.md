@@ -47,6 +47,7 @@ xams-sc/
 │   ├── scaling.py              raw -> engineering units
 │   ├── devices/
 │   │   ├── cdaq.py
+│   │   ├── derived.py           flow integrator (§7.5)
 │   │   ├── caen.py
 │   │   ├── lakeshore.py
 │   │   └── ups.py
@@ -69,6 +70,7 @@ xams-sc/
 │   │   ├── datasources/        points Grafana at PostgreSQL
 │   │   └── dashboards/         tells Grafana where the JSON lives
 │   └── dashboards/*.json       the dashboards themselves, in git
+├── procedures/*.yaml           named control sequences (§10)
 ├── services/                   NSSM install scripts, one per service
 ├── tests/
 │   ├── test_scaling.py
@@ -226,7 +228,7 @@ Example, using values recovered from the LabVIEW front panel:
   kind: voltage
   offset: 0.0
   multiplier: 6.0
-  unit: slpm           # confirmed: front panel reads "Flow (SLPM)"
+  unit: g/min          # mass flow. NOT SLPM — see §4.2 note below
   legacy: FM101
 
 - name: tt301
@@ -263,7 +265,11 @@ Unconnected channels are listed explicitly with `enabled: false` rather than omi
 
 **Scaling is defined as `value = (raw - offset) * multiplier`.** This matches the LabVIEW implementation exactly — the front panel labels the two columns "Offsets subtracted" and "Multipliers", in that order. Do not change the convention, or historical comparisons break.
 
-**Units are not recovered.** The LabVIEW front panel shows the scaling factors but not the engineering units, except for the flow, which it labels "Flow (SLPM)". The pressure units are therefore **TBD** (§16) and must not be guessed: a value of 1.53 is equally plausible in bar or in another unit, and a wrong label propagates into every plot, alarm threshold and paper thereafter. The number is right regardless; only its name is missing.
+**Units are not recovered, and one of them in the old system is wrong.** The LabVIEW front panel shows the scaling factors but not the engineering units — except for the flow, which it labels "Flow (SLPM)". **That label is incorrect: `fm101` is a mass flow in g/min.** It is recorded here explicitly so that nobody later "corrects" it back by consulting the old front panel.
+
+This is a concrete instance of the risk that milestone 3 exists to catch: the number was right, the name was wrong, and nothing in the system noticed for years.
+
+The pressure units are therefore **TBD** (§16) and must not be guessed. A value of 1.53 is equally plausible in bar or in another unit, and a wrong label propagates into every plot, every alarm threshold and eventually into a paper.
 
 ### 4.3 `alarms.yaml`
 
@@ -522,6 +528,37 @@ A power event is one of the few things that can end a run, so this is worth havi
 
 ---
 
+### 7.5 Derived channels — the flow integrator
+
+The present system integrates the flow and offers a reset button (`Average_flow_x_time.vi`). The feature is carried over, as `devices/derived.py`: a bus consumer that subscribes to `fm101` and publishes `fm101_total`, stored and plotted like any other channel.
+
+**This is the only stateful component in the system.** Everything else is restartable without consequence; an integrator is not, which raises three requirements that must not be skipped.
+
+**It survives a restart.** After every publish the accumulator is written to disk together with the timestamp of the last sample processed, and read back on startup. A Windows update that reset the total to zero would make the feature useless.
+
+**Gaps are recorded, never invented.** If the service was down for two hours, what flowed during those two hours is unknown. Extrapolating the last value is tempting and wrong. Such intervals are excluded from the total and counted separately:
+
+```json
+{"ch":"fm101_total","v":4213.8,"u":"g","q":"ok","gaps_s":7200}
+```
+
+The total then carries the evidence that it is an underestimate, instead of that having to be reconstructed months later. Samples whose `quality` is not `ok` are likewise not integrated.
+
+**Reset closes a period; it does not erase.** Instead of zeroing a counter, the running period is closed and a new one opened, in a `flow_periods` table:
+
+| start | stop | total_g | gaps_s | reset_by |
+|---|---|---|---|---|
+| 2026-08-01 09:14 | 2026-09-16 11:02 | 4213.8 | 0 | apc |
+| 2026-09-16 11:02 | — | 118.4 | 0 | — |
+
+This keeps the history of how much passed through during each period, rather than a number somebody once discarded. A reset is a control action and goes through the audit log (§10).
+
+**Units.** `fm101` is a **mass flow in g/min** — *per minute*. The integral is `Σ (flow × dt)` with `dt` in **minutes**, giving a mass in **grams**; `fm101_total` therefore has unit `g`. Grafana may display kilograms, but the stored value is grams.
+
+Two traps, both covered explicitly in `test_scaling.py`: a `dt` in seconds produces a factor-60 error that looks entirely plausible, and the LabVIEW front panel labels this channel "Flow (SLPM)", which is wrong — it is not a volumetric standard-litre flow.
+
+---
+
 ## 8. Interfaces and access
 
 **Hard requirement: the system is reachable from the lab PC only.** Every listening service binds to the loopback address. This matches how the LabVIEW system works today and is a deliberate constraint, not an oversight to be relaxed later without discussion.
@@ -551,7 +588,39 @@ Separated by how often they are touched and how much a mistake costs.
 
 **Grafana — monitoring.** Plots, history, dashboards, trends. Read-only by construction, and where most of the day is spent. It **displays** alarm state and alarm history, but it does not evaluate alarms or send notifications — that is `alarms/engine.py` (§11). No control, ever: that separation is the point.
 
-**Web UI — control.** One page: current value of every channel, alarm state, service health, and the control actions. Per HV channel it shows `VSET`, `VMON`, `IMON`, on/off state and ramping status.
+**Web UI — the landing page.** `http://localhost:8000/` is the page to bookmark and open every morning. It answers "is everything all right?" without a click, and only then offers links.
+
+```
+┌────────────────────────────────────────────────┐
+│  XAMS Slow Control              ● ALL OK       │
+│  config a3f91c2 · v1.4.0 · up 6d 4h            │
+├────────────────────────────────────────────────┤
+│  Services          cdaq ● 2s   caen ● 3s       │
+│                    lakeshore ● 2s   ups ● 11s  │
+│  Sinks             postgres ● 1s   jsonl ● 1s  │
+│                    nikhef-vm ⚠ 4m behind       │
+│  Alarms            none active                 │
+│  Disk              C: 812 GB free              │
+├────────────────────────────────────────────────┤
+│  Grafana  ·  Status  ·  Recipients  ·  Logs    │
+└────────────────────────────────────────────────┘
+```
+
+| Page | Contents |
+|---|---|
+| `/` | the overview above, self-refreshing |
+| `/status` | per channel: value, unit, age, `quality` |
+| `/recipients` | edit the notification list (§4.4) |
+| `/logs` | the last lines of each service log — saves logging in and hunting for files |
+| `/control` | setpoints and procedures — built last (§10) |
+
+Plus links to Grafana on `:3000` and to `DESIGN.md` and `OPERATIONS.md` in the repository.
+
+**The status page reads from MQTT retained topics, never from the database.** If PostgreSQL is down the page must still work — that is precisely when it is needed. A status page that fails together with the component it reports on is worthless.
+
+Kept deliberately plain: server-rendered HTML from FastAPI, a meta refresh or a few lines of `fetch`, no JavaScript framework and no build step. In three years a student must be able to change it without installing a toolchain.
+
+**Web UI — control.** Current value of every channel, alarm state, service health, and the control actions. Per HV channel it shows `VSET`, `VMON`, `IMON`, on/off state and ramping status.
 
 Setting a value requires a confirmation step. For HV the new value is retyped rather than confirmed with a click — deliberate friction, because the failure mode is an extra zero on an electrode. Validation before any write: identity confirmed (§6.2), value within the range in `channels.yaml`, device not in an error state. A rejected command is acknowledged with a reason, never silently dropped.
 
@@ -731,6 +800,32 @@ UI / API  →  xams/cmd/<device>/<action>  →  service validates  →  instrume
 ```
 
 Validation before any write: identity confirmed, value within the configured range, device not in an error state. A rejected command is acknowledged with a reason; it is never silently dropped.
+
+### Procedures
+
+Operating the Lake Shore and the CAEN supplies by hand is tedious: menu navigation on the front panel for a setpoint, per-channel navigation across two supplies for high voltage. Bringing the TPC up means eight manual steps in the right order, which is exactly the kind of work that goes wrong at two in the morning.
+
+Control therefore does more than save effort — a written, reviewed sequence that always proceeds in the same order is **more reliable than a person with a printed procedure.** This is an argument for building the control path, not merely a convenience.
+
+Named sequences live in git as data, like everything else:
+
+```yaml
+# procedures/hv_rampup.yaml
+name: HV ramp up
+steps:
+  - set: {channel: hv_cathode, value: -10000, ramp: 50}
+  - wait_until: {channel: hv_cathode, stable_within: 10, timeout_s: 600}
+  - set: {channel: hv_gate, value: -5000, ramp: 50}
+abort_on: [any_alarm, trip, operator_stop]
+```
+
+Requirements:
+
+- **Dry run.** Every procedure can be executed in a mode that reports each step without writing anything. This is also how a procedure is reviewed before it is run for the first time.
+- **Abort is always available**, and aborting leaves the hardware in a defined state — it does not simply stop mid-sequence without saying where it stopped.
+- **Every step passes the ordinary write validation** (§6.2, and the rules above). A procedure is not a way around the guardrails.
+- **The whole run is audited**, step by step, not merely as "procedure executed".
+- A procedure that is edited is a change to a file in git, reviewable like code.
 
 ### Open decision
 
@@ -934,10 +1029,11 @@ Each milestone has an acceptance criterion. Do not start the next before the cur
 | 3 | Channel verification | Each `tt*` tag confirmed empirically against its channel (warm a sensor, watch which value moves) and its physical location recorded. Tags are known; the mapping to hardware is what is being verified. |
 | 4 | Scaling and history | Column-count check passed (§9.6), history imported, and scaled values agree with the LabVIEW record for the same sensors within expected tolerance. |
 | 5 | Lake Shore + CAEN monitoring | Read-only. Identity verification working. Unplug test passes. |
-| 6 | UPS + alarms | Thresholds from `alarms.yaml`, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm. |
+| 6 | UPS, alarms, flow integrator | Thresholds from `alarms.yaml`, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm. Integrator survives a service restart without losing its total. |
 | 7 | Web UI | Current values, alarm state, service health. Read-only, bound to `127.0.0.1`. Python client works from a notebook. |
-| 8 | Control path | Lake Shore setpoint, then HV — only after §10's open decision is made. Audit log complete. |
-| 9 | Production | `SERVICE_AUTO_START`, LabVIEW retired but installed. **`OPERATIONS.md` passes the acceptance test of §14** — a colleague operates the system from it unaided. |
+| 8 | Control path | Lake Shore setpoint, then HV — only after §10's open decision is made and monitoring has run reliably for weeks. Audit log complete; every write validated; dry run works. |
+| 9 | Procedures | Named sequences (§10) run, abort cleanly, and are audited step by step. |
+| 10 | Production | `SERVICE_AUTO_START`, LabVIEW retired but installed. **`OPERATIONS.md` passes the acceptance test of §14** — a colleague operates the system from it unaided. |
 
 Milestone 3 is the one that cannot be rushed. The tag names are now known, but a tag that was already attached to the wrong channel in the LabVIEW system would be copied across silently. Verifying each one physically is the only way to catch that.
 
