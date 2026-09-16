@@ -44,7 +44,7 @@ pre { font-family: "SF Mono", Menlo, monospace; font-size: 8.3pt; background: #f
 
 <div class="box">
 <h3>Conclusion</h3>
-<p>Given the actual inventory — four instruments, roughly thirty connected channels, one rack — this is a <strong>small</strong> rewrite. Build a <strong>Python service stack</strong>: device drivers publishing to MQTT, PostgreSQL for history, Grafana for plots and alarms.</p>
+<p>Given the actual inventory — four instruments, roughly thirty connected channels, one rack — this is a <strong>small</strong> rewrite. Build a <strong>Python service stack</strong>: device drivers publishing to MQTT, PostgreSQL for history, Grafana for plots, and a small alarm service for notifications.</p>
 <p>The system stays on <strong>Windows</strong>, on the existing control PC (§7). EPICS was considered seriously and is <strong>not</strong> recommended at this scale (§9). It remains buildable if circumstances change.</p>
 <p style="margin-bottom:0">Most of the configuration knowledge has now been recovered from the MAX report and the LabVIEW documentation export (§3). What remains missing is listed in §4 and is obtainable in an afternoon.</p>
 </div>
@@ -179,7 +179,7 @@ lakeshore_service.py┤── publish ──► Mosquitto (MQTT)
 caen_service.py    ─┤                    │
 ups_service.py     ─┘                    ├──► writer ──► PostgreSQL    working store
                                          ├──► writer ──► JSONL files   raw archive (§6)
-                                         ├──► Grafana                  plots + alarms
+                                         ├──► Grafana                  plots (alarm state shown, not evaluated)
                                          └──► FastAPI                  setpoints, web UI
 config/channels.yaml    calibrations, units, alarm limits — single source of truth, in git</pre>
 <p>One service per instrument, each an independent Windows service with its own reconnect loop, so a hung device cannot block the others. Channel definitions live in YAML, not in code:</p>

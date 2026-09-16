@@ -68,6 +68,13 @@ strong { font-weight:600; }
 │   │   └── client.py           Python client for scripts and notebooks
 │   └── cli/
 │       └── xams_ctl.py         start/stop/status for all services
+├── sql/
+│   └── schema.sql              tables + indexes — run on every install
+├── grafana/
+│   ├── provisioning/
+│   │   ├── datasources/        points Grafana at PostgreSQL
+│   │   └── dashboards/         tells Grafana where the JSON lives
+│   └── dashboards/*.json       the dashboards themselves, in git
 ├── services/                   NSSM install scripts, one per service
 ├── tests/
 │   ├── test_scaling.py
@@ -336,7 +343,7 @@ $BD:&lt;addr&gt;,CMD:SET,PAR:VSET,CH:&lt;n&gt;,VAL:&lt;v&gt;   set voltage   (co
 <p>If remote viewing is wanted later, the answer is an SSH tunnel or a read-only mirror of the data — never opening the control port. Adding remote access is a decision with a security consequence, and should be recorded as such.</p>
 <h3>8.1 The four surfaces</h3>
 <p>Separated by how often they are touched and how much a mistake costs.</p>
-<p><strong>Grafana — monitoring.</strong> Plots, history, dashboards, trends. Read-only by construction, and where most of the day is spent. Also the alerting engine for notifications. No control, ever: that separation is the point.</p>
+<p><strong>Grafana — monitoring.</strong> Plots, history, dashboards, trends. Read-only by construction, and where most of the day is spent. It <strong>displays</strong> alarm state and alarm history, but it does not evaluate alarms or send notifications — that is <code>alarms/engine.py</code> (§11). No control, ever: that separation is the point.</p>
 <p><strong>Web UI — control.</strong> One page: current value of every channel, alarm state, service health, and the control actions. Per HV channel it shows <code>VSET</code>, <code>VMON</code>, <code>IMON</code>, on/off state and ramping status.</p>
 <p>Setting a value requires a confirmation step. For HV the new value is retyped rather than confirmed with a click — deliberate friction, because the failure mode is an extra zero on an electrode. Validation before any write: identity confirmed (§6.2), value within the range in <code>channels.yaml</code>, device not in an error state. A rejected command is acknowledged with a reason, never silently dropped.</p>
 <p>The page also carries alarm <strong>acknowledge</strong> (stop the repeating notification; the condition is still displayed as active) and <strong>silence for N minutes</strong> (for a deliberate intervention). Acknowledging is not fixing, and the UI must never let the two look alike.</p>
@@ -429,7 +436,15 @@ CREATE INDEX ON meas (channel, t DESC);</code></pre>
 <p>The existing LabVIEW system performs protective actions in software: a &quot;Shut off heater if Alarm is active&quot; switch and a <code>KILL VOLTAGE</code> button. <strong>TBD</strong> — reproduce as-is, or move into hardware. Reproducing it is defensible; doing so without noticing the choice is not. Decide before the control path is implemented.</p>
 <hr>
 <h2>11. Alarm engine</h2>
-<p><code>alarms/engine.py</code> subscribes to <code>xams/meas/#</code> and evaluates against <code>alarms.yaml</code>.</p>
+<p><code>alarms/engine.py</code> subscribes to <code>xams/meas/#</code> and evaluates against <code>alarms.yaml</code>. It decides and notifies; Grafana only displays the result.</p>
+<p><strong>Grafana&#x27;s own alerting is deliberately not used.</strong> It works by querying the database on a schedule, which places PostgreSQL and Grafana inside the alarm path: if either is down or slow, notifications do not go out. Alarms are the part of this system that must be most reliable, so the path is kept as short as possible — measurement → bus → engine → SMS, with no database and no web server involved. Grafana also has no native SMS contact point, so a script would have to be written regardless.</p>
+<p>The engine publishes alarm state to <code>xams/alarm/&lt;channel&gt;</code>, which is stored like any other record, so Grafana can show current state and history without being part of the mechanism.</p>
+<h3>Thresholds live in one place</h3>
+<p>Displaying alarm <em>state</em> needs no knowledge of the limits: the engine publishes a result (<code>{&quot;state&quot;:&quot;major&quot;}</code>) and Grafana colours a panel from it. Drawing a threshold <em>line</em> on a graph is different — Grafana would need the number, and it would then exist both in <code>alarms.yaml</code> and in the dashboard JSON, where the two will drift apart.</p>
+<p><strong>Therefore: no threshold lines on graphs.</strong> The alarm panel colours, which is what is actually watched. Generating the dashboard JSON from <code>alarms.yaml</code> would solve it properly, but the cost is not the generator (a template substitution, some forty lines) — it is the recurring workflow: every dashboard edited in the Grafana UI must be re-exported and re-templated, or the generator overwrites the manual work. For a handful of panels that is more friction than the problem warrants. Revisit it if the lines turn out to be genuinely missed <em>and</em> have drifted once.</p>
+<p><strong>Instead, make drift visible.</strong> On startup and on every reload the engine publishes the limits it actually loaded:</p>
+<pre><code>xams/status/limits   {&quot;pmain&quot;: {&quot;high&quot;: 1.8, &quot;hihi&quot;: 2.0}, ...}</code></pre>
+<p>shown on the status page and written to the log. The real risk is not a missing line on a plot; it is believing a threshold is 2.0 when it is 20. This exposes what is in force, with no generation machinery.</p>
 <ul><li>Four thresholds per channel, EPICS-style: <code>lolo</code>, <code>low</code>, <code>high</code>, <code>hihi</code>, each with a severity.</li><li><strong>Hysteresis</strong> on every threshold, to stop a channel sitting on a limit from producing a stream of notifications.</li><li><strong>Deduplication</strong>: one notification per state transition, then repeat at <code>min_repeat_minutes</code> while the condition persists.</li><li><strong>Staleness is an alarm</strong>, at the same severity as a threshold breach. A dead sensor must not read as healthy.</li><li>Alarm state is published on <code>xams/alarm/&lt;channel&gt;</code> and is itself retained, so the UI shows the true state on connect.</li></ul>
 <h3>Notification</h3>
 <p><code>alarms/notify.py</code> exposes a thin interface — <code>send_sms(number, text)</code>, <code>send_email(...)</code> — and the alarm engine knows nothing else, so what sits underneath is replaceable without touching alarm logic. Recipients come from <code>recipients.yaml</code> (§4.4); severity routing from <code>alarms.yaml</code>.</p>
@@ -447,6 +462,30 @@ CREATE INDEX ON meas (channel, t DESC);</code></pre>
 <pre><code>xams-ctl start | stop | restart | status | reload</code></pre>
 <p><code>reload</code> re-reads the YAML configuration without restarting the services, so a threshold or calibration change costs no gap in the data.</p>
 <p><code>stop</code> releases all hardware for LabVIEW. <code>status</code> shows each service&#x27;s state and heartbeat age. One command, correct order, every time.</p>
+<h3>Alarm watchdog on the VM</h3>
+<p>The alarm engine cannot report that the alarm engine has stopped, and the heartbeat monitor (§6.3) runs in the same Python environment on the same machine — if that goes down thoroughly, both are silent.</p>
+<p>If a Nikhef VM exists, configure <strong>one</strong> Grafana alert rule there:</p>
+<pre><code>no measurement received for 15 minutes  →  email</code></pre>
+<p>A dead-man&#x27;s switch with a completely separate code path, on a different machine, on a different network. It catches what nothing local can: the lab PC off or crashed, Windows rebooting for updates, services stopped and not restarted, or the network between lab and Nikhef down.</p>
+<p>This is a single rule about silence, not a physics threshold, so it duplicates nothing from <code>alarms.yaml</code>. A second copy of this rule on the local Grafana would be pointless: if the PC is off, that Grafana is off too.</p>
+<p>It is also the strongest argument for setting up the VM — stronger than colleagues being able to look at plots. Without an outside observer, &quot;the system has gone completely quiet&quot; is the one failure that cannot be detected.</p>
+<h3>Deployment and topology</h3>
+<p>The lab PC is self-contained: everything needed to acquire, store, plot and alarm runs there, and none of it depends on any other machine. A Nikhef VM, if one is added later, is a copy plus a window for the rest of the group.</p>
+<table><thead><tr><th>Component</th><th>Lab PC</th><th>Nikhef VM (optional)</th></tr></thead><tbody><tr><td>Device services</td><td>✓</td><td>—</td></tr><tr><td>Mosquitto</td><td>✓</td><td>—</td></tr><tr><td><strong>Alarm engine</strong></td><td>✓ <strong>always</strong></td><td>—</td></tr><tr><td>JSONL + Parquet archive</td><td>✓ <strong>the truth</strong></td><td>copy</td></tr><tr><td>PostgreSQL</td><td>✓ short retention (~30 days)</td><td>✓ full history</td></tr><tr><td>Grafana</td><td>✓ a few operational dashboards</td><td>✓ the full set, for the group</td></tr><tr><td>Web UI / status page</td><td>✓</td><td>—</td></tr></tbody></table>
+<p>The alarm engine runs locally and never depends on the VM. When the network is down is exactly when the operator needs to see what is happening, so the local view must stand on its own.</p>
+<p>Two writers, no added complexity — the same sink with a different address:</p>
+<pre><code>MQTT ──┬─► pg_writer (localhost)      short retention
+       ├─► pg_writer (nikhef-vm)      full history, outbound only
+       └─► jsonl_writer               archive, local</code></pre>
+<p>If the VM is unreachable only that one writer fails; it buffers and catches up, and nothing local notices.</p>
+<h3>Reproducible installation</h3>
+<p><code>sql/schema.sql</code> and the provisioned Grafana dashboards exist regardless of whether a VM is ever set up, because they make the <strong>local</strong> install reproducible. Grafana stores dashboards in its own internal database: without provisioning they are lost when that database is lost or Grafana is reinstalled, taking hours of work with them. With the schema and the dashboards in git, installation is a procedure rather than something that was once assembled by hand and can no longer be repeated. This is the same argument as for <code>channels.yaml</code>: configuration is data, not an action living in someone&#x27;s memory.</p>
+<p>Installing anywhere — lab PC or VM — is then:</p>
+<pre><code>git clone &lt;repo&gt; /opt/xams-sc
+psql -U postgres -d xams -f /opt/xams-sc/sql/schema.sql
+# point Grafana provisioning at /opt/xams-sc/grafana/</code></pre>
+<p>and updating is <code>git pull</code>. A dashboard edited on the lab PC, exported to JSON and committed, appears on the VM at the next pull. No copying, no versions drifting apart, no deployment tooling.</p>
+<p><code>secrets.yaml</code> is in <code>.gitignore</code>, so it never travels with the repository; each machine keeps its own.</p>
 <h3>Logging</h3>
 <p>Python <code>logging</code> to rotating files, INFO by default, DEBUG selectable per service. Every log line carries the service name. Hardware errors log the raw instrument response, not just the parsed exception — that is what makes protocol bugs findable.</p>
 <hr>
@@ -472,7 +511,7 @@ CREATE INDEX ON meas (channel, t DESC);</code></pre>
 <hr>
 <h2>15. Milestones</h2>
 <p>Each milestone has an acceptance criterion. Do not start the next before the current one passes.</p>
-<table><thead><tr><th>#</th><th>Milestone</th><th>Acceptance criterion</th></tr></thead><tbody><tr><td>1</td><td>Skeleton</td><td><code>BaseService</code>, config loading, MQTT bus, simulation mode. Fake service publishes, writers store, Grafana plots. No hardware. <code>README.md</code> lets someone else reproduce the install.</td></tr><tr><td>2</td><td>cDAQ read-only</td><td>All connected channels (6 voltage + 14 RTD) read and logged, LabVIEW stopped. Values plausible. Restart changes nothing.</td></tr><tr><td>3</td><td>Channel verification</td><td>Each <code>tt*</code> tag confirmed empirically against its channel (warm a sensor, watch which value moves) and its physical location recorded. Tags are known; the mapping to hardware is what is being verified.</td></tr><tr><td>4</td><td>Scaling and history</td><td>Column-count check passed (§9.6), history imported, and scaled values agree with the LabVIEW record for the same sensors within expected tolerance.</td></tr><tr><td>5</td><td>Lake Shore + CAEN monitoring</td><td>Read-only. Identity verification working. Unplug test passes.</td></tr><tr><td>6</td><td>UPS + alarms</td><td>Thresholds from <code>alarms.yaml</code>, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm.</td></tr><tr><td>7</td><td>Web UI</td><td>Current values, alarm state, service health. Read-only, bound to <code>127.0.0.1</code>. Python client works from a notebook.</td></tr><tr><td>8</td><td>Control path</td><td>Lake Shore setpoint, then HV — only after §10&#x27;s open decision is made. Audit log complete.</td></tr><tr><td>9</td><td>Production</td><td><code>SERVICE_AUTO_START</code>, LabVIEW retired but installed. <strong><code>OPERATIONS.md</code> passes the acceptance test of §14</strong> — a colleague operates the system from it unaided.</td></tr></tbody></table>
+<table><thead><tr><th>#</th><th>Milestone</th><th>Acceptance criterion</th></tr></thead><tbody><tr><td>1</td><td>Skeleton</td><td><code>BaseService</code>, config loading, MQTT bus, simulation mode. Fake service publishes, writers store, Grafana plots. No hardware. <code>README.md</code> lets someone else reproduce the install, and the install is scripted: <code>sql/schema.sql</code> plus provisioned Grafana dashboards.</td></tr><tr><td>2</td><td>cDAQ read-only</td><td>All connected channels (6 voltage + 14 RTD) read and logged, LabVIEW stopped. Values plausible. Restart changes nothing.</td></tr><tr><td>3</td><td>Channel verification</td><td>Each <code>tt*</code> tag confirmed empirically against its channel (warm a sensor, watch which value moves) and its physical location recorded. Tags are known; the mapping to hardware is what is being verified.</td></tr><tr><td>4</td><td>Scaling and history</td><td>Column-count check passed (§9.6), history imported, and scaled values agree with the LabVIEW record for the same sensors within expected tolerance.</td></tr><tr><td>5</td><td>Lake Shore + CAEN monitoring</td><td>Read-only. Identity verification working. Unplug test passes.</td></tr><tr><td>6</td><td>UPS + alarms</td><td>Thresholds from <code>alarms.yaml</code>, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm.</td></tr><tr><td>7</td><td>Web UI</td><td>Current values, alarm state, service health. Read-only, bound to <code>127.0.0.1</code>. Python client works from a notebook.</td></tr><tr><td>8</td><td>Control path</td><td>Lake Shore setpoint, then HV — only after §10&#x27;s open decision is made. Audit log complete.</td></tr><tr><td>9</td><td>Production</td><td><code>SERVICE_AUTO_START</code>, LabVIEW retired but installed. <strong><code>OPERATIONS.md</code> passes the acceptance test of §14</strong> — a colleague operates the system from it unaided.</td></tr></tbody></table>
 <p>Milestone 3 is the one that cannot be rushed. The tag names are now known, but a tag that was already attached to the wrong channel in the LabVIEW system would be copied across silently. Verifying each one physically is the only way to catch that.</p>
 <hr>
 <h2>16. Open items</h2>
