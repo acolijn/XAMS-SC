@@ -95,6 +95,10 @@ def convert(md):
             out.append('<p>' + inline(' '.join(buf)) + '</p>')
     return '\n'.join(out)
 
+# Note: Chrome's print-to-pdf output has been seen to print blank past page 1 on
+# some macOS print pipelines. Passing it through Ghostscript rewrites the fonts and
+# content streams and fixes that, so render.sh always runs gs afterwards.
+
 src = pathlib.Path(sys.argv[1]); dst = pathlib.Path(sys.argv[2])
 title = src.stem
 body = convert(src.read_text(encoding='utf-8'))

@@ -200,7 +200,7 @@ Example, using values recovered from the LabVIEW front panel:
   kind: voltage
   offset: 0.0
   multiplier: 0.714
-  unit: bar
+  unit: TBD            # front panel shows "Detector Pressure 1.53" without a unit
   legacy: Pmain
   description: detector pressure
 
@@ -210,7 +210,7 @@ Example, using values recovered from the LabVIEW front panel:
   kind: voltage
   offset: 1.0
   multiplier: 25.0
-  unit: bar
+  unit: TBD
   legacy: P101
 
 - name: fm101
@@ -219,7 +219,7 @@ Example, using values recovered from the LabVIEW front panel:
   kind: voltage
   offset: 0.0
   multiplier: 6.0
-  unit: slpm
+  unit: slpm           # confirmed: front panel reads "Flow (SLPM)"
   legacy: FM101
 
 - name: tt301
@@ -254,7 +254,9 @@ Unconnected channels are listed explicitly with `enabled: false` rather than omi
   description: not connected
 ```
 
-**Scaling is defined as `value = (raw - offset) * multiplier`.** This matches the LabVIEW implementation exactly; do not change the convention, or historical comparisons break.
+**Scaling is defined as `value = (raw - offset) * multiplier`.** This matches the LabVIEW implementation exactly — the front panel labels the two columns "Offsets subtracted" and "Multipliers", in that order. Do not change the convention, or historical comparisons break.
+
+**Units are not recovered.** The LabVIEW front panel shows the scaling factors but not the engineering units, except for the flow, which it labels "Flow (SLPM)". The pressure units are therefore **TBD** (§16) and must not be guessed: a value of 1.53 is equally plausible in bar or in another unit, and a wrong label propagates into every plot, alarm threshold and paper thereafter. The number is right regardless; only its name is missing.
 
 ### 4.3 `alarms.yaml`
 
@@ -361,13 +363,27 @@ resolve device  →  verify identity  →  configure  →  loop { read, publish,
 
 Applies to every serial device, and is mandatory before any write.
 
-1. Enumerate ports with `serial.tools.list_ports`, match on VID/PID and — where available — USB serial number.
-2. Query the instrument for its own identity:
+A device is identified by **asking it who it is**, never by which COM port it happens to occupy.
+
+1. Enumerate ports with `serial.tools.list_ports`, narrowing by VID/PID and — where available — USB serial number.
+2. Open each candidate and query the instrument for its own identity:
    - CAEN: `$BD:<addr>,CMD:MON,PAR:BDSNUM` and `PAR:BDNAME`
    - Lake Shore: `*IDN?`
-3. Compare against `devices.yaml`. On mismatch: **refuse to start, raise an alarm, do not guess.**
+3. Compare against `devices.yaml`.
 
-Rationale: the two CAEN units are the same model. Port order alone must never determine which electrode gets which voltage.
+A COM port renumbered by Windows, a device moved to another hub socket, or the two supplies' cables swapped are therefore all harmless: the service finds each unit wherever it is. This holds even if the FTDI chips carry no unique USB serial numbers, because step 2 asks the instrument itself.
+
+This replaces a real weakness of the present system, where COM8 and COM5 are fixed choices on the LabVIEW front panel. If Windows renumbers them, someone must notice and correct it by hand — and if the two supplies exchange numbers, LabVIEW will talk to the wrong one without any error, since both are valid CAEN units giving well-formed replies.
+
+**Behaviour on the three outcomes:**
+
+| `board_serial` in `devices.yaml` | Behaviour |
+|---|---|
+| `TBD` (not yet known) | starts **read-only**; publishes with `quality=unverified`; **every write refused** |
+| set, and it matches | normal operation; writes permitted |
+| set, and it does not match | refuse to start, raise an alarm, do not guess |
+
+The first row exists so the configuration can bootstrap itself. The serial numbers are not needed in order to communicate — they are needed in order to *write safely*. Connect the service, let it report what it found, record that in `devices.yaml`, and the channel moves from `unverified` to `ok`. Monitoring (milestone 5) can therefore run before the serials are known, with the data visibly marked as unverified rather than silently trusted.
 
 ### 6.3 Heartbeat and staleness
 
@@ -405,6 +421,21 @@ Read-only. The chassis has no output module, so this service has no control path
 | 2 | `9216_1` | `ai0:6` | `add_ai_rtd_chan` |
 | 3 | `9216_2` | — | **entirely unconnected; task not created** |
 | 4 | `9226` | `ai0:6` | `add_ai_rtd_chan` |
+
+**NI 9207 voltage channels** (recovered from the LabVIEW front panel). Applied value is `(raw - offset) * multiplier`:
+
+| Channel | Tag | Offset | Multiplier | Role |
+|---|---|---|---|---|
+| `9207/ai0` | `p101` | 1 | 25 | |
+| `9207/ai1` | `p102` | 0 | 1 | |
+| `9207/ai2` | `p103` | 0 | 1 | |
+| `9207/ai3` | `p104` | 0 | 1 | |
+| `9207/ai4` | `v4` | 0 | 1 | generic name — likely unused |
+| `9207/ai5` | `pmain` | 0 | 0.714 | **detector pressure** |
+| `9207/ai6` | `v6` | 0 | 1 | generic name — likely unused |
+| `9207/ai7` | `fm101` | 0 | 6 | **flow meter** |
+
+Current channels `ai8:15` are named `i0`–`i7` with offset 0 and multiplier 1 throughout, which suggests they are unused (§16).
 
 **RTD channel map** (from the lab, September 2026):
 
@@ -447,6 +478,8 @@ task.ai_channels.add_ai_rtd_chan(
 Modules are addressed by **alias** (`9207/ai0`), not `cDAQ1Mod1/ai0`. Aliases are configured in NI-MAX and survive re-slotting.
 
 Timing mode: High Speed, as currently configured. 50 Hz rejection comes from the module's ADC mode, not from software averaging.
+
+For reference, the settings the LabVIEW system uses: a 2 s cycle, a moving average over 2 samples on the flow and over 20 samples on the detector pressure, and an integrated-flow calculation. The new system reads at 1 Hz and logs 10 s means (§9.1), so these are not carried over directly, but they indicate the smoothing the operators are used to seeing.
 
 ### 7.2 CAEN service (`devices/caen.py`)
 
@@ -841,6 +874,7 @@ Everything marked **TBD** above, consolidated:
 | Lake Shore baud rate | milestone 5 | instrument front panel |
 | UPS model and connection | milestone 6 | inspect the unit |
 | Are `9207/ai8:15` current channels used? | milestone 2 | inspect wiring |
+| Engineering units for the pressure channels (`p101`–`p104`, `pmain`) | milestone 4 | lab knowledge, or the transducer datasheets |
 | Purpose of `anode_timing.vi`, `DAISY_polarity_signs.vi` | milestone 8 | read the block diagrams |
 | Heater shut-off and HV kill: hardware or software? | milestone 8 | decision |
 | How far back the CSV history goes, and whether the column count is constant throughout | milestone 4 | the check in §9.6 |

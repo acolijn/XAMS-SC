@@ -154,7 +154,7 @@ ups:
   kind: voltage
   offset: 0.0
   multiplier: 0.714
-  unit: bar
+  unit: TBD            # front panel shows &quot;Detector Pressure 1.53&quot; without a unit
   legacy: Pmain
   description: detector pressure
 
@@ -164,7 +164,7 @@ ups:
   kind: voltage
   offset: 1.0
   multiplier: 25.0
-  unit: bar
+  unit: TBD
   legacy: P101
 
 - name: fm101
@@ -173,7 +173,7 @@ ups:
   kind: voltage
   offset: 0.0
   multiplier: 6.0
-  unit: slpm
+  unit: slpm           # confirmed: front panel reads &quot;Flow (SLPM)&quot;
   legacy: FM101
 
 - name: tt301
@@ -202,7 +202,8 @@ ups:
   unit: C
   enabled: false
   description: not connected</code></pre>
-<p>**Scaling is defined as <code>value = (raw - offset) * multiplier</code>.** This matches the LabVIEW implementation exactly; do not change the convention, or historical comparisons break.</p>
+<p>**Scaling is defined as <code>value = (raw - offset) * multiplier</code>.** This matches the LabVIEW implementation exactly — the front panel labels the two columns &quot;Offsets subtracted&quot; and &quot;Multipliers&quot;, in that order. Do not change the convention, or historical comparisons break.</p>
+<p><strong>Units are not recovered.</strong> The LabVIEW front panel shows the scaling factors but not the engineering units, except for the flow, which it labels &quot;Flow (SLPM)&quot;. The pressure units are therefore <strong>TBD</strong> (§16) and must not be guessed: a value of 1.53 is equally plausible in bar or in another unit, and a wrong label propagates into every plot, alarm threshold and paper thereafter. The number is right regardless; only its name is missing.</p>
 <h3>4.3 <code>alarms.yaml</code></h3>
 <pre><code>defaults:
   hysteresis: 0.02          # fraction of range, prevents chatter
@@ -266,10 +267,15 @@ class Quality(Enum):
 <ul><li><strong>Startup is read-only.</strong> No setpoint is written, no channel enabled, no state restored. A restart must be invisible to the hardware.</li><li><strong>A busy device is a clean failure</strong>, not a stack trace: <code>FATAL: cDAQ1 in use by another process (LabVIEW running?). Refusing to start.</code></li><li><strong>One instance only.</strong> A named mutex (Windows) or lock file prevents a second copy.</li><li><strong>Reconnect loop.</strong> On a read failure: publish <code>quality=error</code>, back off (1 s, 2 s, 4 s … capped at 30 s), retry indefinitely. The service never exits because a device disappeared; it exits only when it cannot be identified at startup.</li></ul>
 <h3>6.2 Identity verification</h3>
 <p>Applies to every serial device, and is mandatory before any write.</p>
-<ol><li>Enumerate ports with <code>serial.tools.list_ports</code>, match on VID/PID and — where available — USB serial number.</li><li>Query the instrument for its own identity:</li></ol>
+<p>A device is identified by <strong>asking it who it is</strong>, never by which COM port it happens to occupy.</p>
+<ol><li>Enumerate ports with <code>serial.tools.list_ports</code>, narrowing by VID/PID and — where available — USB serial number.</li><li>Open each candidate and query the instrument for its own identity:</li></ol>
 <ul><li>CAEN: <code>$BD:&lt;addr&gt;,CMD:MON,PAR:BDSNUM</code> and <code>PAR:BDNAME</code></li><li>Lake Shore: <code>*IDN?</code></li></ul>
-<ol><li>Compare against <code>devices.yaml</code>. On mismatch: <strong>refuse to start, raise an alarm, do not guess.</strong></li></ol>
-<p>Rationale: the two CAEN units are the same model. Port order alone must never determine which electrode gets which voltage.</p>
+<ol><li>Compare against <code>devices.yaml</code>.</li></ol>
+<p>A COM port renumbered by Windows, a device moved to another hub socket, or the two supplies&#x27; cables swapped are therefore all harmless: the service finds each unit wherever it is. This holds even if the FTDI chips carry no unique USB serial numbers, because step 2 asks the instrument itself.</p>
+<p>This replaces a real weakness of the present system, where COM8 and COM5 are fixed choices on the LabVIEW front panel. If Windows renumbers them, someone must notice and correct it by hand — and if the two supplies exchange numbers, LabVIEW will talk to the wrong one without any error, since both are valid CAEN units giving well-formed replies.</p>
+<p><strong>Behaviour on the three outcomes:</strong></p>
+<table><thead><tr><th><code>board_serial</code> in <code>devices.yaml</code></th><th>Behaviour</th></tr></thead><tbody><tr><td><code>TBD</code> (not yet known)</td><td>starts <strong>read-only</strong>; publishes with <code>quality=unverified</code>; <strong>every write refused</strong></td></tr><tr><td>set, and it matches</td><td>normal operation; writes permitted</td></tr><tr><td>set, and it does not match</td><td>refuse to start, raise an alarm, do not guess</td></tr></tbody></table>
+<p>The first row exists so the configuration can bootstrap itself. The serial numbers are not needed in order to communicate — they are needed in order to <em>write safely</em>. Connect the service, let it report what it found, record that in <code>devices.yaml</code>, and the channel moves from <code>unverified</code> to <code>ok</code>. Monitoring (milestone 5) can therefore run before the serials are known, with the data visibly marked as unverified rather than silently trusted.</p>
 <h3>6.3 Heartbeat and staleness</h3>
 <ul><li>Publish <code>xams/status/&lt;service&gt;/heartbeat</code> every cycle.</li><li>A separate monitor raises an alarm when a heartbeat exceeds <code>stale_after_seconds</code>.</li><li>A channel not refreshed within the same window is republished with <code>quality=stale</code>. <strong>Never leave a stale value standing as if fresh.</strong></li></ul>
 <hr>
@@ -283,6 +289,9 @@ class Quality(Enum):
 <p>Read-only. The chassis has no output module, so this service has no control path.</p>
 <p><strong>Tasks.</strong> All four modules are low-rate delta-sigma with differing aggregate rates and cannot share one hardware-timed task. Slow control reads at 1 Hz (§9.1), so use <strong>on-demand (software-timed) reads</strong>, one task per module, polled in sequence. The CompactDAQ timing-engine constraint then does not apply.</p>
 <table><thead><tr><th>Task</th><th>Module alias</th><th>Channels</th><th>DAQmx call</th></tr></thead><tbody><tr><td>1</td><td><code>9207</code></td><td><code>ai0:7</code> voltage</td><td><code>add_ai_voltage_chan</code></td></tr><tr><td>1b</td><td><code>9207</code></td><td><code>ai8:15</code> current</td><td><code>add_ai_current_chan</code> — <strong>TBD: confirm these are used at all</strong></td></tr><tr><td>2</td><td><code>9216_1</code></td><td><code>ai0:6</code></td><td><code>add_ai_rtd_chan</code></td></tr><tr><td>3</td><td><code>9216_2</code></td><td>—</td><td><strong>entirely unconnected; task not created</strong></td></tr><tr><td>4</td><td><code>9226</code></td><td><code>ai0:6</code></td><td><code>add_ai_rtd_chan</code></td></tr></tbody></table>
+<p><strong>NI 9207 voltage channels</strong> (recovered from the LabVIEW front panel). Applied value is <code>(raw - offset) * multiplier</code>:</p>
+<table><thead><tr><th>Channel</th><th>Tag</th><th>Offset</th><th>Multiplier</th><th>Role</th></tr></thead><tbody><tr><td><code>9207/ai0</code></td><td><code>p101</code></td><td>1</td><td>25</td><td></td></tr><tr><td><code>9207/ai1</code></td><td><code>p102</code></td><td>0</td><td>1</td><td></td></tr><tr><td><code>9207/ai2</code></td><td><code>p103</code></td><td>0</td><td>1</td><td></td></tr><tr><td><code>9207/ai3</code></td><td><code>p104</code></td><td>0</td><td>1</td><td></td></tr><tr><td><code>9207/ai4</code></td><td><code>v4</code></td><td>0</td><td>1</td><td>generic name — likely unused</td></tr><tr><td><code>9207/ai5</code></td><td><code>pmain</code></td><td>0</td><td>0.714</td><td><strong>detector pressure</strong></td></tr><tr><td><code>9207/ai6</code></td><td><code>v6</code></td><td>0</td><td>1</td><td>generic name — likely unused</td></tr><tr><td><code>9207/ai7</code></td><td><code>fm101</code></td><td>0</td><td>6</td><td><strong>flow meter</strong></td></tr></tbody></table>
+<p>Current channels <code>ai8:15</code> are named <code>i0</code>–<code>i7</code> with offset 0 and multiplier 1 throughout, which suggests they are unused (§16).</p>
 <p><strong>RTD channel map</strong> (from the lab, September 2026):</p>
 <table><thead><tr><th>Module</th><th>Type</th><th>Channel</th><th>Tag</th><th>Notes</th></tr></thead><tbody><tr><td><code>9226</code></td><td>PT1000</td><td><code>ai0</code> … <code>ai6</code></td><td><code>tt201</code> … <code>tt207</code></td><td>seven consecutive</td></tr><tr><td><code>9226</code></td><td>PT1000</td><td><code>ai7</code></td><td>—</td><td>not connected</td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai0</code></td><td><code>tt301</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai1</code></td><td><code>tt302</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai2</code></td><td><code>tt103</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai3</code></td><td><code>tt104</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai4</code></td><td><code>ttamb</code></td><td>ambient</td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai5</code></td><td><code>tt303</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai6</code></td><td><code>tt304</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai7</code></td><td>—</td><td>not connected</td></tr><tr><td><code>9216_2</code></td><td>PT100</td><td><code>ai0</code> … <code>ai7</code></td><td>—</td><td><strong>module entirely unconnected</strong></td></tr></tbody></table>
 <p><strong>Fourteen RTDs are in use, not twenty-four.</strong> The whole of <code>9216_2</code> is free, which means eight spare PT100 inputs are already wired into the chassis — room for expansion without buying hardware. Do not create a DAQmx task for it; list its channels in <code>channels.yaml</code> with <code>enabled: false</code> so the map stays complete.</p>
@@ -299,6 +308,7 @@ class Quality(Enum):
 )</code></pre>
 <p>Modules are addressed by <strong>alias</strong> (<code>9207/ai0</code>), not <code>cDAQ1Mod1/ai0</code>. Aliases are configured in NI-MAX and survive re-slotting.</p>
 <p>Timing mode: High Speed, as currently configured. 50 Hz rejection comes from the module&#x27;s ADC mode, not from software averaging.</p>
+<p>For reference, the settings the LabVIEW system uses: a 2 s cycle, a moving average over 2 samples on the flow and over 20 samples on the detector pressure, and an integrated-flow calculation. The new system reads at 1 Hz and logs 10 s means (§9.1), so these are not carried over directly, but they indicate the smoothing the operators are used to seeing.</p>
 <h3>7.2 CAEN service (<code>devices/caen.py</code>)</h3>
 <p>Two instances, one per supply. ASCII protocol over the USB virtual COM port; no vendor library.</p>
 <pre><code>$BD:&lt;addr&gt;,CMD:MON,PAR:VMON,CH:&lt;n&gt;        read measured voltage
@@ -467,5 +477,5 @@ CREATE INDEX ON meas (channel, t DESC);</code></pre>
 <hr>
 <h2>16. Open items</h2>
 <p>Everything marked <strong>TBD</strong> above, consolidated:</p>
-<table><thead><tr><th>Item</th><th>Needed for</th><th>How to resolve</th></tr></thead><tbody><tr><td>Physical location of each <code>tt*</code> tag, and what the 1xx/2xx/3xx series denote</td><td>milestone 3</td><td>lab knowledge; record in <code>description</code></td></tr><tr><td>Alarm thresholds and responses</td><td>milestone 6</td><td><code>Error and Alarm</code> tab screenshot</td></tr><tr><td>HV channel → supply/index mapping</td><td>milestone 5</td><td><code>High Voltage Supply</code> tab screenshot</td></tr><tr><td>HV setpoints, ramp rates, trip limits</td><td>milestone 8</td><td>LabVIEW tab + settings stored on the CAEN units</td></tr><tr><td>USB serial numbers of the two CAEN units</td><td>milestone 5</td><td><code>list_ports</code> on the lab PC</td></tr><tr><td>Lake Shore baud rate</td><td>milestone 5</td><td>instrument front panel</td></tr><tr><td>UPS model and connection</td><td>milestone 6</td><td>inspect the unit</td></tr><tr><td>Are <code>9207/ai8:15</code> current channels used?</td><td>milestone 2</td><td>inspect wiring</td></tr><tr><td>Purpose of <code>anode_timing.vi</code>, <code>DAISY_polarity_signs.vi</code></td><td>milestone 8</td><td>read the block diagrams</td></tr><tr><td>Heater shut-off and HV kill: hardware or software?</td><td>milestone 8</td><td>decision</td></tr><tr><td>How far back the CSV history goes, and whether the column count is constant throughout</td><td>milestone 4</td><td>the check in §9.6</td></tr><tr><td>Second maintainer</td><td>production</td><td>decision</td></tr></tbody></table>
+<table><thead><tr><th>Item</th><th>Needed for</th><th>How to resolve</th></tr></thead><tbody><tr><td>Physical location of each <code>tt*</code> tag, and what the 1xx/2xx/3xx series denote</td><td>milestone 3</td><td>lab knowledge; record in <code>description</code></td></tr><tr><td>Alarm thresholds and responses</td><td>milestone 6</td><td><code>Error and Alarm</code> tab screenshot</td></tr><tr><td>HV channel → supply/index mapping</td><td>milestone 5</td><td><code>High Voltage Supply</code> tab screenshot</td></tr><tr><td>HV setpoints, ramp rates, trip limits</td><td>milestone 8</td><td>LabVIEW tab + settings stored on the CAEN units</td></tr><tr><td>USB serial numbers of the two CAEN units</td><td>milestone 5</td><td><code>list_ports</code> on the lab PC</td></tr><tr><td>Lake Shore baud rate</td><td>milestone 5</td><td>instrument front panel</td></tr><tr><td>UPS model and connection</td><td>milestone 6</td><td>inspect the unit</td></tr><tr><td>Are <code>9207/ai8:15</code> current channels used?</td><td>milestone 2</td><td>inspect wiring</td></tr><tr><td>Engineering units for the pressure channels (<code>p101</code>–<code>p104</code>, <code>pmain</code>)</td><td>milestone 4</td><td>lab knowledge, or the transducer datasheets</td></tr><tr><td>Purpose of <code>anode_timing.vi</code>, <code>DAISY_polarity_signs.vi</code></td><td>milestone 8</td><td>read the block diagrams</td></tr><tr><td>Heater shut-off and HV kill: hardware or software?</td><td>milestone 8</td><td>decision</td></tr><tr><td>How far back the CSV history goes, and whether the column count is constant throughout</td><td>milestone 4</td><td>the check in §9.6</td></tr><tr><td>Second maintainer</td><td>production</td><td>decision</td></tr></tbody></table>
 </body></html>
