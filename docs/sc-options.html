@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XAMS Slow Control — Replacement Plan</title>
+<style>
+@page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+html { font-size: 10.5pt; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1a1a1a; line-height: 1.45; margin: 0; }
+h1 { font-size: 20pt; margin: 0 0 2mm 0; letter-spacing: -0.3pt; }
+.sub { color: #555; font-size: 10pt; margin: 0 0 6mm 0; }
+h2 { font-size: 13pt; margin: 8mm 0 2.5mm 0; padding-bottom: 1.2mm; border-bottom: 1.2pt solid #1a1a1a; }
+h3 { font-size: 11pt; margin: 5mm 0 1.5mm 0; }
+p { margin: 0 0 2.5mm 0; }
+ul, ol { margin: 0 0 3mm 0; padding-left: 5mm; }
+li { margin-bottom: 1.2mm; }
+table { border-collapse: collapse; width: 100%; font-size: 9pt; margin: 0 0 4mm 0; }
+th, td { border: 0.5pt solid #b8b8b8; padding: 1.6mm 2mm; text-align: left; vertical-align: top; }
+th { background: #ececec; font-weight: 600; }
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+td.c, th.c { text-align: center; }
+code { font-family: "SF Mono", Menlo, monospace; font-size: 8.8pt; background: #f2f2f2; padding: 0.3mm 1mm; border-radius: 1.5pt; }
+pre { font-family: "SF Mono", Menlo, monospace; font-size: 8.3pt; background: #f5f5f5; border-left: 2.5pt solid #999; padding: 2.5mm 3mm; margin: 0 0 4mm 0; line-height: 1.35; }
+.box { border: 0.8pt solid #1a1a1a; padding: 3mm 3.5mm; margin: 0 0 5mm 0; background: #fafafa; page-break-inside: avoid; }
+.box h3 { margin-top: 0; }
+.pro { color: #1a5c1a; font-weight: 600; }
+.con { color: #8c1a1a; font-weight: 600; }
+.warn { border-left: 3pt solid #8c1a1a; background: #fdf4f4; padding: 2.5mm 3mm; margin: 0 0 4mm 0; page-break-inside: avoid; }
+.note { border-left: 3pt solid #555; background: #f4f4f4; padding: 2.5mm 3mm; margin: 0 0 4mm 0; page-break-inside: avoid; }
+.pagebreak { page-break-before: always; }
+.foot { margin-top: 8mm; padding-top: 2mm; border-top: 0.5pt solid #bbb; font-size: 8.5pt; color: #666; }
+.avoid { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>XAMS Slow Control — Replacement Plan</h1>
+<p class="sub">Inventory, recovered configuration, architecture, and migration sequence &nbsp;·&nbsp; 16 September 2026</p>
+
+<h2>1. Situation</h2>
+<p>XAMS slow control runs as a LabVIEW project (<code>Slow_Control_2_17_User.vi</code>, revision 393) that has become unmaintainable. The problem is the software, not the instrumentation: the hardware is a small, clean set of instruments.</p>
+<p>The underlying cause is LabVIEW's <em>form</em> rather than its capability. VIs are binary files. They cannot be diffed, merged or reviewed; version control degrades to filename suffixes; and a block diagram resists incremental change once it exceeds a screen or two. Knowledge of the system therefore lives in one person's head instead of in a readable artefact. Any replacement must fix that property first.</p>
+
+<div class="box">
+<h3>Conclusion</h3>
+<p>Given the actual inventory — four instruments, roughly thirty connected channels, one rack — this is a <strong>small</strong> rewrite. Build a <strong>Python service stack</strong>: device drivers publishing to MQTT, PostgreSQL for history, Grafana for plots and alarms.</p>
+<p>The system stays on <strong>Windows</strong>, on the existing control PC (§7). EPICS was considered seriously and is <strong>not</strong> recommended at this scale (§9). It remains buildable if circumstances change.</p>
+<p style="margin-bottom:0">Most of the configuration knowledge has now been recovered from the MAX report and the LabVIEW documentation export (§3). What remains missing is listed in §4 and is obtainable in an afternoon.</p>
+</div>
+
+<h2>2. Hardware inventory</h2>
+<table>
+<thead><tr><th style="width:24%">Device</th><th style="width:15%">Link</th><th style="width:14%">Channels</th><th style="width:11%">Role</th><th>Python support</th></tr></thead>
+<tbody>
+<tr><td><strong>NI cDAQ-9174</strong> <code>cDAQ1</code><br>SN 020C5E1C</td><td>USB 2.0</td><td>40 available<br>20 connected<br>(see §3)</td><td class="pro">Read only</td><td class="pro">Vendor <code>nidaqmx</code> package. Tier 1.</td></tr>
+<tr><td><strong>2× CAEN DT1470ET</strong><br>COM8, COM5</td><td>USB (virtual COM)</td><td>8 HV</td><td class="con">Actuation</td><td class="pro">CAEN ASCII protocol over <code>pyserial</code>. Tier 2. No vendor library.</td></tr>
+<tr><td><strong>Lake Shore 335</strong><br>COM6</td><td>USB (virtual COM)</td><td>2 sensor in<br>2 heater out</td><td class="con">Actuation</td><td class="pro">Official <code>lakeshore</code> package. Tier 1.</td></tr>
+<tr><td><strong>UPS</strong><br>model TBD</td><td>TBD</td><td>status</td><td class="pro">Read only</td><td>Depends on model. <code>NUT</code> or vendor protocol.</td></tr>
+</tbody>
+</table>
+<p>Control host: Fujitsu CELSIUS J5010, Xeon W-1270, 32 GB RAM, 953 GB disk, Windows 10 Enterprise LTSC, hostname <code>NIKHEFN-01AEIIN</code>. Ample for the replacement stack, and <strong>retained as-is</strong> — see §7.</p>
+<p>No device requires protocol reverse-engineering. Two observations:</p>
+<ul>
+<li><strong>Everything is on the USB hub</strong> — cDAQ, both CAEN supplies, and the Lake Shore. Data rates are trivial, so bandwidth is a non-issue, but device identification is not (see below). The DT1470ET also has an Ethernet port, which remains available as a fallback should USB prove unreliable.</li>
+<li><strong>The cDAQ chassis cannot actuate anything</strong> — no digital or analog output modules. It is a pure monitoring device, so its service carries no control path and no interlock responsibility. This makes it the safest component to build first.</li>
+</ul>
+
+<div class="warn">
+<h3 style="margin-top:0">Two identical HV supplies on USB — identification</h3>
+<p>Both CAEN units are the same model. Confusing them means applying the wrong voltage to the wrong electrode, so identification must not rest on enumeration order. Use both layers.</p>
+<p><strong>1. Resolve the port by hardware ID, not by COM number.</strong> Windows assigns COM numbers per device instance and they can change. Match on the USB hardware ID in Python, which behaves identically on Windows and Linux:</p>
+<pre>from serial.tools import list_ports
+for p in list_ports.comports():
+    print(p.device, p.hwid)        # e.g. COM8  USB VID:PID=0403:6001 SER=AB12CD34</pre>
+<p>If the units expose unique serial numbers, match on <code>SER=</code>. If both report the same value — some FTDI chips ship without unique serials — match on the USB location instead, which ties correctness to a hub socket and therefore requires a physical label on the hub.</p>
+<p><strong>2. Verify identity in software on every connect.</strong> This is the layer that actually protects the detector, because it does not depend on cabling discipline:</p>
+<pre>$BD:00,CMD:MON,PAR:BDSNUM     → serial number
+$BD:00,CMD:MON,PAR:BDNAME     → model</pre>
+<p style="margin-bottom:0">Record the expected serial number in the channel configuration. On connect, query it; <strong>on mismatch the service refuses to start and raises an alarm</strong>. It never falls back to the likely candidate. Set distinct board addresses (<code>BD</code>) on the two front panels as well, so the protocol itself disambiguates.</p>
+</div>
+
+<h2>3. Configuration recovered from the existing system</h2>
+<p>Extracted from the NI-MAX configuration report and the LabVIEW documentation export. NI-MAX <em>Data Neighborhood</em> is empty, so all DAQmx configuration is built in the block diagram and read off the front panel.</p>
+
+<h3>3.1 Chassis and module aliases</h3>
+<p>LabVIEW addresses the modules by <strong>alias</strong>, not by <code>cDAQ1ModN</code>. Keep the aliases: they are more readable and they survive re-slotting.</p>
+<table>
+<thead><tr><th style="width:12%">Slot</th><th style="width:20%">Model</th><th style="width:20%">Alias</th><th style="width:24%">Serial number</th><th>Channels</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>NI 9207</td><td><code>9207</code></td><td>020DFD57</td><td>8× voltage <code>ai0:7</code>, 8× current <code>ai8:15</code></td></tr>
+<tr><td>2</td><td>NI 9216</td><td><code>9216_1</code></td><td>020F64D1</td><td>8× RTD <code>ai0:7</code></td></tr>
+<tr><td>3</td><td>NI 9216</td><td><code>9216_2</code></td><td>020F64D0</td><td>8× RTD <code>ai0:7</code></td></tr>
+<tr><td>4</td><td>NI 9226</td><td><code>9226</code></td><td>02159CBB</td><td>8× RTD <code>ai0:7</code></td></tr>
+</tbody>
+</table>
+<p>The front panel labels <code>9216_1</code> as "slot 1"; MAX reports it in slot 2. The MAX report is authoritative. Do not carry the mislabel over.</p>
+
+<h3>3.2 RTD configuration — confirmed</h3>
+<table>
+<thead><tr><th style="width:20%">Module</th><th style="width:20%">R<sub>0</sub></th><th style="width:20%">RTD type</th><th style="width:20%">Wiring</th><th>Timing</th></tr></thead>
+<tbody>
+<tr><td>NI 9216 (both)</td><td>100,0 Ω</td><td>Pt3851</td><td><strong>3-wire</strong></td><td>High Speed</td></tr>
+<tr><td>NI 9226</td><td>1000,0 Ω</td><td>Pt3750</td><td><strong>3-wire</strong></td><td>High Speed</td></tr>
+</tbody>
+</table>
+<p>No custom Callendar–Van Dusen coefficients are in use (A, B, C all zero), so DAQmx's built-in scaling applies directly: <code>add_ai_rtd_chan</code> with <code>RTDType.PT_3851</code> / <code>PT_3750</code>, <code>ResistanceConfiguration.THREE_WIRE</code>, and the matching <code>r_0</code>.</p>
+
+<h3>3.3 RTD channel map</h3>
+<p>Supplied by the lab, September 2026. <strong>Fourteen RTDs are in use, not twenty-four.</strong></p>
+<table>
+<thead><tr><th style="width:16%">Module</th><th style="width:12%">Type</th><th style="width:20%">Channel</th><th style="width:22%">Tag</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>9226</code></td><td>PT1000</td><td><code>ai0</code> … <code>ai6</code></td><td><code>TT201</code> … <code>TT207</code></td><td>seven consecutive</td></tr>
+<tr><td><code>9226</code></td><td>PT1000</td><td><code>ai7</code></td><td>—</td><td>not connected</td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai0</code></td><td><code>TT301</code></td><td></td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai1</code></td><td><code>TT302</code></td><td></td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai2</code></td><td><code>TT103</code></td><td></td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai3</code></td><td><code>TT104</code></td><td></td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai4</code></td><td><code>TTAMB</code></td><td>ambient</td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai5</code></td><td><code>TT303</code></td><td></td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai6</code></td><td><code>TT304</code></td><td></td></tr>
+<tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai7</code></td><td>—</td><td>not connected</td></tr>
+<tr><td><code>9216_2</code></td><td>PT100</td><td><code>ai0</code> … <code>ai7</code></td><td>—</td><td><strong>module entirely unconnected</strong></td></tr>
+</tbody>
+</table>
+<p>The whole of <code>9216_2</code> is free: eight spare PT100 inputs already wired into the chassis, so the system has room to grow without buying hardware. The replacement should not create a DAQmx task for it, but should list its channels in <code>channels.yaml</code> as disabled, so the channel map stays complete and a future reader does not have to wonder whether the gap is an oversight.</p>
+<p>The numbering groups by subsystem — <code>P101</code>–<code>P104</code> and <code>TT103</code>–<code>TT104</code> share the 1xx series, <code>TT201</code>–<code>TT207</code> the 2xx, <code>TT301</code>–<code>TT304</code> the 3xx. What each series denotes, and where each sensor physically sits, is still only lab knowledge.</p>
+
+<h3>3.4 NI 9207 voltage channels — names and scaling</h3>
+<p>The applied value is <code>(raw − offset) × multiplier</code>.</p>
+<table>
+<thead><tr><th style="width:20%">Channel</th><th style="width:20%">Name</th><th style="width:20%">Offset</th><th style="width:20%">Multiplier</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>9207/ai0</code></td><td>P101</td><td>1</td><td>25</td><td></td></tr>
+<tr><td><code>9207/ai1</code></td><td>P102</td><td>0</td><td>1</td><td></td></tr>
+<tr><td><code>9207/ai2</code></td><td>P103</td><td>0</td><td>1</td><td></td></tr>
+<tr><td><code>9207/ai3</code></td><td>P104</td><td>0</td><td>1</td><td></td></tr>
+<tr><td><code>9207/ai4</code></td><td>v4</td><td>0</td><td>1</td><td>generic name — likely unused</td></tr>
+<tr><td><code>9207/ai5</code></td><td>Pmain</td><td>0</td><td>0,714</td><td><strong>detector pressure input</strong></td></tr>
+<tr><td><code>9207/ai6</code></td><td>v6</td><td>0</td><td>1</td><td>generic name — likely unused</td></tr>
+<tr><td><code>9207/ai7</code></td><td>FM101</td><td>0</td><td>6</td><td><strong>flow meter input</strong></td></tr>
+</tbody>
+</table>
+<p>Current channels <code>ai8:15</code> are named <code>i0</code>–<code>i7</code> with offset 0 and multiplier 1 throughout, which suggests they are unused. Confirm before dropping them.</p>
+
+<h3>3.5 CAEN HV channels</h3>
+<p>Eight channels across the two supplies: <code>PMT top</code>, <code>PMT bot</code>, <code>TS</code>, <code>BS</code>, <code>Cathode</code>, <code>Gate</code>, <code>Anode</code>, <code>NaI</code>. The anode is on <strong>CAEN 2, channel 3</strong>. The existing LabVIEW driver is CAEN's serial PSM instrument driver, which confirms the ASCII-over-serial route for the replacement.</p>
+<p>Two HV-specific behaviours exist in the current code and need explicit decisions: <code>anode_timing.vi</code> (anode timers) and <code>DAISY_polarity_signs.vi</code> (polarity handling).</p>
+
+<h3>3.6 Lake Shore 335</h3>
+<p>COM6. PID settings P = 100, I = 20, D = 0. A front-panel switch "Shut off heater if Alarm is active" is present — see the safety note in §6.</p>
+
+<h3>3.7 Loop timing, averaging, notification</h3>
+<ul>
+<li>Cycle time 2 s.</li>
+<li>Moving averages: flow over N = 2 samples, detector pressure over N = 20 samples.</li>
+<li>Integrated flow via <code>Average_flow_x_time.vi</code>.</li>
+<li>Alarm notification: SMS (already a Python script, <code>send_sms.vi</code>), email (<code>custom_email_program.vi</code>), and a 1000 Hz audible alarm. SMS repeats every N minutes to a list of phone numbers.</li>
+<li>A <code>KILL VOLTAGE</code> button and an alarm master switch are on the front panel.</li>
+</ul>
+
+<h2>4. Still to recover</h2>
+<p>The documentation export renders only the active tab (<code>Input settings</code>). The tabs <code>High Voltage Supply</code>, <code>Monitor</code>, <code>Error and Alarm</code>, <code>Quick Temperature</code> and the phase diagrams were not exported, and they hold the remainder.</p>
+<table>
+<thead><tr><th style="width:40%">Missing</th><th>How to obtain</th></tr></thead>
+<tbody>
+<tr><td><strong>Alarm thresholds and responses</strong></td><td>Screenshot of the <code>Error and Alarm</code> tab.</td></tr>
+<tr><td><strong>HV setpoints, ramp rates, trip and limit settings</strong></td><td>Screenshot of the <code>High Voltage Supply</code> tab, plus the settings stored on the CAEN units themselves.</td></tr>
+<tr><td><strong>Physical position of each sensor, and what the 1xx / 2xx / 3xx series denote</strong></td><td>Lab knowledge. Not recorded anywhere in software. The tags are now known; where they sit is not.</td></tr>
+<tr><td><strong>UPS model and connection</strong></td><td><code>check_ups.vi</code>, or simply looking at the unit.</td></tr>
+</tbody>
+</table>
+<p>Everything in this table except the sensor positions is an afternoon's work. The positions are the one item that must be verified empirically, tag by tag, once the read-only cDAQ service is logging raw values — warm one sensor by hand, see which value moves. The tag names are now known, but a tag that was already attached to the wrong channel in the LabVIEW system would be copied across silently. Physical verification is the only method that catches that.</p>
+
+<h2>5. Recommended architecture</h2>
+<pre>cdaq_service.py    ─┐   20 ch, 2 tasks, 1 Hz read / 10 s log
+lakeshore_service.py┤── publish ──► Mosquitto (MQTT)
+caen_service.py    ─┤                    │
+ups_service.py     ─┘                    ├──► writer ──► PostgreSQL    working store
+                                         ├──► writer ──► JSONL files   raw archive (§6)
+                                         ├──► Grafana                  plots + alarms
+                                         └──► FastAPI                  setpoints, web UI
+config/channels.yaml    calibrations, units, alarm limits — single source of truth, in git</pre>
+<p>One service per instrument, each an independent Windows service with its own reconnect loop, so a hung device cannot block the others. Channel definitions live in YAML, not in code:</p>
+<pre>- name: Pmain
+  phys: 9207/ai5              # module alias, as LabVIEW uses
+  kind: voltage
+  offset: 0.0
+  multiplier: 0.714
+  unit: bar
+  alarm: {low: 0.9, high: 1.8}
+
+- name: tt301
+  phys: 9216_1/ai0
+  kind: rtd
+  rtd: {type: PT3851, r0: 100.0, wiring: 3}
+  unit: C
+  legacy: TT301</pre>
+<p>Adding a sensor is then a wiring change plus one YAML entry — no code is touched. Every component is mainstream, individually replaceable, and plain text under version control.</p>
+
+<h2>6. Data logging</h2>
+<p>The CSV files on the lab PC are today's authoritative record — the MongoDB instance on the Nikhef server is temporary storage only. There is therefore no permanent archive at present: the whole history sits on one disk. <strong>Copying it somewhere safe is worth doing today, independently of this project</strong>, and the header file must be copied with it or the columns lose their meaning.</p>
+<p>The present system writes a wide CSV table with the column names in a <em>separate</em> header file. This should not be carried over. A wide table places the meaning of column 17 outside the data file, so the data is unreadable without its companion, and — more dangerous — if a channel is ever added, removed or reordered, older files are silently misinterpreted. Nothing crashes; the numbers simply mean something other than what is assumed.</p>
+<p>This is not hypothetical here. The LabVIEW front panel has a "Re-save headers" button, so the header file is overwritable and may describe only the current layout. Any older file recorded under a different channel set would be read with its columns shifted. Counting the columns of every CSV in the history takes a minute and settles it.</p>
+
+<h3>Write long, not wide</h3>
+<p>One record per measurement, carrying its own name:</p>
+<pre>{"t":"2026-09-16T13:02:00.000Z","ch":"P101","v":1326.57,"raw":53.06,"u":"mbar"}
+{"t":"2026-09-16T13:02:00.000Z","ch":"tt301","v":-92.30,"u":"C"}
+{"t":"2026-09-16T13:02:00.000Z","ch":"HV_anode","v":3500.2,"u":"V","q":"ok"}</pre>
+<p>Consequences:</p>
+<ul>
+<li>Adding a channel does not touch existing data. No header migration, no column shift.</li>
+<li>A dropped channel is a missing record, not an empty column later mistaken for zero.</li>
+<li>A per-measurement quality flag (<code>"q":"stale"</code>) fits naturally. In a wide CSV it cannot be expressed without breaking the format.</li>
+<li>A half-written final line after a crash is discarded; the rest of the file is intact.</li>
+<li><code>grep P101 *.jsonl</code> works.</li>
+</ul>
+
+<h3>Sampling and logging rates</h3>
+<p>Sampling and logging are separate decisions. The hardware is read at <strong>1 Hz</strong>; a record is written every <strong>10 s</strong> as the mean of those ten samples — less noisy than any single reading, and six times less data than the present system.</p>
+<p>Disk is not the constraint: even at 1 Hz the cost would be about 10 MB gzipped per day. The reasons to log less often are query speed, plot legibility and ease of analysis. At 10 s the system produces roughly 400 MB per year, so ten years of history fits in 4 GB.</p>
+<p>The rate is uniform across all channels. Cryostat temperatures would be well served by 60 s, but identical timestamps let channels be compared without interpolation, and that simplicity outweighs the saving.</p>
+<p><strong>Flight recorder.</strong> The last 10 minutes at full 1 Hz are held in memory. When an alarm fires or a channel trips, the buffer is written to <code>data/events/</code>. This gives full resolution exactly around the moments that matter, without storing it permanently — and it is what the present system lacks: after an incident there are only averaged values and no record of the approach to it.</p>
+
+<h3>Three layers, each with one job</h3>
+<table>
+<thead><tr><th style="width:20%">Layer</th><th style="width:22%">Format</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td>Working store</td><td>PostgreSQL</td><td>What Grafana plots and what answers "pressure over the last month". A cache, not storage: rebuildable from the files.</td></tr>
+<tr><td>Raw archive</td><td>JSON Lines, one file per day</td><td>Written by the ingest service <strong>independently of the database</strong>. If the database falls over or fills up, no data is lost. The files are the truth; the database is an index.</td></tr>
+<tr><td>Long term</td><td>Parquet</td><td>The closed day is converted overnight and the JSONL gzipped. Compact, typed, loads straight into pandas, and still readable in ten years.</td></tr>
+</tbody>
+</table>
+
+<div class="note">
+<h3 style="margin-top:0">Two details that save a great deal later</h3>
+<p><strong>Put a configuration hash in every file.</strong> First line of each daily file:</p>
+<pre>{"t":"2026-09-16T00:00:00Z","meta":{"config":"a3f91c2","version":"1.4.0","host":"xams-sc"}}</pre>
+<p><code>channels.yaml</code> lives in git, so that hash states exactly which calibration was in force that day. This is the separate-header problem solved permanently rather than relocated.</p>
+<p style="margin-bottom:0"><strong>Log the raw value alongside the scaled one</strong>, at least for the first year. If the multiplier of 25 on <code>P101</code> later turns out to be wrong, the whole history can be rescaled. Without <code>raw</code>, that data is gone. At ~30 channels every 10 s the cost is roughly 12 MB per day uncompressed, around 1 MB gzipped — negligible on a 953 GB disk.</p>
+</div>
+
+<div class="warn">
+<h3 style="margin-top:0">Safety — non-negotiable</h3>
+<p>The cDAQ is read-only, but the CAEN supplies and the Lake Shore heaters actuate. For those:</p>
+<ul>
+<li><strong>Interlocks belong in hardware, never in software.</strong> If HV must trip on a vacuum or pressure excursion, wire it to the CAEN interlock input from a real gauge trip. Not a Python service reading MQTT and deciding.</li>
+<li><strong>Ramp rates, trip currents and over-voltage limits are configured on the CAEN units themselves.</strong> Software verifies them at startup; it does not write them.</li>
+<li><strong>A restarted service must be a no-op on the hardware.</strong> On connect it reads and publishes state. It does not restore setpoints, re-enable channels, or resume anything.</li>
+<li><strong>No write without a verified identity.</strong> An HV service that cannot confirm the board serial number of the unit it is talking to must refuse to write at all.</li>
+<li><strong>Lake Shore heater output is real power into a cryogenic system.</strong> The instrument's own setpoint limits and heater range are the authority; software sets a value within them and nothing more.</li>
+</ul>
+<p style="margin-bottom:0"><strong>Note on the existing system.</strong> The current LabVIEW code does perform protective actions in software: a "Shut off heater if Alarm is active" switch and a <code>KILL VOLTAGE</code> button. This works in practice, but a software protection layer fails silently when the process hangs. The migration is the moment to decide explicitly: reproduce the behaviour as it stands, or move it into hardware. Reproducing it is defensible; doing so without noticing the choice is not.</p>
+</div>
+
+<h2>7. Platform — Windows</h2>
+<p>The system stays on Windows, on the existing control PC. This reverses the earlier default of Linux, for reasons that only became clear once the inventory was known.</p>
+<table>
+<thead><tr><th style="width:30%">Consideration</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><strong>NI-DAQmx and the cDAQ-9174</strong></td><td class="pro">Decisive. Windows is NI's primary platform, so the compatibility risk around this discontinued chassis disappears entirely. On Linux it was the one item that could not be assumed.</td></tr>
+<tr><td><strong>LabVIEW remains installed</strong></td><td class="pro">The old system stays startable within minutes as a rollback path. On a reinstalled Linux machine it would not.</td></tr>
+<tr><td><strong>No new hardware, no reinstall</strong></td><td class="pro">The existing PC is more than adequate. Nothing needs procuring.</td></tr>
+<tr><td><strong><code>nidaqmx</code>, <code>pyserial</code>, <code>lakeshore</code>, Grafana, Mosquitto, FastAPI</strong></td><td class="pro">All run natively on Windows.</td></tr>
+<tr><td><strong>No systemd</strong></td><td>Services run under NSSM (which wraps an executable as a Windows service) or Task Scheduler. Works well, but automatic restart and log rotation must be configured explicitly rather than in a four-line unit file.</td></tr>
+<tr><td><strong>No udev</strong></td><td>Device identification moves into Python via <code>serial.tools.list_ports</code> plus the CAEN <code>BDSNUM</code> check. This is better practice regardless of platform: it makes the operating system a deployment detail rather than an architectural dependency.</td></tr>
+<tr><td><strong>Database choice</strong></td><td class="pro">PostgreSQL, which has a native Windows installer and a built-in Grafana datasource. InfluxDB was the obvious default but its Windows support is uneven. TimescaleDB is a PostgreSQL extension, not an alternative, and is not needed at this volume.</td></tr>
+</tbody>
+</table>
+<p><strong>Do not run the hardware services under WSL2.</strong> USB passthrough to WSL2 does not work with NI-DAQmx. Python runs natively on Windows for anything that touches an instrument; Docker Desktop is fine for the infrastructure layer, which does not.</p>
+<p>This also settles §9 more firmly: EPICS effectively requires Linux, and the platform decision now runs the other way.</p>
+
+<h2>8. Running the services</h2>
+<p>Each service is a script that loops indefinitely:</p>
+<pre>while True:
+    values = read_hardware()
+    publish(values)
+    time.sleep(2)</pre>
+<p>It is not started by hand. NSSM wraps it as a Windows service:</p>
+<pre>nssm install xams-cdaq "C:\xams\venv\Scripts\python.exe" "C:\xams\cdaq_service.py"
+nssm set xams-cdaq AppDirectory     C:\xams
+nssm set xams-cdaq AppStdout        C:\xams\logs\cdaq.log
+nssm set xams-cdaq AppStderr        C:\xams\logs\cdaq.err
+nssm set xams-cdaq AppExit Default  Restart
+nssm set xams-cdaq AppRestartDelay  5000</pre>
+<p>The service then restarts after a crash, runs without a logged-in user, and appears in <code>services.msc</code> like any other. This is already an improvement on the present situation, where someone must open LabVIEW and press Run — after a reboot the slow control stands still until a person notices.</p>
+
+<div class="warn">
+<h3 style="margin-top:0">Automatic start stays off while LabVIEW is the fallback</h3>
+<p>Because every device admits only one process (§11), automatic start during the transition is not merely unnecessary — it is dangerous.</p>
+<p>The failure mode: the PC reboots overnight after an update, the Python service starts automatically and claims the cDAQ chassis and the COM ports. The next morning LabVIEW cannot start, because the hardware is taken. <strong>The fallback has been locked out by the system that is still being debugged.</strong></p>
+<p style="margin-bottom:0">Automatic start is therefore enabled only in the final phase, after LabVIEW is retired.</p>
+</div>
+
+<table>
+<thead><tr><th style="width:18%">Phase</th><th style="width:30%">How it runs</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><strong>1. Debug</strong></td><td>No service at all. <code>python cdaq_service.py</code> from a terminal.</td><td>Tracebacks appear on screen rather than in a log file. The process should die on an error, not be silently restarted by NSSM while the fault goes unnoticed.</td></tr>
+<tr><td><strong>2. Trial running</strong></td><td>Installed as a service with <code>Start SERVICE_DEMAND_START</code>; started and stopped by hand.</td><td>Restarts after a crash, but does <strong>not</strong> start at boot. After a reboot the hardware is free and LabVIEW can start normally.</td></tr>
+<tr><td><strong>3. Production</strong></td><td><code>Start SERVICE_AUTO_START</code></td><td>Comes back by itself after a power event — relevant, given that there is a UPS. Enabled only once LabVIEW is no longer the fallback.</td></tr>
+</tbody>
+</table>
+<p>The difference between phase 2 and phase 3 is one line per service.</p>
+
+<h3>Two things to build in from the start</h3>
+<ul>
+<li><strong>A clear message when a device is already in use.</strong> Starting a service while LabVIEW holds the hardware should produce <code>FATAL: cDAQ1 in use by another process (LabVIEW running?). Refusing to start.</code> — not a ten-digit DAQmx error code. This happens often during the transition.</li>
+<li><strong>A lock file or named mutex</strong>, so a second instance of the same service cannot start. Duplicate instances produce duplicate data, and the cause is usually looked for in the hardware first.</li>
+</ul>
+
+<h3>One switch</h3>
+<pre>xams-ctl stop      # stop all services, release the hardware for LabVIEW
+xams-ctl start     # start all services
+xams-ctl status    # what is running, and how old each heartbeat is</pre>
+<p>Switching four services on and off individually goes wrong eventually, usually in a hurry. A single command that always does it in the right order is the most-used tool of the transition period.</p>
+
+<div class="note">
+<h3 style="margin-top:0">"Running" is not "working"</h3>
+<p>A service reported as Running may have been doing nothing useful for three days: a hung serial port, an unhandled exception inside a loop, an unplugged device. Windows sees a live process and is satisfied.</p>
+<p>Each service therefore publishes a heartbeat:</p>
+<pre>xams/status/cdaq/heartbeat   2026-09-16T13:02:00Z</pre>
+<p style="margin-bottom:0">A small monitor raises an alarm when a heartbeat is older than a minute. The same principle applies per channel: a value that is no longer being refreshed is published with <code>"q":"stale"</code> rather than left standing at its last reading. A frozen value that looks healthy is more dangerous than a missing one.</p>
+</div>
+
+<h2>9. EPICS — considered and set aside</h2>
+<p>EPICS is the standard control system at accelerators, light sources and large detector experiments, and was evaluated properly. An IOC (Input/Output Controller) serves named channels — PVs — on the network, declared as records in text files, with scan rate, engineering units and alarm limits as record fields rather than code:</p>
+<pre>record(ai, "XAMS:PRESSURE:MAIN") {
+    field(DTYP, "stream")
+    field(SCAN, "1 second")
+    field(EGU,  "bar")
+    field(HIGH, "1.8")   field(HSV,  "MINOR")
+    field(HIHI, "2.0")   field(HHSV, "MAJOR")
+}</pre>
+<table>
+<thead><tr><th style="width:50%">In its favour</th><th>Against, at this scale</th></tr></thead>
+<tbody>
+<tr><td class="pro">Declarative records: alarm limits, units, deadbands and simulation mode come free and standardised</td><td class="con">Four instruments and ~50 channels do not justify the machinery. More time would go to <code>epics-base</code> and Makefiles than to the system itself</td></tr>
+<tr><td class="pro">StreamDevice handles the Lake Shore 335 and the CAEN ASCII protocol elegantly; EPICS support for both exists in the community</td><td class="con">No maintained EPICS driver for CompactDAQ. The cDAQ backbone would need a Python soft IOC (<code>pcaspy</code>/<code>p4p</code>) regardless — the Python gets written either way</td></tr>
+<tr><td class="pro">Flat global PV namespace; genuine per-IOC process isolation</td><td class="con">Peripheral infrastructure is heavy: the Phoebus alarm server needs Kafka, Archiver Appliance needs Java, Tomcat and MySQL</td></tr>
+<tr><td class="pro">Skills and drivers transfer to and from larger experiments</td><td class="con">Linux effectively required; steep learning curve for a new student</td></tr>
+<tr><td class="pro">Proven over decades of continuous operation</td><td class="con"><strong>Bus-factor risk is relocated, not solved.</strong> A one-person EPICS installation nobody else can boot or debug is no more maintainable than the present LabVIEW project</td></tr>
+</tbody>
+</table>
+<p><strong>Reconsider EPICS if</strong> a second maintainer with controls interest is available, Nikhef controls-group support can be drawn on, or XAMS is expected to grow substantially or feed a larger controls effort. Absent those, it is the wrong tool for this system.</p>
+
+<h2>10. Effort</h2>
+<table>
+<thead><tr><th style="width:62%">Component</th><th>Estimate</th></tr></thead>
+<tbody>
+<tr><td>cDAQ service — 2 tasks, 20 connected channels, read only</td><td>2–3 days</td></tr>
+<tr><td>Lake Shore 335 service</td><td>1 day</td></tr>
+<tr><td>CAEN HV service — ASCII over serial, monitoring first, control later</td><td>2–3 days</td></tr>
+<tr><td>UPS service</td><td>0,5 day</td></tr>
+<tr><td>MQTT, PostgreSQL, Grafana, dashboards</td><td>2–3 days</td></tr>
+<tr><td>Logging: JSONL writer, nightly Parquet conversion</td><td>1 day</td></tr>
+<tr><td>Alarms — SMS, email, thresholds — documentation</td><td>2–3 days</td></tr>
+<tr><td>Service wrapping (NSSM), <code>xams-ctl</code>, heartbeat monitor</td><td>1 day</td></tr>
+<tr><td>Commissioning, empirical channel identification, and fixing what reality objects to</td><td>The remainder, and the part that genuinely takes time</td></tr>
+</tbody>
+</table>
+
+<h2>11. Sequence</h2>
+<ol>
+<li><strong>Collect the remaining configuration</strong> (§4): tab screenshots, a log file, UPS details.</li>
+<li><strong>Set up the development environment on the control PC</strong> — Python, git, the repository checked out locally. The machine stays as it is; nothing is reinstalled.</li>
+<li><strong>Implement hardware-ID resolution and the serial-number identity check</strong> on the HV services, before they are ever allowed to write.</li>
+<li><strong>Build the cDAQ service.</strong> Read-only, so it cannot disturb the detector. Test it in short windows with LabVIEW stopped, logging raw values under their channel numbers.</li>
+<li><strong>Verify each tag against its channel empirically</strong> and record the physical locations in <code>channels.yaml</code>. Only then apply scaling and alarms.</li>
+<li><strong>Add Lake Shore, CAEN and UPS monitoring</strong> — reading only, no writes.</li>
+<li><strong>Validate against the existing CSV history.</strong> Same sensors, different days: do values and noise levels agree? This catches scaling errors without anything needing to run simultaneously.</li>
+<li><strong>Only then migrate control</strong>, one device at a time, having decided what belongs in hardware. This is the sole step requiring real care.</li>
+</ol>
+<div class="note" style="margin-top:4mm">
+<h3 style="margin-top:0">Why there is no parallel-running phase</h3>
+<p>An earlier draft of this plan proposed running the new system alongside LabVIEW for a month. That is not possible with this hardware, and the reason is worth stating so it is not proposed again.</p>
+<ul>
+<li><strong>CompactDAQ permits one analog-input task per chassis.</strong> While LabVIEW holds the tasks, the Python service cannot reserve the chassis; it simply fails to start.</li>
+<li><strong>A COM port admits one process.</strong> The same applies to both CAEN supplies and the Lake Shore.</li>
+<li><strong>Everything is USB</strong>, so it is bound to a single host. A second machine does not help.</li>
+</ul>
+<p style="margin-bottom:0">The migration is therefore a short, planned cut-over per device, with LabVIEW left installed and startable within minutes as the rollback path. That is a more honest safety net than simultaneity, and in practice a better one: it is exercised by actually using it, rather than assumed to work.</p>
+</div>
+
+<h2>12. Open questions</h2>
+<ul>
+<li>Whether the two DT1470ET units expose unique USB serial numbers</li>
+<li>Whether the <code>9207</code> current channels <code>ai8:15</code> are genuinely unused</li>
+<li>What <code>anode_timing.vi</code> and <code>DAISY_polarity_signs.vi</code> do, and whether that behaviour must be reproduced</li>
+<li>Whether heater shut-off and HV kill move into hardware or stay in software</li>
+<li>A spare or successor path for the cDAQ-9174, which is a discontinued model — modules carry over unchanged to a cDAQ-9179 or 9189</li>
+<li>Who, besides the primary author, will be able to maintain the system</li>
+</ul>
+
+<p class="foot">Prepared for the XAMS slow-control replacement decision. Configuration in §3 is extracted from the NI-MAX report of 16 September 2026 and the LabVIEW documentation export of <code>Slow_Control_2_17_User.vi</code> revision 393.</p>
+
+</body>
+</html>

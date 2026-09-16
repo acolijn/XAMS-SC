@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>DESIGN</title><style>
+@page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+html { font-size: 10.5pt; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color:#1a1a1a; line-height:1.45; margin:0; }
+h1 { font-size:20pt; margin:0 0 3mm 0; letter-spacing:-0.3pt; }
+h2 { font-size:13pt; margin:8mm 0 2.5mm 0; padding-bottom:1.2mm; border-bottom:1.2pt solid #1a1a1a; page-break-after:avoid; }
+h3 { font-size:11pt; margin:5mm 0 1.5mm 0; page-break-after:avoid; }
+p { margin:0 0 2.5mm 0; }
+ul,ol { margin:0 0 3mm 0; padding-left:5mm; }
+li { margin-bottom:1.2mm; }
+table { border-collapse:collapse; width:100%; font-size:9pt; margin:0 0 4mm 0; }
+th,td { border:0.5pt solid #b8b8b8; padding:1.6mm 2mm; text-align:left; vertical-align:top; }
+th { background:#ececec; font-weight:600; }
+thead { display:table-header-group; }
+tr { page-break-inside:avoid; }
+code { font-family:"SF Mono",Menlo,monospace; font-size:8.8pt; background:#f2f2f2; padding:0.3mm 1mm; border-radius:1.5pt; }
+pre { font-family:"SF Mono",Menlo,monospace; font-size:8.3pt; background:#f5f5f5; border-left:2.5pt solid #999;
+      padding:2.5mm 3mm; margin:0 0 4mm 0; line-height:1.35; page-break-inside:avoid; }
+pre code { background:none; padding:0; font-size:8.3pt; }
+hr { border:none; border-top:0.5pt solid #bbb; margin:6mm 0; }
+strong { font-weight:600; }
+</style></head><body>
+<h1>XAMS Slow Control — Software Design Specification</h1>
+<p><strong>Version 0.1 — 16 September 2026</strong></p>
+<p>Companion to <code>XAMS-slow-control-options.pdf</code> (the decision document). That document explains <em>why</em>; this one specifies <em>what to build</em>.</p>
+<p>Status of this document: authoritative for implementation. Anything marked <strong>TBD</strong> must be resolved before the affected component is written; nothing else should be invented at implementation time. If a TBD blocks progress, record the assumption in the code comment and list it in §16.</p>
+<hr>
+<h2>1. Scope and principles</h2>
+<p><strong>In scope.</strong> Monitoring and convenience control of the XAMS slow-control hardware: one NI cDAQ-9174 chassis (20 connected channels of 40 available), two CAEN DT1470ET HV supplies (8 channels), one Lake Shore 335, one UPS. Storage, plotting, alarming, and a small web UI.</p>
+<p><strong>Out of scope.</strong> Safety interlocks. Anything that protects hardware or people belongs in hardware or in the instrument&#x27;s own limits. See §10.</p>
+<p><strong>Principles, in priority order.</strong></p>
+<ol><li><strong>Readable beats clever.</strong> The system is replacing a project that failed on maintainability, not on capability. A new student must be able to read a driver in one sitting.</li><li><strong>Configuration is data, not code.</strong> Channels, calibrations and limits live in <code>channels.yaml</code>, under version control. Adding a sensor touches no Python.</li><li><strong>Monitoring never blocks on control.</strong> A hung write must not stall a read loop.</li><li><strong>Fail loudly, never silently.</strong> A device that cannot be identified, a value that is stale, a service that has stopped producing — all raise alarms. A frozen plausible value is worse than a gap.</li><li><strong>Restart is a no-op on hardware.</strong> Starting a service never changes an instrument&#x27;s state.</li></ol>
+<hr>
+<h2>2. Repository layout</h2>
+<pre><code>xams-sc/
+├── README.md
+├── DESIGN.md                   this document
+├── pyproject.toml
+├── config/
+│   ├── channels.yaml           channel definitions — single source of truth
+│   ├── devices.yaml            device connection + identity
+│   ├── alarms.yaml             thresholds and severity routing
+│   ├── recipients.yaml         who gets notified — edited from the web UI
+│   ├── secrets.yaml            credentials — NOT in git (§11)
+│   └── secrets.example.yaml    template with empty values, in git
+├── src/xams_sc/
+│   ├── __init__.py
+│   ├── bus.py                  MQTT publish/subscribe wrapper
+│   ├── config.py               load + validate YAML, compute config hash
+│   ├── model.py                Measurement, Status, Quality dataclasses
+│   ├── service.py              BaseService: lifecycle, reconnect, heartbeat
+│   ├── scaling.py              raw -&gt; engineering units
+│   ├── devices/
+│   │   ├── cdaq.py
+│   │   ├── caen.py
+│   │   ├── lakeshore.py
+│   │   └── ups.py
+│   ├── sinks/
+│   │   ├── pg_writer.py         PostgreSQL
+│   │   ├── jsonl_writer.py
+│   │   └── mongo_writer.py      temporary, see §9.5
+│   ├── alarms/
+│   │   ├── engine.py           threshold evaluation, hysteresis, dedup
+│   │   └── notify.py           SMS, email, sound
+│   ├── api/
+│   │   ├── app.py              FastAPI: setpoints, status, web UI (127.0.0.1 only)
+│   │   └── client.py           Python client for scripts and notebooks
+│   └── cli/
+│       └── xams_ctl.py         start/stop/status for all services
+├── services/                   NSSM install scripts, one per service
+├── tests/
+│   ├── test_scaling.py
+│   ├── test_config.py
+│   └── test_caen_protocol.py   parser tests against recorded responses
+└── tools/
+    ├── jsonl_to_parquet.py     nightly conversion
+    ├── import_labview_csv.py   convert CSV history into JSONL/Parquet
+    └── compare_to_labview.py   validation against historical CSV</code></pre>
+<p>Each service is a thin <code>__main__</code> that constructs a device class and runs <code>BaseService</code>. No business logic in entry points.</p>
+<h3>2.1 Why a message bus</h3>
+<p>Every service publishes to MQTT; nothing writes to a database directly. The cost is one extra moving part. What it buys:</p>
+<p><strong>Consumers can be added without touching a driver.</strong> Each of these is a subscriber, and none of them requires a change anywhere else: the PostgreSQL writer, the JSONL archive, the MongoDB writer during the transition (§9.5), the alarm engine, the flight recorder, the web UI, and a forwarder to a remote server if remote viewing is ever wanted.</p>
+<p><strong>Storage decisions stay reversible.</strong> This design moved from InfluxDB to PostgreSQL during its own drafting. Without a bus that would have meant a different database client in every driver; with one it is a single new file in <code>sinks/</code>.</p>
+<p><strong>Debugging is direct.</strong> <code>mosquitto_sub -t &#x27;xams/#&#x27;</code> shows every measurement live, with no UI and no database involved.</p>
+<p><strong>It enforces a boundary.</strong> This is the real argument. Without a bus, &quot;just write this one thing here as well&quot; gradually accumulates inside the drivers, and acquisition, scaling, storage and alarming end up entangled — which is precisely what happened to the LabVIEW project. The bus makes the wrong thing awkward to do.</p>
+<p><strong>On MQTT specifically.</strong> It is an OASIS standard, also ISO/IEC 20922, with a frozen specification. It was built at IBM in 1999 for SCADA telemetry over low-bandwidth satellite links, so its design target is exactly this: instrument readings sent to a central point, tolerant of interruptions. Mosquitto (the broker) and paho-mqtt (the Python client) are both Eclipse Foundation projects, packaged in every major distribution, stable for over a decade. Neither is a one-person project that could disappear.</p>
+<p>Note for context: MQTT is mainstream in industry and IoT, but it is <em>not</em> the convention in accelerator and large-detector controls, where EPICS and Tango dominate. For XAMS that is immaterial; it would matter only if the system ever had to integrate with a large controls group.</p>
+<p><strong>The cost, stated honestly.</strong> The broker becomes a single point through which all data flows. If it stops, services keep reading hardware but nothing is stored. Mitigations, all required (§6.4): the broker runs on loopback with automatic restart, and each service buffers its measurements in memory for several minutes and republishes them when the broker returns. A short broker outage then costs nothing; a long one costs a gap that is visible in the data and raised as an alarm, rather than passing unnoticed.</p>
+<hr>
+<h2>3. Naming conventions</h2>
+<p><strong>Channel names</strong> are the identity of a measurement, used in MQTT topics, JSONL records, the database and the UI. They must be stable forever — renaming breaks history.</p>
+<p><strong>Use the instrument tag names the lab already uses</strong>, lowercased. <code>TT201</code> becomes <code>tt201</code>. These are ISA-style tags (<code>TT</code> = temperature transmitter, <code>P</code> = pressure, <code>FM</code> = flow meter) that match the plant numbering, so they carry meaning that an invented scheme would discard. An earlier draft of this document proposed names like <code>t_cathode_top</code>; that is superseded.</p>
+<p>Rules: lowercase, ASCII, no separator inside a tag, <code>snake_case</code> only where a tag has no established form.</p>
+<pre><code>p101, p102, p103, p104          pressures (9207 voltage)
+pmain                           detector pressure
+fm101                           flow meter
+tt103, tt104                    temperatures, 1xx series
+tt201 … tt207                   temperatures, 2xx series (PT1000)
+tt301 … tt304                   temperatures, 3xx series
+ttamb                           ambient temperature
+hv_anode, hv_cathode, hv_gate   HV channels
+hv_pmt_top, hv_pmt_bot, hv_ts, hv_bs, hv_nai
+ls_sensor_a, ls_sensor_b        Lake Shore inputs
+ls_heater_1, ls_heater_2        Lake Shore outputs
+ups_*                           UPS status</code></pre>
+<p>The <code>legacy:</code> key in <code>channels.yaml</code> records the original casing (<code>TT201</code>, <code>Pmain</code>) so historical CSV data can still be matched.</p>
+<p>The numbering appears to group by subsystem — <code>p101</code>–<code>p104</code> and <code>tt103</code>–<code>tt104</code> share the 1xx series, <code>tt201</code>–<code>tt207</code> the 2xx, <code>tt301</code>–<code>tt304</code> the 3xx. <strong>TBD</strong>: confirm what each series denotes, and record it in the <code>description</code> field of every channel. A tag without a location is only half an identity.</p>
+<p><strong>MQTT topics.</strong></p>
+<pre><code>xams/meas/&lt;channel&gt;             measurement, JSON payload, retained
+xams/status/&lt;service&gt;/heartbeat ISO-8601 UTC timestamp, retained
+xams/status/&lt;service&gt;/state     starting | running | degraded | stopped
+xams/alarm/&lt;channel&gt;            alarm state changes
+xams/cmd/&lt;device&gt;/&lt;action&gt;      control requests (see §10)
+xams/ack/&lt;device&gt;/&lt;action&gt;      command acknowledgements</code></pre>
+<p>Retained messages on <code>meas</code> and <code>status</code> mean a newly started subscriber immediately sees the current state instead of waiting for the next cycle.</p>
+<hr>
+<h2>4. Configuration</h2>
+<h3>4.1 <code>devices.yaml</code></h3>
+<pre><code>cdaq:
+  chassis: cDAQ1
+  serial: &quot;020C5E1C&quot;
+  modules:
+    - alias: &quot;9207&quot;     model: NI9207   slot: 1   serial: &quot;020DFD57&quot;
+    - alias: &quot;9216_1&quot;   model: NI9216   slot: 2   serial: &quot;020F64D1&quot;
+    - alias: &quot;9216_2&quot;   model: NI9216   slot: 3   serial: &quot;020F64D0&quot;
+    - alias: &quot;9226&quot;     model: NI9226   slot: 4   serial: &quot;02159CBB&quot;
+
+caen:
+  - id: hv_1
+    match: {vid: &quot;0403&quot;, pid: &quot;6001&quot;, serial: &quot;TBD&quot;}   # see §6.2
+    board_address: 0
+    board_serial: &quot;TBD&quot;          # verified via BDSNUM on every connect
+  - id: hv_2
+    match: {vid: &quot;0403&quot;, pid: &quot;6001&quot;, serial: &quot;TBD&quot;}
+    board_address: 1
+    board_serial: &quot;TBD&quot;
+
+lakeshore:
+  match: {vid: &quot;TBD&quot;, pid: &quot;TBD&quot;, serial: &quot;TBD&quot;}
+  baud: 57600                    # TBD — confirm against instrument setting
+
+ups:
+  model: TBD
+  connection: TBD</code></pre>
+<p>Device resolution never uses a COM number. It matches on USB hardware ID via <code>serial.tools.list_ports</code>, then confirms identity by querying the instrument (§6.2).</p>
+<h3>4.2 <code>channels.yaml</code></h3>
+<p>One entry per channel. Schema:</p>
+<table><thead><tr><th>Key</th><th>Required</th><th>Meaning</th></tr></thead><tbody><tr><td><code>name</code></td><td>yes</td><td>channel identity (§3)</td></tr><tr><td><code>device</code></td><td>yes</td><td><code>cdaq</code> / <code>hv_1</code> / <code>hv_2</code> / <code>lakeshore</code> / <code>ups</code></td></tr><tr><td><code>phys</code></td><td>yes</td><td>physical address, e.g. <code>9207/ai5</code>, or HV channel index</td></tr><tr><td><code>kind</code></td><td>yes</td><td><code>voltage</code> / <code>current</code> / <code>rtd</code> / <code>hv_vmon</code> / <code>hv_imon</code> / <code>temperature</code> / <code>status</code></td></tr><tr><td><code>unit</code></td><td>yes</td><td>engineering unit string</td></tr><tr><td><code>offset</code></td><td>no</td><td>default 0.0</td></tr><tr><td><code>multiplier</code></td><td>no</td><td>default 1.0</td></tr><tr><td><code>rtd</code></td><td>for <code>kind: rtd</code></td><td><code>{type, r0, wiring}</code></td></tr><tr><td><code>legacy</code></td><td>no</td><td>name in the LabVIEW system</td></tr><tr><td><code>enabled</code></td><td>no</td><td>default true</td></tr><tr><td><code>description</code></td><td>no</td><td>free text: what and where</td></tr><tr><td><code>log_minmax</code></td><td>no</td><td>default false; store interval min/max as well (§9.1)</td></tr></tbody></table>
+<p>Example, using values recovered from the LabVIEW front panel:</p>
+<pre><code>- name: pmain
+  device: cdaq
+  phys: 9207/ai5
+  kind: voltage
+  offset: 0.0
+  multiplier: 0.714
+  unit: bar
+  legacy: Pmain
+  description: detector pressure
+
+- name: p101
+  device: cdaq
+  phys: 9207/ai0
+  kind: voltage
+  offset: 1.0
+  multiplier: 25.0
+  unit: bar
+  legacy: P101
+
+- name: fm101
+  device: cdaq
+  phys: 9207/ai7
+  kind: voltage
+  offset: 0.0
+  multiplier: 6.0
+  unit: slpm
+  legacy: FM101
+
+- name: tt301
+  device: cdaq
+  phys: 9216_1/ai0
+  kind: rtd
+  rtd: {type: PT3851, r0: 100.0, wiring: 3}
+  unit: C
+  legacy: TT301
+  description: TBD — physical location
+
+- name: tt201
+  device: cdaq
+  phys: 9226/ai0
+  kind: rtd
+  rtd: {type: PT3750, r0: 1000.0, wiring: 3}
+  unit: C
+  legacy: TT201
+  description: TBD — physical location</code></pre>
+<p>Unconnected channels are listed explicitly with <code>enabled: false</code> rather than omitted, so the channel map is complete and nobody has to wonder later whether a gap is an oversight:</p>
+<pre><code>- name: spare_9216_2_ai0
+  device: cdaq
+  phys: 9216_2/ai0
+  kind: rtd
+  rtd: {type: PT3851, r0: 100.0, wiring: 3}
+  unit: C
+  enabled: false
+  description: not connected</code></pre>
+<p>**Scaling is defined as <code>value = (raw - offset) * multiplier</code>.** This matches the LabVIEW implementation exactly; do not change the convention, or historical comparisons break.</p>
+<h3>4.3 <code>alarms.yaml</code></h3>
+<pre><code>defaults:
+  hysteresis: 0.02          # fraction of range, prevents chatter
+  min_repeat_minutes: 15    # re-notification interval
+  stale_after_seconds: 60
+
+channels:
+  pmain:
+    high:  {value: 1.8, severity: minor}
+    hihi:  {value: 2.0, severity: major, notify: [sms, email, sound]}
+    low:   {value: 0.9, severity: minor}
+
+routing:
+  sms:   {recipients: enabled}    # everyone enabled in recipients.yaml
+  email: {recipients: enabled}</code></pre>
+<p>Thresholds are <strong>TBD</strong> pending the <code>Error and Alarm</code> tab of the LabVIEW front panel.</p>
+<h3>4.4 <code>recipients.yaml</code></h3>
+<p>Who receives alarm notifications. Separate from <code>alarms.yaml</code> because it changes often and for different reasons: people join the group, go on holiday, change numbers.</p>
+<pre><code>recipients:
+  - name: Auke-Pieter Colijn
+    phone: &quot;+31...&quot;
+    email: a.p.colijn@nikhef.nl
+    enabled: true
+  - name: ...
+    phone: &quot;+31...&quot;
+    enabled: false        # temporarily off, without losing the number</code></pre>
+<p>Everyone with <code>enabled: true</code> receives the notification. No shift roster, no escalation chain: the list is the list.</p>
+<p><strong>Edited from the web UI</strong> — add, remove, or toggle <code>enabled</code> — and applied without restarting anything: the alarm engine watches the file and reloads it on change. Editing the file by hand works equally well and has the same effect.</p>
+<p>This is deliberately unlike the alarm thresholds (§4.3), which stay in git and are applied with <code>xams-ctl reload</code>. Changing a threshold silently alters what the system protects against and deserves review; changing a recipient does not.</p>
+<p>Every change is appended to the same audit log as control actions (§10), so it remains recoverable who was on the list when a given alarm fired.</p>
+<p><strong>An empty list is a warning.</strong> If every recipient is disabled, alarms reach nobody. The alarm engine raises a low-severity alarm on startup and on reload when no recipient is enabled, so this is found on a quiet afternoon rather than during an incident.</p>
+<h3>4.5 Config hash</h3>
+<p><code>config.py</code> computes a SHA-256 over the parsed, normalised contents of <code>channels.yaml</code>, <code>devices.yaml</code> and <code>alarms.yaml</code> (not <code>recipients.yaml</code>, which does not affect the data) and exposes the first 7 hex characters as <code>config_hash</code>. It is written into every JSONL daily file header (§9.3) and published on <code>xams/status/config</code>.</p>
+<hr>
+<h2>5. Data model</h2>
+<pre><code>@dataclass(frozen=True)
+class Measurement:
+    t: datetime          # timezone-aware, UTC
+    channel: str
+    value: float         # engineering units
+    unit: str
+    raw: float | None = None
+    quality: Quality = Quality.OK
+
+class Quality(Enum):
+    OK = &quot;ok&quot;
+    STALE = &quot;stale&quot;          # not refreshed within stale_after_seconds
+    ERROR = &quot;error&quot;          # read failed
+    UNVERIFIED = &quot;unverified&quot;  # device identity not confirmed</code></pre>
+<p>MQTT payload on <code>xams/meas/&lt;channel&gt;</code>:</p>
+<pre><code>{&quot;t&quot;:&quot;2026-09-16T13:02:00.000Z&quot;,&quot;ch&quot;:&quot;pmain&quot;,&quot;v&quot;:1.530,&quot;raw&quot;:2.143,&quot;u&quot;:&quot;bar&quot;,&quot;q&quot;:&quot;ok&quot;}</code></pre>
+<p>Timestamps are UTC, ISO-8601, millisecond precision, taken <strong>at the moment of the hardware read</strong>, not at publish time.</p>
+<p><code>raw</code> is written for the first year of operation at minimum (§9.4).</p>
+<hr>
+<h2>6. Service contract</h2>
+<p>Every device service inherits <code>BaseService</code> and must satisfy all of the following. This is the specification; deviations need a comment explaining why.</p>
+<h3>6.1 Lifecycle</h3>
+<pre><code>resolve device  →  verify identity  →  configure  →  loop { read, publish, heartbeat }
+                          ↓ fail
+                   log FATAL, publish state=stopped, exit non-zero</code></pre>
+<ul><li><strong>Startup is read-only.</strong> No setpoint is written, no channel enabled, no state restored. A restart must be invisible to the hardware.</li><li><strong>A busy device is a clean failure</strong>, not a stack trace: <code>FATAL: cDAQ1 in use by another process (LabVIEW running?). Refusing to start.</code></li><li><strong>One instance only.</strong> A named mutex (Windows) or lock file prevents a second copy.</li><li><strong>Reconnect loop.</strong> On a read failure: publish <code>quality=error</code>, back off (1 s, 2 s, 4 s … capped at 30 s), retry indefinitely. The service never exits because a device disappeared; it exits only when it cannot be identified at startup.</li></ul>
+<h3>6.2 Identity verification</h3>
+<p>Applies to every serial device, and is mandatory before any write.</p>
+<ol><li>Enumerate ports with <code>serial.tools.list_ports</code>, match on VID/PID and — where available — USB serial number.</li><li>Query the instrument for its own identity:</li></ol>
+<ul><li>CAEN: <code>$BD:&lt;addr&gt;,CMD:MON,PAR:BDSNUM</code> and <code>PAR:BDNAME</code></li><li>Lake Shore: <code>*IDN?</code></li></ul>
+<ol><li>Compare against <code>devices.yaml</code>. On mismatch: <strong>refuse to start, raise an alarm, do not guess.</strong></li></ol>
+<p>Rationale: the two CAEN units are the same model. Port order alone must never determine which electrode gets which voltage.</p>
+<h3>6.3 Heartbeat and staleness</h3>
+<ul><li>Publish <code>xams/status/&lt;service&gt;/heartbeat</code> every cycle.</li><li>A separate monitor raises an alarm when a heartbeat exceeds <code>stale_after_seconds</code>.</li><li>A channel not refreshed within the same window is republished with <code>quality=stale</code>. <strong>Never leave a stale value standing as if fresh.</strong></li></ul>
+<hr>
+<h3>6.4 Broker outage</h3>
+<p>The MQTT broker is a shared dependency (§2.1). Every service therefore:</p>
+<ul><li>buffers measurements in a bounded in-memory queue (default 5 minutes&#x27; worth) while the broker is unreachable;</li><li>republishes the buffer, in order, once the broker returns;</li><li>raises an alarm if the buffer overflows, and records the gap explicitly rather than letting it pass silently;</li><li><strong>keeps reading the hardware throughout.</strong> A broker outage must never stop acquisition.</li></ul>
+<p>The broker itself runs on loopback under NSSM with automatic restart, so the common case is an outage of a few seconds.</p>
+<hr>
+<h2>7. Device specifications</h2>
+<h3>7.1 cDAQ service (<code>devices/cdaq.py</code>)</h3>
+<p>Read-only. The chassis has no output module, so this service has no control path.</p>
+<p><strong>Tasks.</strong> All four modules are low-rate delta-sigma with differing aggregate rates and cannot share one hardware-timed task. Slow control reads at 1 Hz (§9.1), so use <strong>on-demand (software-timed) reads</strong>, one task per module, polled in sequence. The CompactDAQ timing-engine constraint then does not apply.</p>
+<table><thead><tr><th>Task</th><th>Module alias</th><th>Channels</th><th>DAQmx call</th></tr></thead><tbody><tr><td>1</td><td><code>9207</code></td><td><code>ai0:7</code> voltage</td><td><code>add_ai_voltage_chan</code></td></tr><tr><td>1b</td><td><code>9207</code></td><td><code>ai8:15</code> current</td><td><code>add_ai_current_chan</code> — <strong>TBD: confirm these are used at all</strong></td></tr><tr><td>2</td><td><code>9216_1</code></td><td><code>ai0:6</code></td><td><code>add_ai_rtd_chan</code></td></tr><tr><td>3</td><td><code>9216_2</code></td><td>—</td><td><strong>entirely unconnected; task not created</strong></td></tr><tr><td>4</td><td><code>9226</code></td><td><code>ai0:6</code></td><td><code>add_ai_rtd_chan</code></td></tr></tbody></table>
+<p><strong>RTD channel map</strong> (from the lab, September 2026):</p>
+<table><thead><tr><th>Module</th><th>Type</th><th>Channel</th><th>Tag</th><th>Notes</th></tr></thead><tbody><tr><td><code>9226</code></td><td>PT1000</td><td><code>ai0</code> … <code>ai6</code></td><td><code>tt201</code> … <code>tt207</code></td><td>seven consecutive</td></tr><tr><td><code>9226</code></td><td>PT1000</td><td><code>ai7</code></td><td>—</td><td>not connected</td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai0</code></td><td><code>tt301</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai1</code></td><td><code>tt302</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai2</code></td><td><code>tt103</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai3</code></td><td><code>tt104</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai4</code></td><td><code>ttamb</code></td><td>ambient</td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai5</code></td><td><code>tt303</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai6</code></td><td><code>tt304</code></td><td></td></tr><tr><td><code>9216_1</code></td><td>PT100</td><td><code>ai7</code></td><td>—</td><td>not connected</td></tr><tr><td><code>9216_2</code></td><td>PT100</td><td><code>ai0</code> … <code>ai7</code></td><td>—</td><td><strong>module entirely unconnected</strong></td></tr></tbody></table>
+<p><strong>Fourteen RTDs are in use, not twenty-four.</strong> The whole of <code>9216_2</code> is free, which means eight spare PT100 inputs are already wired into the chassis — room for expansion without buying hardware. Do not create a DAQmx task for it; list its channels in <code>channels.yaml</code> with <code>enabled: false</code> so the map stays complete.</p>
+<p><strong>RTD configuration</strong> (confirmed from the LabVIEW front panel):</p>
+<table><thead><tr><th>Module</th><th><code>r_0</code></th><th><code>rtd_type</code></th><th><code>resistance_config</code></th></tr></thead><tbody><tr><td>NI 9216 (both)</td><td>100.0</td><td><code>RTDType.PT_3851</code></td><td><code>THREE_WIRE</code></td></tr><tr><td>NI 9226</td><td>1000.0</td><td><code>RTDType.PT_3750</code></td><td><code>THREE_WIRE</code></td></tr></tbody></table>
+<p>No custom Callendar–Van Dusen coefficients are in use. Let DAQmx return °C directly; do not hand-roll the conversion.</p>
+<pre><code>task.ai_channels.add_ai_rtd_chan(
+    &quot;9216_1/ai0:7&quot;,
+    rtd_type=RTDType.PT_3851,
+    resistance_config=ResistanceConfiguration.THREE_WIRE,
+    current_excit_source=ExcitationSource.INTERNAL,
+    r_0=100.0,
+    units=TemperatureUnits.DEG_C,
+)</code></pre>
+<p>Modules are addressed by <strong>alias</strong> (<code>9207/ai0</code>), not <code>cDAQ1Mod1/ai0</code>. Aliases are configured in NI-MAX and survive re-slotting.</p>
+<p>Timing mode: High Speed, as currently configured. 50 Hz rejection comes from the module&#x27;s ADC mode, not from software averaging.</p>
+<h3>7.2 CAEN service (<code>devices/caen.py</code>)</h3>
+<p>Two instances, one per supply. ASCII protocol over the USB virtual COM port; no vendor library.</p>
+<pre><code>$BD:&lt;addr&gt;,CMD:MON,PAR:VMON,CH:&lt;n&gt;        read measured voltage
+$BD:&lt;addr&gt;,CMD:MON,PAR:IMON,CH:&lt;n&gt;        read measured current
+$BD:&lt;addr&gt;,CMD:MON,PAR:STAT,CH:&lt;n&gt;        channel status word
+$BD:&lt;addr&gt;,CMD:SET,PAR:VSET,CH:&lt;n&gt;,VAL:&lt;v&gt;   set voltage   (control path, §10)</code></pre>
+<p>Terminate with <code>\r\n</code>. Parse the response; a malformed or absent reply is a read error, never a silently substituted value.</p>
+<p>Channel names, from the LabVIEW front panel: <code>PMT top</code>, <code>PMT bot</code>, <code>TS</code>, <code>BS</code>, <code>Cathode</code>, <code>Gate</code>, <code>Anode</code>, <code>NaI</code>. The anode is on <strong>CAEN 2, channel 3</strong>. Mapping of the remaining seven to supply and channel index: <strong>TBD</strong>.</p>
+<p>Two behaviours exist in the LabVIEW code whose purpose is not yet established: <code>anode_timing.vi</code> and <code>DAISY_polarity_signs.vi</code>. <strong>TBD</strong> — determine whether they must be reproduced before the control path is built.</p>
+<h3>7.3 Lake Shore service (<code>devices/lakeshore.py</code>)</h3>
+<p>Official <code>lakeshore</code> package. COM port resolved by hardware ID, identity confirmed with <code>*IDN?</code>.</p>
+<p>Read: two sensor inputs, two heater outputs, setpoint, heater range, PID. Current PID settings: P = 100, I = 20, D = 0.</p>
+<p>Control path (§10): setpoint within instrument limits only. The instrument&#x27;s own setpoint limit and heater range remain the authority.</p>
+<h3>7.4 UPS service (<code>devices/ups.py</code>)</h3>
+<p><strong>TBD</strong> — model and connection unknown. Read-only status: line power present, battery level, time on battery, timestamp. Publish <code>ups_*</code> channels.</p>
+<p>A power event is one of the few things that can end a run, so this is worth having even though it is the smallest service.</p>
+<hr>
+<h2>8. Interfaces and access</h2>
+<p><strong>Hard requirement: the system is reachable from the lab PC only.</strong> Every listening service binds to the loopback address. This matches how the LabVIEW system works today and is a deliberate constraint, not an oversight to be relaxed later without discussion.</p>
+<pre><code>uvicorn.run(app, host=&quot;127.0.0.1&quot;, port=8000)   # NOT 0.0.0.0</code></pre>
+<p><code>0.0.0.0</code> is the default in most tutorials and in much example code. On this system it would expose HV control to the building network. Every bind address is therefore explicit in configuration, and <code>127.0.0.1</code> is the only accepted value without a recorded decision to the contrary.</p>
+<p>The same applies to everything else that opens a port:</p>
+<table><thead><tr><th>Service</th><th>Bind</th><th>Note</th></tr></thead><tbody><tr><td>FastAPI web UI</td><td><code>127.0.0.1:8000</code></td><td>control surface</td></tr><tr><td>Mosquitto</td><td><code>127.0.0.1:1883</code></td><td><strong>see below</strong></td></tr><tr><td>PostgreSQL</td><td><code>127.0.0.1:5432</code></td><td></td></tr><tr><td>Grafana</td><td><code>127.0.0.1:3000</code></td><td></td></tr></tbody></table>
+<p><strong>Mosquitto deserves particular care.</strong> Commands travel over MQTT (<code>xams/cmd/#</code>), so anything that can reach the broker can set a high voltage. A broker listening on all interfaces is equivalent to an unauthenticated control interface on the network. Bind to loopback, and disable anonymous access on any listener that is ever added.</p>
+<p>If remote viewing is wanted later, the answer is an SSH tunnel or a read-only mirror of the data — never opening the control port. Adding remote access is a decision with a security consequence, and should be recorded as such.</p>
+<h3>8.1 The four surfaces</h3>
+<p>Separated by how often they are touched and how much a mistake costs.</p>
+<p><strong>Grafana — monitoring.</strong> Plots, history, dashboards, trends. Read-only by construction, and where most of the day is spent. Also the alerting engine for notifications. No control, ever: that separation is the point.</p>
+<p><strong>Web UI — control.</strong> One page: current value of every channel, alarm state, service health, and the control actions. Per HV channel it shows <code>VSET</code>, <code>VMON</code>, <code>IMON</code>, on/off state and ramping status.</p>
+<p>Setting a value requires a confirmation step. For HV the new value is retyped rather than confirmed with a click — deliberate friction, because the failure mode is an extra zero on an electrode. Validation before any write: identity confirmed (§6.2), value within the range in <code>channels.yaml</code>, device not in an error state. A rejected command is acknowledged with a reason, never silently dropped.</p>
+<p>The page also carries alarm <strong>acknowledge</strong> (stop the repeating notification; the condition is still displayed as active) and <strong>silence for N minutes</strong> (for a deliberate intervention). Acknowledging is not fixing, and the UI must never let the two look alike.</p>
+<p><strong>Config files in git — the system&#x27;s definition.</strong> Calibrations, channel map, alarm thresholds. Edited in a text editor, committed, then applied without a restart and without a gap in the data:</p>
+<pre><code>xams-ctl reload</code></pre>
+<p>These are not editable from the web UI — with one exception, <code>recipients.yaml</code> (§4.4), which changes often and carries no safety consequence. A wrong threshold silently disables protection and is discovered months later; in git it has review, history, and the config hash in every data file records exactly which version produced which data (§4.4). A clickable threshold has none of that.</p>
+<p>The honest cost: changing a limit means editing a file rather than dragging a slider. For a handful of changes a year that is the right trade. If thresholds turn out to need weekly adjustment, the fix is a UI that edits the YAML <strong>and</strong> commits it — the same audit trail with less friction. Build that only once the need is demonstrated.</p>
+<p><strong>Python client — scripts and notebooks.</strong></p>
+<pre><code>from xams_sc import Client
+c = Client()
+c.get(&quot;pmain&quot;)                   # current value
+c.history(&quot;tt201&quot;, hours=24)     # pandas DataFrame
+c.set(&quot;hv_anode&quot;, 3500)          # same validation, same audit log as the UI</code></pre>
+<p>This is what makes the system useful beyond monitoring: calibration runs, scripted ramps, correlation studies. It is also how the <code>anode_timing.vi</code> behaviour would be reimplemented if it turns out to be needed (§7.2).</p>
+<p>For debugging, <code>mosquitto_sub -t &#x27;xams/#&#x27;</code> shows everything live with no UI involved.</p>
+<h3>8.2 What is deliberately not in any interface</h3>
+<p>Ramp rates, trip currents, over-voltage limits, heater range and setpoint limits live on the instruments themselves. The software <strong>displays</strong> them and raises an alarm if they differ from the expected values in <code>devices.yaml</code>, but it cannot change them. This is what keeps the software out of the protection path (§10).</p>
+<hr>
+<h2>9. Storage</h2>
+<p><strong>What exists today.</strong> The CSV files on the lab PC are the authoritative record; the MongoDB instance on the Nikhef server is temporary storage only, and is retired when LabVIEW is. So there is currently <strong>no permanent archive</strong> — the entire history sits on one disk, in a format whose column meanings live in a separate, overwritable header file.</p>
+<p>Creating a durable archive is therefore not a reorganisation of something existing. It is the single largest improvement in this design.</p>
+<p>Three layers, each with one job.</p>
+<h3>9.1 Sampling and logging rates</h3>
+<p>Sampling rate and logging rate are separate decisions. Conflating them is why the LabVIEW system writes a record every couple of seconds for channels whose physics moves in minutes.</p>
+<pre><code>sampling:
+  interval_s: 1          # read the hardware
+  log_interval_s: 10     # write the mean of those samples
+  flight_recorder:
+    window_s: 600        # last 10 minutes at 1 Hz, held in memory
+    dump_on: [alarm, trip, service_restart]</code></pre>
+<p><strong>Read at 1 Hz, log every 10 s as the mean of the ten samples.</strong> The averaging is not merely data reduction — a mean of ten readings is less noisy than any single one, so the stored value is better than what is discarded.</p>
+<p>Disk is not the constraint. At 30 channels and 1 Hz the cost would be roughly 10 MB gzipped per day, which is nothing on this machine. The reasons to log less often are query speed, plot legibility and ease of analysis. At 10 s the system produces about 260 000 records per day, ~1 MB gzipped, ~400 MB per year: ten years of history in 4 GB.</p>
+<p><strong>Why 10 s and not slower.</strong> The physics differs per channel:</p>
+<table><thead><tr><th>Channel</th><th>Time constant</th><th>1 Hz is</th></tr></thead><tbody><tr><td>Cryostat RTDs</td><td>minutes</td><td>heavily oversampled</td></tr><tr><td>Ambient temperature</td><td>tens of minutes</td><td>absurdly oversampled</td></tr><tr><td>Pressure, steady state</td><td>minutes</td><td>oversampled</td></tr><tr><td>Pressure, while pumping or filling</td><td>seconds</td><td>about right</td></tr><tr><td>HV <code>VMON</code>/<code>IMON</code>, normal operation</td><td>steady</td><td>oversampled</td></tr><tr><td>HV during a trip</td><td><strong>milliseconds</strong></td><td><strong>far too slow</strong></td></tr></tbody></table>
+<p>A fixed 1 Hz is therefore simultaneously too fast for the temperatures and too slow for the only moment that resolution matters. Temperatures alone would be well served by 60 s, but <strong>the rate is deliberately uniform across all channels</strong>: identical timestamps let channels be compared without interpolation, and that simplicity is worth more than the few megabytes differentiation would save.</p>
+<p><strong>Flight recorder.</strong> The last 10 minutes at the full 1 Hz are held in a fixed-length <code>collections.deque</code>. When an alarm fires, a channel trips, or a service restarts unexpectedly, the buffer is written out:</p>
+<pre><code>data/events/2026-09-16T13-02-11_pmain_hihi.jsonl</code></pre>
+<p>This gives full resolution exactly around the moments that matter, without storing it permanently. It is what the present system lacks: after an incident there are only averaged values, and no record of the approach to it.</p>
+<p>Optionally, for pressure and HV channels, store <code>min</code> and <code>max</code> of each interval alongside the mean, so short excursions are not lost between log points. Two extra columns; decide per channel in <code>channels.yaml</code>.</p>
+<h3>9.2 PostgreSQL — working store</h3>
+<p><strong>PostgreSQL.</strong> Not InfluxDB, not &quot;Timescale or Postgres&quot; — TimescaleDB is an <em>extension</em> to PostgreSQL, not a separate product, and at this data volume it is not needed. It can be enabled later on the same database, without touching the data, if compression and automatic retention become worth having.</p>
+<p>Rationale: a native Windows installer, a built-in Grafana datasource needing no plugin, <code>psycopg</code> and <code>pandas.read_sql</code> in Python, and SQL that anyone in the group can read today and in ten years. InfluxDB was the obvious default next to Grafana, but its Windows support is uneven and its data model and query language have been reworked twice between major versions — the wrong kind of churn for a system meant to be installed and left alone.</p>
+<p>One table:</p>
+<pre><code>CREATE TABLE meas (
+    t        timestamptz  NOT NULL,
+    channel  text         NOT NULL,
+    value    double precision,          -- mean over the log interval
+    vmin     double precision,          -- optional, per channel
+    vmax     double precision,          -- optional, per channel
+    raw      double precision,
+    unit     text,
+    quality  text         NOT NULL DEFAULT &#x27;ok&#x27;,
+    src      text         NOT NULL DEFAULT &#x27;xams&#x27;   -- &#x27;labview&#x27; for imported history
+);
+CREATE INDEX ON meas (channel, t DESC);</code></pre>
+<p>Written by <code>sinks/pg_writer.py</code>, subscribed to <code>xams/meas/#</code>. Batched, flushed at least every 10 s. <strong>A failure to write must never block the bus or the services</strong> — the writer logs, alarms, and keeps going.</p>
+<p>This database is a <strong>cache, not storage.</strong> The archive is the files (§9.3, §9.4). If the database is lost or a different one is wanted later, write a new sink and replay the Parquet history into it. Nothing in any driver changes.</p>
+<p>Grafana reads from here.</p>
+<h3>9.3 JSONL — raw archive</h3>
+<p>One file per UTC day: <code>data/raw/2026-09-16.jsonl</code>. Written by <code>sinks/jsonl_writer.py</code>, <strong>independently of the database</strong>. If the database falls over, no data is lost. The files are the truth; the database is an index over them.</p>
+<p>First line of every file:</p>
+<pre><code>{&quot;t&quot;:&quot;2026-09-16T00:00:00Z&quot;,&quot;meta&quot;:{&quot;config&quot;:&quot;a3f91c2&quot;,&quot;version&quot;:&quot;1.4.0&quot;,&quot;host&quot;:&quot;xams-sc&quot;}}</code></pre>
+<p>Flush and <code>fsync</code> at least every 10 s so a power loss costs seconds, not hours.</p>
+<h3>9.4 Parquet — long term</h3>
+<p><code>tools/jsonl_to_parquet.py</code> runs nightly on the closed day, then gzips the JSONL. Both are kept until the conversion has been verified; after that, keeping the gzipped JSONL as well is cheap and worth it.</p>
+<p><strong>Log <code>raw</code> alongside the scaled value for at least the first year.</strong> If a multiplier turns out to be wrong — the <code>×25</code> on <code>p101</code> is a candidate — the entire history can be rescaled. Without <code>raw</code>, it cannot. At ~30 channels every 2 s this costs roughly 120 MB/day uncompressed, around 10 MB gzipped.</p>
+<hr>
+<h3>9.5 MongoDB — temporary, during the transition</h3>
+<p>The existing MongoDB writer can be reused as a third sink, so the Nikhef server keeps receiving data and the existing Python viewer keeps working while Grafana is being set up. Adding it touches no driver: it is another MQTT subscriber.</p>
+<p><strong>Deliberately a compatibility layer with an expiry.</strong> It initially emits the current wide document shape, so the existing viewer needs no changes. Once Grafana is running it either moves to the long form or is removed. Record that expiry here and in the code — an undated temporary layer becomes permanent, which is how the present system came about.</p>
+<p>Same rules as the other sinks: a Mongo failure never blocks the bus, and a TTL index on the timestamp keeps the collection from growing without bound. MongoDB is a convenience copy, never a second source of truth.</p>
+<h3>9.6 Importing the LabVIEW history</h3>
+<p><code>tools/import_labview_csv.py</code> converts the existing CSV history into the same JSONL/Parquet form, so Grafana shows one continuous timeline across the migration rather than starting from zero. This is cheap and worth doing.</p>
+<p><strong>One hazard, which must be checked before the import is trusted.</strong> The LabVIEW front panel has a &quot;Re-save headers&quot; button, so the header file is mutable and there may be only one — describing only the most recent channel layout. If a channel was ever added, removed or reordered, older CSV files silently do not match it. Columns shift by one position and the values still look entirely plausible.</p>
+<p>Check first:</p>
+<pre><code>for f in *.csv; do printf &quot;%s  %s\n&quot; &quot;$(head -1 &quot;$f&quot; | awk -F&#x27;;&#x27; &#x27;{print NF}&#x27;)&quot; &quot;$f&quot;; done | sort | uniq -c -w4</code></pre>
+<p>One group of column counts means one layout throughout, and the import is straightforward. Several groups mean several layouts, and each era needs its own column mapping — recovered by hand, from file dates and from what the values physically are. The importer must refuse to guess: a file whose column count does not match its declared mapping is rejected, not imported with a warning.</p>
+<p>Imported records are tagged <code>&quot;src&quot;:&quot;labview&quot;</code> so they are distinguishable from data taken by the new system.</p>
+<hr>
+<h2>10. Control path and safety</h2>
+<p><strong>The slow control is not a protection system.</strong> It monitors, logs, alarms, and offers convenience setpoint changes.</p>
+<h3>Rules</h3>
+<ol><li><strong>Interlocks live in hardware.</strong> HV trip on a pressure or vacuum excursion is wired to the CAEN interlock input from a real gauge trip. Not a Python service reading MQTT and deciding.</li><li><strong>Limits live in the instrument.</strong> Ramp rate, trip current, over-voltage limit, heater range, setpoint limits are configured on the device. The software <strong>verifies</strong> them at startup and alarms on mismatch; it does not write them.</li><li><strong>No write without verified identity</strong> (§6.2).</li><li><strong>Restart never actuates</strong> (§6.1).</li><li><strong>Every write is logged</strong> — who, what, when, previous value, new value — to an append-only audit file and to <code>xams/ack/#</code>.</li></ol>
+<h3>Command flow</h3>
+<pre><code>UI / API  →  xams/cmd/&lt;device&gt;/&lt;action&gt;  →  service validates  →  instrument
+                                                    ↓
+                                        xams/ack/&lt;device&gt;/&lt;action&gt;</code></pre>
+<p>Validation before any write: identity confirmed, value within the configured range, device not in an error state. A rejected command is acknowledged with a reason; it is never silently dropped.</p>
+<h3>Open decision</h3>
+<p>The existing LabVIEW system performs protective actions in software: a &quot;Shut off heater if Alarm is active&quot; switch and a <code>KILL VOLTAGE</code> button. <strong>TBD</strong> — reproduce as-is, or move into hardware. Reproducing it is defensible; doing so without noticing the choice is not. Decide before the control path is implemented.</p>
+<hr>
+<h2>11. Alarm engine</h2>
+<p><code>alarms/engine.py</code> subscribes to <code>xams/meas/#</code> and evaluates against <code>alarms.yaml</code>.</p>
+<ul><li>Four thresholds per channel, EPICS-style: <code>lolo</code>, <code>low</code>, <code>high</code>, <code>hihi</code>, each with a severity.</li><li><strong>Hysteresis</strong> on every threshold, to stop a channel sitting on a limit from producing a stream of notifications.</li><li><strong>Deduplication</strong>: one notification per state transition, then repeat at <code>min_repeat_minutes</code> while the condition persists.</li><li><strong>Staleness is an alarm</strong>, at the same severity as a threshold breach. A dead sensor must not read as healthy.</li><li>Alarm state is published on <code>xams/alarm/&lt;channel&gt;</code> and is itself retained, so the UI shows the true state on connect.</li></ul>
+<h3>Notification</h3>
+<p><code>alarms/notify.py</code> exposes a thin interface — <code>send_sms(number, text)</code>, <code>send_email(...)</code> — and the alarm engine knows nothing else, so what sits underneath is replaceable without touching alarm logic. Recipients come from <code>recipients.yaml</code> (§4.4); severity routing from <code>alarms.yaml</code>.</p>
+<p><strong>Reuse the existing SMS script.</strong> LabVIEW already calls a Python script (<code>SC_software\send_sms_python\</code>); the new system can import it as a module instead of starting a subprocess. The argument is risk, not convenience: that script works. The numbers are right, the gateway accepts it, the message format arrives, the costs are known. Rebuilding it means rediscovering all of that. The same applies to the email script and <code>check_ups.vi</code>.</p>
+<p>Three things to check before adopting it: whether it is Python 2 or 3; whether phone numbers are hardcoded (they belong in <code>recipients.yaml</code> now, passed in as arguments); and whether it writes a status file that only LabVIEW reads.</p>
+<p><strong>Credentials never enter the repository.</strong> An API key committed to git remains in the history after deletion, and private repositories are still cloned, shared and backed up. Credentials live in <code>config/secrets.yaml</code>, listed in <code>.gitignore</code>; <code>config/secrets.example.yaml</code> is committed with empty values so the required keys are documented. <code>notify.py</code> reads from there, never from code.</p>
+<p>While examining the existing script, check whether its key is still valid and who else holds it. A gateway credential that has sat on a desktop for years is a good candidate for rotation.</p>
+<hr>
+<h2>12. Operations</h2>
+<h3>Service management</h3>
+<p>Each service runs under NSSM as a Windows service, with stdout/stderr to <code>logs/&lt;service&gt;.log</code>, restart on exit after 5 s.</p>
+<p><strong>Automatic start stays off while LabVIEW is the fallback.</strong> Every device admits only one process, so a service that auto-starts after an overnight reboot will claim the hardware and lock LabVIEW out.</p>
+<table><thead><tr><th>Phase</th><th>Start type</th><th>Notes</th></tr></thead><tbody><tr><td>Debug</td><td>not installed</td><td>run from a terminal; let it die on errors</td></tr><tr><td>Trial</td><td><code>SERVICE_DEMAND_START</code></td><td>restarts on crash, not at boot</td></tr><tr><td>Production</td><td><code>SERVICE_AUTO_START</code></td><td>only after LabVIEW is retired</td></tr></tbody></table>
+<h3><code>xams-ctl</code></h3>
+<pre><code>xams-ctl start | stop | restart | status | reload</code></pre>
+<p><code>reload</code> re-reads the YAML configuration without restarting the services, so a threshold or calibration change costs no gap in the data.</p>
+<p><code>stop</code> releases all hardware for LabVIEW. <code>status</code> shows each service&#x27;s state and heartbeat age. One command, correct order, every time.</p>
+<h3>Logging</h3>
+<p>Python <code>logging</code> to rotating files, INFO by default, DEBUG selectable per service. Every log line carries the service name. Hardware errors log the raw instrument response, not just the parsed exception — that is what makes protocol bugs findable.</p>
+<hr>
+<h2>13. Testing</h2>
+<p><strong>Simulation mode.</strong> Every device class accepts <code>simulate=True</code> and returns plausible synthetic data without hardware. The whole stack — bus, writers, alarms, UI — must be runnable on a laptop with no instruments attached. This is what makes development possible without occupying the lab PC.</p>
+<p><strong>Unit tests</strong>, no hardware required:</p>
+<ul><li><code>test_scaling.py</code> — <code>(raw - offset) * multiplier</code>, including the recovered values for <code>p101</code>, <code>pmain</code>, <code>fm101</code></li><li><code>test_config.py</code> — schema validation, duplicate channel names, unknown device references, config hash stability</li><li><code>test_caen_protocol.py</code> — response parsing against recorded strings, including malformed and truncated replies</li></ul>
+<p><strong>Hardware checklist</strong>, run once per device on first connection:</p>
+<ol><li>Identity query returns the expected serial number</li><li>All configured channels read without error</li><li>Values are physically plausible</li><li>Disconnecting the device produces <code>quality=error</code> and a reconnect attempt, not a crash</li><li>Reconnecting recovers without a restart</li><li>Restarting the service changes nothing on the instrument</li></ol>
+<hr>
+<h2>14. Documentation</h2>
+<p>Documentation is written <strong>during</strong> construction, one increment per milestone — not afterwards. Written at the end it records what the author remembers rather than what a reader does not understand, and by then everything has become obvious to the person who built it. That is how the LabVIEW project ended up without usable documentation, and it was not for lack of goodwill.</p>
+<p>All of it lives in the repository, in git, beside the code.</p>
+<table><thead><tr><th>Document</th><th>Audience</th><th>Written</th></tr></thead><tbody><tr><td><code>README.md</code></td><td>someone reinstalling the system from scratch</td><td>milestone 1</td></tr><tr><td><code>OPERATIONS.md</code></td><td>the group, daily</td><td>grows with each milestone</td></tr><tr><td><code>DESIGN.md</code></td><td>someone changing the system</td><td>this document</td></tr><tr><td>Docstrings, and <code>description</code> in <code>channels.yaml</code></td><td>someone reading the code or the config</td><td>as written</td></tr></tbody></table>
+<h3><code>OPERATIONS.md</code></h3>
+<p>The most important of the four, and the one most often missing. Not architecture — actions:</p>
+<ul><li>starting, stopping, checking status</li><li><strong>what each alarm means and what to do about it</strong>, per threshold</li><li>replacing a sensor and adjusting its calibration</li><li>adding a channel</li><li>what to do when a service will not start, when a CAEN supply stops responding, when there is a gap in the data</li><li>how to restore LabVIEW if the system has to be rolled back</li></ul>
+<p>The alarm point is not hypothetical. The thresholds of the present system exist in the VIs, but the <em>response</em> to each exists only in people&#x27;s heads (§16). A threshold without a prescribed action is half the information, and reproducing that omission would waste the migration.</p>
+<p>The troubleshooting section grows: every time something breaks and is fixed, it goes in. After a year it is the most valuable file in the repository.</p>
+<h3>Acceptance</h3>
+<p><strong>Documentation is not accepted because its author considers it complete.</strong> The test is that a colleague, using <code>OPERATIONS.md</code> alone, can stop the system, add a channel and start it again — without asking the author anything.</p>
+<p>If that fails, the document is unfinished however thorough it looks. This is also the only real mitigation for the bus-factor problem: a manual nobody has ever used proves nothing.</p>
+<hr>
+<h2>15. Milestones</h2>
+<p>Each milestone has an acceptance criterion. Do not start the next before the current one passes.</p>
+<table><thead><tr><th>#</th><th>Milestone</th><th>Acceptance criterion</th></tr></thead><tbody><tr><td>1</td><td>Skeleton</td><td><code>BaseService</code>, config loading, MQTT bus, simulation mode. Fake service publishes, writers store, Grafana plots. No hardware. <code>README.md</code> lets someone else reproduce the install.</td></tr><tr><td>2</td><td>cDAQ read-only</td><td>All connected channels (6 voltage + 14 RTD) read and logged, LabVIEW stopped. Values plausible. Restart changes nothing.</td></tr><tr><td>3</td><td>Channel verification</td><td>Each <code>tt*</code> tag confirmed empirically against its channel (warm a sensor, watch which value moves) and its physical location recorded. Tags are known; the mapping to hardware is what is being verified.</td></tr><tr><td>4</td><td>Scaling and history</td><td>Column-count check passed (§9.6), history imported, and scaled values agree with the LabVIEW record for the same sensors within expected tolerance.</td></tr><tr><td>5</td><td>Lake Shore + CAEN monitoring</td><td>Read-only. Identity verification working. Unplug test passes.</td></tr><tr><td>6</td><td>UPS + alarms</td><td>Thresholds from <code>alarms.yaml</code>, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm.</td></tr><tr><td>7</td><td>Web UI</td><td>Current values, alarm state, service health. Read-only, bound to <code>127.0.0.1</code>. Python client works from a notebook.</td></tr><tr><td>8</td><td>Control path</td><td>Lake Shore setpoint, then HV — only after §10&#x27;s open decision is made. Audit log complete.</td></tr><tr><td>9</td><td>Production</td><td><code>SERVICE_AUTO_START</code>, LabVIEW retired but installed. <strong><code>OPERATIONS.md</code> passes the acceptance test of §14</strong> — a colleague operates the system from it unaided.</td></tr></tbody></table>
+<p>Milestone 3 is the one that cannot be rushed. The tag names are now known, but a tag that was already attached to the wrong channel in the LabVIEW system would be copied across silently. Verifying each one physically is the only way to catch that.</p>
+<hr>
+<h2>16. Open items</h2>
+<p>Everything marked <strong>TBD</strong> above, consolidated:</p>
+<table><thead><tr><th>Item</th><th>Needed for</th><th>How to resolve</th></tr></thead><tbody><tr><td>Physical location of each <code>tt*</code> tag, and what the 1xx/2xx/3xx series denote</td><td>milestone 3</td><td>lab knowledge; record in <code>description</code></td></tr><tr><td>Alarm thresholds and responses</td><td>milestone 6</td><td><code>Error and Alarm</code> tab screenshot</td></tr><tr><td>HV channel → supply/index mapping</td><td>milestone 5</td><td><code>High Voltage Supply</code> tab screenshot</td></tr><tr><td>HV setpoints, ramp rates, trip limits</td><td>milestone 8</td><td>LabVIEW tab + settings stored on the CAEN units</td></tr><tr><td>USB serial numbers of the two CAEN units</td><td>milestone 5</td><td><code>list_ports</code> on the lab PC</td></tr><tr><td>Lake Shore baud rate</td><td>milestone 5</td><td>instrument front panel</td></tr><tr><td>UPS model and connection</td><td>milestone 6</td><td>inspect the unit</td></tr><tr><td>Are <code>9207/ai8:15</code> current channels used?</td><td>milestone 2</td><td>inspect wiring</td></tr><tr><td>Purpose of <code>anode_timing.vi</code>, <code>DAISY_polarity_signs.vi</code></td><td>milestone 8</td><td>read the block diagrams</td></tr><tr><td>Heater shut-off and HV kill: hardware or software?</td><td>milestone 8</td><td>decision</td></tr><tr><td>How far back the CSV history goes, and whether the column count is constant throughout</td><td>milestone 4</td><td>the check in §9.6</td></tr><tr><td>Second maintainer</td><td>production</td><td>decision</td></tr></tbody></table>
+</body></html>

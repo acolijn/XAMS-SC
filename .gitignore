@@ -1,0 +1,5 @@
+# Exported material from the LabVIEW PC — reference only, not part of the project
+docs/labviewPC/
+
+# macOS
+.DS_Store
