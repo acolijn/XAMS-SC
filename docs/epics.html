@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>EPICS</title><style>
+@page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+html { font-size: 10.5pt; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color:#1a1a1a; line-height:1.45; margin:0; }
+h1 { font-size:20pt; margin:0 0 3mm 0; letter-spacing:-0.3pt; }
+h2 { font-size:13pt; margin:8mm 0 2.5mm 0; padding-bottom:1.2mm; border-bottom:1.2pt solid #1a1a1a; page-break-after:avoid; }
+h3 { font-size:11pt; margin:5mm 0 1.5mm 0; page-break-after:avoid; }
+p { margin:0 0 2.5mm 0; }
+ul,ol { margin:0 0 3mm 0; padding-left:5mm; }
+li { margin-bottom:1.2mm; }
+table { border-collapse:collapse; width:100%; font-size:9pt; margin:0 0 4mm 0; }
+th,td { border:0.5pt solid #b8b8b8; padding:1.6mm 2mm; text-align:left; vertical-align:top; }
+th { background:#ececec; font-weight:600; }
+thead { display:table-header-group; }
+tr { page-break-inside:avoid; }
+code { font-family:"SF Mono",Menlo,monospace; font-size:8.8pt; background:#f2f2f2; padding:0.3mm 1mm; border-radius:1.5pt; }
+pre { font-family:"SF Mono",Menlo,monospace; font-size:8.3pt; background:#f5f5f5; border-left:2.5pt solid #999;
+      padding:2.5mm 3mm; margin:0 0 4mm 0; line-height:1.35; page-break-inside:avoid; }
+pre code { background:none; padding:0; font-size:8.3pt; }
+hr { border:none; border-top:0.5pt solid #bbb; margin:6mm 0; }
+strong { font-weight:600; }
+</style></head><body>
+<h1>XAMS Slow Control — EPICS Design Alternative</h1>
+<p><strong>Version 0.1 — 16 September 2026</strong></p>
+<p>Companion to <code>DESIGN.md</code>, which specifies a Python service stack. This document specifies the same system built on <strong>EPICS</strong>, using the hardware inventory and channel configuration recovered in September 2026.</p>
+<p>It is written as a genuine alternative, not as a foil. Where EPICS is better than the Python design, that is stated; where it is worse for this particular system, that is stated too. The decision document (<code>XAMS-slow-control-options.pdf</code>) recommends the Python stack; this document is what the other choice actually looks like, so that the recommendation can be judged rather than taken on trust.</p>
+<hr>
+<h2>1. What EPICS is, in one page</h2>
+<p>EPICS is the control system used at accelerators, light sources and large detector experiments. Two ideas carry it.</p>
+<p><strong>The IOC</strong> (Input/Output Controller) is a process that talks to hardware and serves named channels on the network. Historically these ran on VME crates; today an IOC is an ordinary process, and several can run on one PC.</p>
+<p><strong>The record</strong> is the unit of data. A record is a channel with a type and a set of fields: where the value comes from, how often to read it, its engineering unit, its alarm limits. Scanning, alarming and unit handling are <em>declared</em>, not coded:</p>
+<pre><code>record(ai, &quot;XAMS:PRES:MAIN&quot;) {
+    field(DESC, &quot;Detector pressure&quot;)
+    field(DTYP, &quot;asynFloat64&quot;)
+    field(INP,  &quot;@asyn(CDAQ,5)&quot;)
+    field(SCAN, &quot;10 second&quot;)
+    field(EGU,  &quot;bar&quot;)
+    field(PREC, &quot;3&quot;)
+    field(HIGH, &quot;1.8&quot;)   field(HSV,  &quot;MINOR&quot;)
+    field(HIHI, &quot;2.0&quot;)   field(HHSV, &quot;MAJOR&quot;)
+}</code></pre>
+<p>That is a complete, self-describing, periodically scanned, alarming channel. No loop was written, no threshold comparison coded, no unit string carried around by hand.</p>
+<p>Records are served as <strong>PVs</strong> (process variables) over Channel Access or PVA. Any client on the network reads one by name, with no address and no port:</p>
+<pre><code>caget  XAMS:PRES:MAIN
+caput  XAMS:HV:ANODE:VSET 3500
+camonitor XAMS:TEMP:TT201</code></pre>
+<p>Everything else in EPICS — archivers, operator screens, alarm handlers — is a client of that namespace.</p>
+<hr>
+<h2>2. Architecture for XAMS</h2>
+<p>Four IOCs, one per device family. Each is an independent process that can be restarted alone: a crashed vacuum IOC does not take HV monitoring down.</p>
+<pre><code>                 ┌──────────────────────────────────────────┐
+  cDAQ  (USB) ──►│ iocCDAQ      Python soft IOC (pcaspy/p4p) │──┐
+                 └──────────────────────────────────────────┘  │
+                 ┌──────────────────────────────────────────┐  │
+  CAEN ×2 (USB)─►│ iocHV        StreamDevice + asyn          │──┤
+                 └──────────────────────────────────────────┘  │
+                 ┌──────────────────────────────────────────┐  │  Channel
+  LS335 (USB) ──►│ iocCryo      StreamDevice + asyn          │──┼─ Access
+                 └──────────────────────────────────────────┘  │  / PVA
+                 ┌──────────────────────────────────────────┐  │
+  UPS        ──►│ iocUPS       soft IOC                      │──┘
+                 └──────────────────────────────────────────┘
+                                    │
+      ┌─────────────────┬───────────┴───────────┬──────────────────┐
+  Phoebus screens   CA→Postgres collector   alarm client      caget/caput,
+  (operator GUI)    → Grafana               → SMS, email      PyEPICS scripts</code></pre>
+<p><strong>The split is forced by the hardware.</strong> The two serial instruments map cleanly onto StreamDevice, which is EPICS at its best. The cDAQ does not: there is no maintained EPICS driver for NI-DAQmx, so that IOC is written in Python regardless. This is the single most important fact in this document and it is discussed in §5.</p>
+<hr>
+<h2>3. PV naming</h2>
+<p>EPICS names are a flat global namespace, conventionally <code>&lt;system&gt;:&lt;subsystem&gt;:&lt;signal&gt;</code>, uppercase, colon-separated. The tags recovered from the LabVIEW system map directly:</p>
+<table><thead><tr><th>Tag</th><th>PV</th></tr></thead><tbody><tr><td><code>P101</code> … <code>P104</code></td><td><code>XAMS:PRES:P101</code> … <code>XAMS:PRES:P104</code></td></tr><tr><td><code>Pmain</code></td><td><code>XAMS:PRES:MAIN</code></td></tr><tr><td><code>FM101</code></td><td><code>XAMS:FLOW:FM101</code></td></tr><tr><td><code>TT201</code> … <code>TT207</code></td><td><code>XAMS:TEMP:TT201</code> … <code>XAMS:TEMP:TT207</code></td></tr><tr><td><code>TT301</code> … <code>TT304</code></td><td><code>XAMS:TEMP:TT301</code> … <code>XAMS:TEMP:TT304</code></td></tr><tr><td><code>TT103</code>, <code>TT104</code></td><td><code>XAMS:TEMP:TT103</code>, <code>XAMS:TEMP:TT104</code></td></tr><tr><td><code>TTAMB</code></td><td><code>XAMS:TEMP:AMB</code></td></tr><tr><td>HV channels</td><td><code>XAMS:HV:ANODE:VMON</code>, <code>:VSET</code>, <code>:IMON</code>, <code>:STAT</code>, …</td></tr><tr><td>Lake Shore</td><td><code>XAMS:CRYO:TA</code>, <code>XAMS:CRYO:SETP</code>, <code>XAMS:CRYO:HTR</code></td></tr><tr><td>UPS</td><td><code>XAMS:UPS:ONBATT</code>, <code>XAMS:UPS:CHARGE</code></td></tr></tbody></table>
+<p>Unlike MQTT topics, this namespace is not a local convention: any EPICS tool in the world understands it, and <code>caget XAMS:PRES:MAIN</code> works from any machine on the network without configuration. That is a real advantage, and also a security consideration (§11).</p>
+<hr>
+<h2>4. Records — the cDAQ channels</h2>
+<p>Generated from a substitutions file rather than written out by hand. The template:</p>
+<pre><code># db/rtd.template
+record(ai, &quot;XAMS:TEMP:$(TAG)&quot;) {
+    field(DESC, &quot;$(DESC)&quot;)
+    field(DTYP, &quot;asynFloat64&quot;)
+    field(INP,  &quot;@asyn($(PORT),$(CHAN))&quot;)
+    field(SCAN, &quot;10 second&quot;)
+    field(EGU,  &quot;C&quot;)
+    field(PREC, &quot;2&quot;)
+    field(LOW,  &quot;$(LOW=-200)&quot;)   field(LSV,  &quot;MINOR&quot;)
+    field(HIGH, &quot;$(HIGH=100)&quot;)   field(HSV,  &quot;MINOR&quot;)
+    field(SIML, &quot;XAMS:SIM&quot;)      field(SIOL, &quot;XAMS:SIM:$(TAG)&quot;)
+}</code></pre>
+<p>and the instantiation, which is the whole RTD map in one file:</p>
+<pre><code># db/xams.substitutions
+file &quot;rtd.template&quot; {
+  pattern { TAG,    PORT,   CHAN, DESC }
+          { TT201,  CDAQ_9226,  0, &quot;TBD - location&quot; }
+          { TT202,  CDAQ_9226,  1, &quot;TBD - location&quot; }
+          { TT203,  CDAQ_9226,  2, &quot;TBD - location&quot; }
+          { TT204,  CDAQ_9226,  3, &quot;TBD - location&quot; }
+          { TT205,  CDAQ_9226,  4, &quot;TBD - location&quot; }
+          { TT206,  CDAQ_9226,  5, &quot;TBD - location&quot; }
+          { TT207,  CDAQ_9226,  6, &quot;TBD - location&quot; }
+          { TT301,  CDAQ_9216_1, 0, &quot;TBD - location&quot; }
+          { TT302,  CDAQ_9216_1, 1, &quot;TBD - location&quot; }
+          { TT103,  CDAQ_9216_1, 2, &quot;TBD - location&quot; }
+          { TT104,  CDAQ_9216_1, 3, &quot;TBD - location&quot; }
+          { AMB,    CDAQ_9216_1, 4, &quot;Ambient&quot; }
+          { TT303,  CDAQ_9216_1, 5, &quot;TBD - location&quot; }
+          { TT304,  CDAQ_9216_1, 6, &quot;TBD - location&quot; }
+}</code></pre>
+<p>Fourteen RTDs; <code>9216_2</code> is entirely unconnected and gets no records.</p>
+<p>The 9207 voltage channels carry the recovered scaling. EPICS applies it declaratively through <code>ASLO</code>/<code>AOFF</code>, so no arithmetic is written:</p>
+<pre><code>record(ai, &quot;XAMS:PRES:P101&quot;) {
+    field(DTYP, &quot;asynFloat64&quot;)
+    field(INP,  &quot;@asyn(CDAQ_9207,0)&quot;)
+    field(SCAN, &quot;10 second&quot;)
+    field(AOFF, &quot;-1.0&quot;)          # offset subtracted, per the LabVIEW panel
+    field(ASLO, &quot;25.0&quot;)          # multiplier
+    field(EGU,  &quot;TBD&quot;)           # units not recovered - see DESIGN.md §4.2
+    field(SMOO, &quot;0.0&quot;)
+}</code></pre>
+<table><thead><tr><th>PV</th><th>Channel</th><th>AOFF</th><th>ASLO</th><th>EGU</th></tr></thead><tbody><tr><td><code>XAMS:PRES:P101</code></td><td><code>9207/ai0</code></td><td>−1.0</td><td>25.0</td><td>TBD</td></tr><tr><td><code>XAMS:PRES:P102</code></td><td><code>9207/ai1</code></td><td>0</td><td>1.0</td><td>TBD</td></tr><tr><td><code>XAMS:PRES:P103</code></td><td><code>9207/ai2</code></td><td>0</td><td>1.0</td><td>TBD</td></tr><tr><td><code>XAMS:PRES:P104</code></td><td><code>9207/ai3</code></td><td>0</td><td>1.0</td><td>TBD</td></tr><tr><td><code>XAMS:PRES:MAIN</code></td><td><code>9207/ai5</code></td><td>0</td><td>0.714</td><td>TBD</td></tr><tr><td><code>XAMS:FLOW:FM101</code></td><td><code>9207/ai7</code></td><td>0</td><td>6.0</td><td><strong>g/min</strong></td></tr></tbody></table>
+<p><code>9207/ai4</code> and <code>ai6</code> (<code>v4</code>, <code>v6</code>) carry generic names and are probably unused; <code>ai8:15</code> likewise. They get no records until confirmed.</p>
+<p><strong>Note the flow unit.</strong> The LabVIEW front panel labels <code>FM101</code> as &quot;Flow (SLPM)&quot;. That label is wrong — it is a mass flow in g/min. Recorded here so the error is not reintroduced from the old panel.</p>
+<hr>
+<h2>5. The cDAQ IOC — where EPICS does not help</h2>
+<p><strong>There is no maintained EPICS device support for NI-DAQmx.</strong> Two options:</p>
+<p><strong>(a) Write an asyn port driver in C++</strong> against the nidaqmx C API. Real work, and permanent maintenance: it must be rebuilt against each EPICS base and each DAQmx release, by someone who knows both C++ and the asyn driver model.</p>
+<p><strong>(b) A Python soft IOC</strong> using <code>pcaspy</code> (Channel Access) or <code>p4p</code> (PVA), wrapping the same <code>nidaqmx</code> package the Python design uses.</p>
+<p>Option (b) is the only sensible choice, and it means <strong>the cDAQ code is Python in both designs.</strong> The 20 connected channels — the backbone of the system — are served by a Python process either way. What EPICS adds on top of that is the record layer for the other instruments and the standard protocol.</p>
+<pre><code>from pcaspy import SimpleServer, Driver
+import nidaqmx
+
+prefix = &#x27;XAMS:&#x27;
+pvdb = {
+    &#x27;TEMP:TT201&#x27;: {&#x27;prec&#x27;: 2, &#x27;unit&#x27;: &#x27;C&#x27;, &#x27;scan&#x27;: 10},
+    &#x27;PRES:MAIN&#x27;:  {&#x27;prec&#x27;: 3, &#x27;unit&#x27;: &#x27;TBD&#x27;, &#x27;scan&#x27;: 10},
+    # ...
+}
+
+class CDAQDriver(Driver):
+    def __init__(self):
+        super().__init__()
+        self.tasks = build_tasks()      # one per module, on-demand reads
+
+    def read(self, reason):
+        return self.tasks[reason].read()</code></pre>
+<p>The task structure is identical to <code>DESIGN.md</code> §7.1: one on-demand task per module, 1 Hz reads, the RTD configuration handled by DAQmx (<code>PT_3851</code> / <code>PT_3750</code>, three-wire, <code>r_0</code> 100 Ω / 1000 Ω).</p>
+<hr>
+<h2>6. The HV IOC — where EPICS is genuinely better</h2>
+<p>The CAEN ASCII protocol maps onto StreamDevice almost line for line. This is EPICS at its strongest: the device protocol becomes a declarative file, not code.</p>
+<pre><code># protocol/caen.proto
+Terminator = CR LF;
+ReplyTimeout = 1000;
+
+getVmon {
+    out &quot;\$BD:%(\$1)d,CMD:MON,PAR:VMON,CH:\$2&quot;;
+    in  &quot;#BD:%*d,CMD:OK,VAL:%f&quot;;
+}
+getImon {
+    out &quot;\$BD:%(\$1)d,CMD:MON,PAR:IMON,CH:\$2&quot;;
+    in  &quot;#BD:%*d,CMD:OK,VAL:%f&quot;;
+}
+setVset {
+    out &quot;\$BD:%(\$1)d,CMD:SET,PAR:VSET,CH:\$2,VAL:%.1f&quot;;
+    in  &quot;#BD:%*d,CMD:OK&quot;;
+}
+getSerial {
+    out &quot;\$BD:%(\$1)d,CMD:MON,PAR:BDSNUM&quot;;
+    in  &quot;#BD:%*d,CMD:OK,VAL:%s&quot;;
+}</code></pre>
+<p>and the records:</p>
+<pre><code>record(ai, &quot;XAMS:HV:$(NAME):VMON&quot;) {
+    field(DTYP, &quot;stream&quot;)
+    field(INP,  &quot;@caen.proto getVmon($(ADDR),$(CH)) $(PORT)&quot;)
+    field(SCAN, &quot;2 second&quot;)
+    field(EGU,  &quot;V&quot;)
+    field(PREC, &quot;1&quot;)
+}
+record(ao, &quot;XAMS:HV:$(NAME):VSET&quot;) {
+    field(DTYP, &quot;stream&quot;)
+    field(OUT,  &quot;@caen.proto setVset($(ADDR),$(CH)) $(PORT)&quot;)
+    field(EGU,  &quot;V&quot;)
+    field(DRVH, &quot;$(VMAX)&quot;)       # hard limit, enforced by the record
+    field(DRVL, &quot;0&quot;)
+}</code></pre>
+<p><code>DRVH</code>/<code>DRVL</code> are worth noting: the record itself refuses out-of-range writes. In the Python design that check is code you write and test; here it is a field.</p>
+<p>Channel instantiation, from the recovered names:</p>
+<pre><code>file &quot;hvchan.template&quot; {
+  pattern { NAME,    PORT,  ADDR, CH, VMAX }
+          { PMT_TOP, HV1,   0,    0,  2000 }
+          { PMT_BOT, HV1,   0,    1,  2000 }
+          { TS,      HV1,   0,    2,  8000 }
+          { BS,      HV1,   0,    3,  8000 }
+          { CATHODE, HV2,   1,    0,  8000 }
+          { GATE,    HV2,   1,    1,  8000 }
+          { ANODE,   HV2,   1,    3,  8000 }   # CAEN 2, channel 3 - confirmed
+          { NAI,     HV2,   1,    2,  2000 }
+}</code></pre>
+<p><strong>TBD</strong>: only the anode&#x27;s supply and channel index are confirmed. The remaining seven assignments above are placeholders and must be verified before any write is enabled.</p>
+<p>Serial port setup in <code>st.cmd</code>:</p>
+<pre><code>drvAsynSerialPortConfigure(&quot;HV1&quot;, &quot;COM8&quot;, 0, 0, 0)
+asynSetOption(&quot;HV1&quot;, 0, &quot;baud&quot;,   &quot;9600&quot;)
+asynSetOption(&quot;HV1&quot;, 0, &quot;bits&quot;,   &quot;8&quot;)
+asynSetOption(&quot;HV1&quot;, 0, &quot;parity&quot;, &quot;none&quot;)
+asynSetOption(&quot;HV1&quot;, 0, &quot;stop&quot;,   &quot;1&quot;)</code></pre>
+<p><strong>This is where EPICS is weaker than the Python design, however.</strong> <code>COM8</code> is hardcoded. EPICS has no equivalent of resolving the port by USB hardware ID and then confirming the instrument&#x27;s own serial number before permitting a write. The identity check of <code>DESIGN.md</code> §6.2 — the protection against the two identical supplies exchanging COM numbers — has to be built: a <code>getSerial</code> record read at startup, compared against an expected value by a sequencer program or a startup script, gating the <code>VSET</code> records. Possible, but it is custom work in an environment where custom work is harder.</p>
+<hr>
+<h2>7. The cryostat IOC — Lake Shore 335</h2>
+<p>Also StreamDevice, and straightforward:</p>
+<pre><code># protocol/ls335.proto
+Terminator = CR LF;
+
+getTemp  { out &quot;KRDG? \$1&quot;;  in &quot;%f&quot;; }
+getSetp  { out &quot;SETP? 1&quot;;    in &quot;%f&quot;; }
+setSetp  { out &quot;SETP 1,%.2f&quot;; }
+getHtr   { out &quot;HTR? 1&quot;;     in &quot;%f&quot;; }
+getRange { out &quot;RANGE? 1&quot;;   in &quot;%d&quot;; }
+getId    { out &quot;*IDN?&quot;;      in &quot;%s&quot;; }</code></pre>
+<pre><code>record(ai, &quot;XAMS:CRYO:TA&quot;) {
+    field(DTYP, &quot;stream&quot;)
+    field(INP,  &quot;@ls335.proto getTemp(A) CRYO&quot;)
+    field(SCAN, &quot;10 second&quot;)
+    field(EGU,  &quot;K&quot;)
+}
+record(ao, &quot;XAMS:CRYO:SETP&quot;) {
+    field(DTYP, &quot;stream&quot;)
+    field(OUT,  &quot;@ls335.proto setSetp CRYO&quot;)
+    field(EGU,  &quot;K&quot;)
+    field(DRVH, &quot;300&quot;)  field(DRVL, &quot;0&quot;)
+}</code></pre>
+<p>PID settings (P = 100, I = 20, D = 0) are read back and displayed; the instrument&#x27;s own limits remain the authority, exactly as in the Python design.</p>
+<hr>
+<h2>8. The flow integrator</h2>
+<p>The Python design makes this a stateful service (<code>DESIGN.md</code> §7.5). EPICS does it with a <code>calc</code> record and the <strong>autosave</strong> module:</p>
+<pre><code>record(calc, &quot;XAMS:FLOW:TOTAL&quot;) {
+    field(DESC, &quot;Integrated mass flow&quot;)
+    field(INPA, &quot;XAMS:FLOW:FM101 CP&quot;)          # g/min
+    field(INPB, &quot;XAMS:FLOW:TOTAL.VAL NPP&quot;)     # own previous value
+    field(INPC, &quot;10&quot;)                          # dt, seconds
+    field(CALC, &quot;B + A*C/60&quot;)                  # -&gt; grams
+    field(SCAN, &quot;10 second&quot;)
+    field(EGU,  &quot;g&quot;)
+    field(PREC, &quot;1&quot;)
+    info(autosaveFields, &quot;VAL&quot;)                # survives a restart
+}
+record(bo, &quot;XAMS:FLOW:TOTAL:RESET&quot;) {
+    field(DESC, &quot;Reset integrator&quot;)
+    field(OUT,  &quot;XAMS:FLOW:TOTAL.VAL PP&quot;)
+    field(VAL,  &quot;0&quot;)
+}</code></pre>
+<p><code>info(autosaveFields, &quot;VAL&quot;)</code> is a genuine advantage: persistence across restarts is declared in one line, where the Python design writes the accumulator to disk and reads it back explicitly.</p>
+<p>Two things EPICS does <strong>not</strong> give for free here, and both matter:</p>
+<ul><li><strong>Gap accounting.</strong> Autosave restores the total, but nothing records that the IOC was down for two hours and that the total is therefore an underestimate. The Python design publishes <code>gaps_s</code> alongside the value. Reproducing that in EPICS means additional records tracking downtime.</li><li><strong>Reset as period closure.</strong> The <code>bo</code> record above simply zeroes the accumulator, destroying the previous total. The Python design closes a period and starts a new one, keeping the history of how much passed through during each. Doing that in EPICS means an archiving step around the reset.</li></ul>
+<p>Note also <code>C = 10</code>, the interval in seconds, divided by 60 for g/min. The same factor-60 trap as in the Python design, and here it is a constant in a <code>CALC</code> expression where no test covers it.</p>
+<hr>
+<h2>9. Alarms</h2>
+<p><strong>What EPICS gives for free.</strong> Every record carries <code>LOLO</code>/<code>LOW</code>/<code>HIGH</code>/<code>HIHI</code> with a severity per threshold, plus <code>HYST</code> for deadband. Thresholds are declared alongside the channel, applied by the record, and visible through <code>caget XAMS:PRES:MAIN.HIHI</code>. This is better than the Python design, where the same logic is written and tested.</p>
+<p>Crucially, this removes the threshold-duplication problem of <code>DESIGN.md</code> §11: because the limits are fields of the record, Phoebus screens and archived data see the same numbers by construction. Nothing has to be generated or kept in step.</p>
+<p><strong>What must still be built.</strong> Getting an alarm to a telephone:</p>
+<ul><li><strong>Phoebus alarm server</strong> requires <strong>Kafka</strong>. For one rack that is disproportionate infrastructure.</li><li><strong>ALH</strong>, the legacy alarm handler, is simpler, but dated and awkward to configure.</li><li><strong>A Python client</strong> using <code>pyepics</code> or <code>p4p</code>, subscribing to the alarm severity of the relevant PVs and calling the existing SMS script. Roughly the same code as <code>alarms/notify.py</code> in the Python design.</li></ul>
+<p>The third is the realistic option — which means the notification layer is Python in both designs, just as the cDAQ layer is.</p>
+<p><strong>Staleness</strong> is handled better than in the Python design: a record whose read fails goes into <code>INVALID</code> severity automatically, with no code. That is a real benefit; a frozen plausible value is the failure mode that matters most.</p>
+<hr>
+<h2>10. Archiving and plots</h2>
+<p>Two routes.</p>
+<p><strong>Archiver Appliance</strong> is the standard EPICS historian: Java, Tomcat, MySQL, and its own storage tiers. It is powerful, well suited to thousands of PVs, and disproportionate for thirty. Phoebus integrates with it directly.</p>
+<p><strong>A CA→PostgreSQL collector</strong> — a small Python client subscribing to the PVs and writing to the same schema as <code>DESIGN.md</code> §9.2, so Grafana works exactly as in the Python design. Perhaps 100 lines, and it keeps the JSONL/Parquet archive and the whole storage design unchanged.</p>
+<p>The second is recommended for XAMS. It also keeps the &quot;database is a cache, files are the truth&quot; property, which Archiver Appliance does not naturally give.</p>
+<hr>
+<h2>11. Operator screens and access</h2>
+<p><strong>Phoebus</strong> (the CS-Studio successor) is a Java application for building control screens: drag widgets, bind to PVs, save as <code>.bob</code> XML. For control screens it is better than anything in the Python design, where the equivalent is a hand-written FastAPI page.</p>
+<p><strong>But the access model is the opposite of what was specified.</strong> <code>DESIGN.md</code> §8 requires everything to be local: loopback binds, control reachable only from the lab PC. Channel Access is designed for the opposite — a broadcast-discoverable network namespace where any machine can <code>caput</code>. Restricting it means:</p>
+<ul><li>binding the IOCs to the loopback interface (<code>EPICS_CAS_INTF_ADDR_LIST=127.0.0.1</code>), which removes the main advantage of the namespace; or</li><li>using Channel Access security (<code>ASG</code> rules in an access file) to restrict write access by host and user.</li></ul>
+<p>The second is the proper answer and EPICS supports it well, but it is another configuration file to get right, and a mistake in it is a silent one. In the Python design, &quot;local only&quot; is a bind address.</p>
+<hr>
+<h2>12. Deployment on Windows</h2>
+<p>This is the practical obstacle, and it should be evaluated before anything else.</p>
+<table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>EPICS base</strong></td><td>Builds on Windows with Visual Studio, or available prebuilt (conda-forge). Workable.</td></tr><tr><td><strong>asyn, StreamDevice, autosave, calc</strong></td><td>Must be built against that base. On Linux this is routine; on Windows it is where the time goes, and where a single-maintainer project tends to stall.</td></tr><tr><td><strong>Python soft IOC</strong></td><td><code>pcaspy</code> and <code>p4p</code> work on Windows. Fine.</td></tr><tr><td><strong>Phoebus</strong></td><td>Java, cross-platform. Fine.</td></tr><tr><td><strong>Archiver Appliance</strong></td><td>Java + Tomcat + MySQL on Windows. Avoid; use the Postgres collector instead.</td></tr><tr><td><strong>Running as services</strong></td><td><code>procServ</code> is the Unix convention; on Windows, NSSM wraps each IOC, as in the Python design.</td></tr></tbody></table>
+<p><strong>Recommendation if EPICS is chosen: run it on Linux.</strong> But the cDAQ requires NI-DAQmx, whose Linux support for this discontinued chassis is exactly the risk that drove the Windows decision in the first place (<code>XAMS-slow-control-options.pdf</code> §7). The result is a split system — cDAQ IOC on Windows, everything else on Linux — which is more machines, more to maintain, and harder to debug at two in the morning.</p>
+<hr>
+<h2>13. Honest comparison</h2>
+<p><strong>Where EPICS is better:</strong></p>
+<ul><li>Alarm limits, engineering units, deadbands and precision are record fields, not code. This also eliminates the threshold-duplication problem.</li><li><code>INVALID</code> severity on a failed read is automatic — stale data cannot look healthy.</li><li>StreamDevice makes the CAEN and Lake Shore protocols declarative, and roughly half the code of the Python drivers disappears.</li><li><code>DRVH</code>/<code>DRVL</code> enforce write limits at the record level.</li><li><code>autosave</code> makes the integrator&#x27;s persistence a one-line declaration.</li><li>Simulation mode (<code>SIML</code>/<code>SIOL</code>) is built in, matching <code>DESIGN.md</code> §13 without writing it.</li><li>Genuine process isolation per IOC.</li><li>Skills and conventions transfer to and from larger experiments.</li></ul>
+<p><strong>Where it is worse, for this system:</strong></p>
+<ul><li>The cDAQ — twenty of the thirty channels — is a Python soft IOC either way.</li><li>Notification (SMS, email) is Python either way, unless Kafka is deployed for one rack.</li><li>Device identification by USB hardware ID and instrument serial, protecting against the two identical CAEN units being confused, must be built as custom logic in an environment less suited to it.</li><li>The flow integrator loses gap accounting and reset-as-period-closure.</li><li>&quot;Local only&quot; runs against the grain of Channel Access.</li><li>Windows deployment is the real obstacle; Linux deployment reintroduces the cDAQ compatibility risk.</li><li>The learning curve is real, and the system is maintained by one person.</li></ul>
+<p><strong>The decisive point is unchanged.</strong> A one-person EPICS installation nobody else can boot or debug is no more maintainable than the present LabVIEW project. EPICS is worth its cost when a controls group carries it. The question is not whether EPICS is good — it plainly is — but whether XAMS has the surroundings that make it pay.</p>
+<hr>
+<h2>14. Effort</h2>
+<p>Assuming the configuration of §3–§8 is already known, as it now is.</p>
+<table><thead><tr><th>Component</th><th>Estimate</th></tr></thead><tbody><tr><td>EPICS base + asyn + StreamDevice + autosave built and working on the target OS</td><td><strong>2–5 days</strong>, dominated by Windows; the main risk</td></tr><tr><td>cDAQ Python soft IOC (pcaspy)</td><td>3–4 days</td></tr><tr><td>HV IOC — proto, records, substitutions</td><td>2 days</td></tr><tr><td>Cryo IOC</td><td>1 day</td></tr><tr><td>UPS IOC</td><td>0.5 day</td></tr><tr><td>Identity verification gating on the HV writes</td><td>1–2 days</td></tr><tr><td>CA→PostgreSQL collector + Grafana</td><td>2 days</td></tr><tr><td>Alarm client → SMS and email</td><td>1–2 days</td></tr><tr><td>Phoebus screens</td><td>2–3 days</td></tr><tr><td>Flow integrator with gap accounting and period closure</td><td>1–2 days</td></tr><tr><td>Commissioning, empirical channel verification, documentation</td><td>as in <code>DESIGN.md</code></td></tr></tbody></table>
+<p>Roughly <strong>1.5 to 2 times</strong> the Python design, with the variance concentrated in the first row. If the toolchain builds on the first afternoon, the gap narrows considerably; if it does not, it widens without limit.</p>
+<hr>
+<h2>15. Open items</h2>
+<p>Everything in <code>DESIGN.md</code> §16 applies unchanged — alarm thresholds, sensor locations, pressure units, HV channel mapping, UPS model, the heater shut-off decision, and the second maintainer.</p>
+<p>Additional to this design:</p>
+<table><thead><tr><th>Item</th><th>Needed for</th></tr></thead><tbody><tr><td>Does asyn + StreamDevice build on the target Windows machine?</td><td>everything; evaluate first</td></tr><tr><td>Which EPICS base version, and who rebuilds it on upgrade</td><td>maintenance</td></tr><tr><td>Channel Access security file, or loopback binding</td><td>§11</td></tr><tr><td>Whether Phoebus replaces the web UI entirely, or both exist</td><td>§11</td></tr><tr><td>Who, besides the primary author, can boot and debug an IOC</td><td>the decision itself</td></tr></tbody></table>
+<hr>
+<h2>16. Recommendation</h2>
+<p>For XAMS as it stands — four instruments, thirty connected channels, Windows, one maintainer — the Python design in <code>DESIGN.md</code> remains the recommendation. The reasons are not architectural: the two designs have the same shape, because EPICS found that shape thirty years ago and the Python design follows it.</p>
+<p>The reasons are practical. The largest device needs Python either way, the notification layer needs Python either way, the deployment platform fights EPICS, and there is currently one person to maintain the result.</p>
+<p><strong>Reconsider this document if any of the following changes:</strong> a second maintainer with controls interest appears; Nikhef controls-group support becomes available; XAMS grows substantially or must integrate with a larger controls effort; or the cDAQ is replaced by hardware with maintained EPICS support.</p>
+</body></html>
