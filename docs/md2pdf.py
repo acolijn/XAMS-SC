@@ -24,8 +24,26 @@ pre { font-family:"SF Mono",Menlo,monospace; font-size:8.3pt; background:#f5f5f5
       padding:2.5mm 3mm; margin:0 0 4mm 0; line-height:1.35; page-break-inside:avoid; }
 pre code { background:none; padding:0; font-size:8.3pt; }
 hr { border:none; border-top:0.5pt solid #bbb; margin:6mm 0; }
+.box  { border:0.8pt solid #1a1a1a; background:#fafafa; padding:3mm 3.5mm; margin:0 0 5mm 0; page-break-inside:avoid; }
+.warn { border-left:3pt solid #8c1a1a; background:#fdf4f4; padding:2.5mm 3mm; margin:0 0 4mm 0; page-break-inside:avoid; }
+.note { border-left:3pt solid #555; background:#f4f4f4; padding:2.5mm 3mm; margin:0 0 4mm 0; page-break-inside:avoid; }
+.box > :first-child, .warn > :first-child, .note > :first-child { margin-top:0; }
+.box > :last-child,  .warn > :last-child,  .note > :last-child  { margin-bottom:0; }
+.decision { border-left:3pt solid #1a5c1a; background:#eef3ee; padding:2.5mm 3mm; margin:0 0 4mm 0; page-break-inside:avoid; }
+td.pro, .pro { color:#1a5c1a; font-weight:600; }
+td.con, .con { color:#8c1a1a; font-weight:600; }
 strong { font-weight:600; }
 """
+
+CELL_RE = re.compile(r'^\{([+-])\}\s*')
+
+def cell(c):
+    """A table cell may start with {+} or {-} to colour it green or red."""
+    m = CELL_RE.match(c)
+    if not m:
+        return '<td>' + inline(c) + '</td>'
+    cls = 'pro' if m.group(1) == '+' else 'con'
+    return f'<td class="{cls}">' + inline(CELL_RE.sub('', c)) + '</td>'
 
 def inline(t):
     t = html.escape(t)
@@ -38,6 +56,14 @@ def convert(md):
     out, lines, i = [], md.split('\n'), 0
     while i < len(lines):
         ln = lines[i]
+        m = re.match(r'^:::(box|warn|note|decision)\s*$', ln)
+        if m:
+            cls = m.group(1); i += 1; buf = []
+            while i < len(lines) and not re.match(r'^:::\s*$', lines[i]):
+                buf.append(lines[i]); i += 1
+            i += 1
+            out.append(f'<div class="{cls}">' + convert('\n'.join(buf)) + '</div>')
+            continue
         if ln.startswith('```'):
             i += 1; buf = []
             while i < len(lines) and not lines[i].startswith('```'):
@@ -63,7 +89,7 @@ def convert(md):
                 rows.append(cells(lines[i])); i += 1
             t = ['<table><thead><tr>'] + [f'<th>{inline(c)}</th>' for c in hdr] + ['</tr></thead><tbody>']
             for r in rows:
-                t.append('<tr>' + ''.join(f'<td>{inline(c)}</td>' for c in r) + '</tr>')
+                t.append('<tr>' + ''.join(cell(c) for c in r) + '</tr>')
             t.append('</tbody></table>')
             out.append(''.join(t)); continue
         m = re.match(r'^(\s*)([-*])\s+(.*)$', ln)

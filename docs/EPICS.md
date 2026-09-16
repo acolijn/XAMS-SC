@@ -4,6 +4,11 @@
 
 Companion to `DESIGN.md`, which specifies a Python service stack. This document specifies the same system built on **EPICS**, using the hardware inventory and channel configuration recovered in September 2026.
 
+> **Status: considered and set aside — 16 September 2026.**
+> The decision is for the Python design in `DESIGN.md`. The deciding factor was the CompactDAQ: it carries 20 of the 30 connected channels, it has no maintained EPICS device support, and it therefore requires a Python soft IOC in either design. Choosing EPICS would mean maintaining two paradigms — an EPICS installation *and* a Python IOC — for one small system, rather than one.
+>
+> This document is kept because the analysis is sound and the conditions for revisiting it are recorded in §16. It is not a rejected proposal; it is the road not taken, written down.
+
 It is written as a genuine alternative, not as a foil. Where EPICS is better than the Python design, that is stated; where it is worse for this particular system, that is stated too. The decision document (`XAMS-slow-control-options.pdf`) recommends the Python stack; this document is what the other choice actually looks like, so that the recommendation can be judged rather than taken on trust.
 
 ---

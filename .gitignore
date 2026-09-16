@@ -1,7 +1,10 @@
 # Exported material from the LabVIEW PC — reference only, not part of the project
 docs/labviewPC/
-docs/design.html
 
+# Generated from the .md sources by md2pdf.py — regenerate with docs/render.sh
+docs/options.html
+docs/design.html
+docs/epics.html
 
 # macOS
 .DS_Store

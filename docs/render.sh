@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regenerate both PDFs from their sources.
 #   DESIGN.md      -> XAMS-SC-design.pdf          (via md2pdf.py)
-#   sc-options.html-> XAMS-slow-control-options.pdf
+#   OPTIONS.md     -> XAMS-slow-control-options.pdf
 # Chrome renders, Ghostscript normalises: without the gs pass the output has been
 # seen to print blank after page 1 on macOS.
 set -euo pipefail
@@ -14,8 +14,9 @@ python3 md2pdf.py DESIGN.md design.html
     --print-to-pdf="/tmp/_design_raw.pdf" "file://$PWD/design.html" 2>/dev/null
 gs $GSOPTS -sOutputFile=XAMS-SC-design.pdf /tmp/_design_raw.pdf
 
+python3 md2pdf.py OPTIONS.md options.html
 "$CHROME" --headless --disable-gpu --no-pdf-header-footer \
-    --print-to-pdf="/tmp/_options_raw.pdf" "file://$PWD/sc-options.html" 2>/dev/null
+    --print-to-pdf="/tmp/_options_raw.pdf" "file://$PWD/options.html" 2>/dev/null
 gs $GSOPTS -sOutputFile=XAMS-slow-control-options.pdf /tmp/_options_raw.pdf
 
 python3 md2pdf.py EPICS.md epics.html
