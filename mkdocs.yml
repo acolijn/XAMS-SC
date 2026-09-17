@@ -84,6 +84,7 @@ nav:
       - operating/index.md
       - Starting and stopping: operating/running.md
       - Tests: operating/tests.md
+      - Backup and restore: operating/backup.md
       - Emergency card: operating/emergency.md
   - Software:
       - Architecture: software/architecture.md
