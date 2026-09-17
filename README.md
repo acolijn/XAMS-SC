@@ -12,13 +12,15 @@ and a UPS. Storage, plotting, alarming and a small web UI.
 | Why it is built this way, and what to build next | [docs/DESIGN.md](docs/DESIGN.md) |
 | What was decided and why | [docs/OPTIONS.md](docs/OPTIONS.md) |
 
-**Current state: milestone 6 complete, milestone 3 partial** — the cDAQ, both
-CAEN supplies, the Lake Shore and the UPS are read and logged on the lab PC,
-45 channels, with alarms, notifications and the flow integrator running and a
-week of LabVIEW history imported alongside. Everything is still read-only; no
-setpoint can be written to any instrument. The CAEN supplies, the Lake Shore and the
-UPS are still to come, and LabVIEW remains installed as the fallback. See
-[Milestones](#milestones).
+**Current state: milestone 7 largely complete, milestone 3 partial.** The
+cDAQ, both CAEN supplies, the Lake Shore and the UPS are read and logged on the
+lab PC — 45 channels — with alarms, SMS notification, the flow integrator, a
+week of imported LabVIEW history, a web UI and a live P&I mimic.
+
+**Everything is read-only.** No setpoint can be written to any instrument; that
+is milestone 8, and it needs §10's open decision resolved first. LabVIEW is
+installed and recoverable but no longer running. See
+[Milestones](#milestones) and [What still needs doing](#what-still-needs-doing).
 
 ---
 
@@ -129,6 +131,19 @@ would overwrite each other.
 
 Then open <http://127.0.0.1:3000> → **XAMS Overview**.
 
+Then open the web UI at <http://127.0.0.1:8000>:
+
+| Page | What it answers |
+|---|---|
+| `/` | is everything all right? — alarms, services, UPS, integrated flow, known faults |
+| `/status` | every channel: value, unit, age, quality, alarm |
+| `/hv` | both CAEN supplies: VMON, IMON, on/off, and the board's own protection settings |
+| `/mimic` | the P&I drawing with live values on it |
+| `/logs` | the last lines of any service log |
+
+It reads the **retained MQTT topics, never the database** — the status view has
+to work when PostgreSQL does not, which is exactly when it is needed (§8.1).
+
 To watch everything crossing the bus, with no UI and no database involved:
 
 ```powershell
@@ -192,7 +207,7 @@ subscribing to one MQTT topic.
 | 4 | Scaling and history import | **done** |
 | 5 | Lake Shore + CAEN monitoring | **done** |
 | 6 | UPS, alarms, flow integrator | **done** |
-| 7 | Web UI and P&ID mimic | next |
+| 7 | Web UI and P&ID mimic | **mostly done** |
 | 8 | Control path | |
 | 9 | Procedures | |
 | 10 | Production | |
@@ -281,15 +296,57 @@ safe-shutdown job. Two other routes were tried and rejected: WMI reports no
 battery at all, and `GetSystemPowerStatus` describes the wall socket rather
 than the UPS — it would have read "on line power" while running on battery.
 
-**The pressure units remain unknown.** `p101`–`p104` and `pmain` still carry
-`unit: TBD`. The comparison validates the *numbers*, not the *labels*: our
-`pmain` reproduces LabVIEW's `pmain` to 0.03%, and both would be equally right
-if the unit were bar, and equally wrong if it were not. Guessing it is exactly
-the failure the `fm101` "SLPM" story records (§4.2).
+**Milestone 7, 17 September 2026.** Web UI on `127.0.0.1:8000` with the five
+pages above, and the P&I mimic built from the drawing by
+`tools/build_mimic.py`: rotated to landscape, frame and title block removed,
+recoloured for the dark interface, with a live value in each instrument bubble.
+A **stale channel greys out and shows a dash, never its last number** — a
+frozen value displayed as though it were live is the failure this kind of page
+exists to avoid. The SVG-vs-`channels.yaml` tag check runs at startup and
+reports drift in both directions.
+
+Still outstanding for this milestone: editing `recipients.yaml` from the UI,
+and the Python client for notebooks.
+
+**The pressure units are now known: bar**, supplied by the group along with
+each transmitter's location. **No channel carries `unit: TBD` any more.** They
+were never guessed — the milestone 4 comparison validated the *numbers* to
+0.03% while leaving the *labels* open, which is the distinction the `fm101`
+"SLPM" story exists to make (§4.2).
 
 The verification found one fault: **the `tt202` sensor has failed** (bottom of
 the detector vessel). It is `enabled: false` pending replacement, so the cDAQ
 carries **19 live channels, not 20**.
+
+---
+
+## What still needs doing
+
+**One action, now:** the services run as plain processes and **would not
+survive a reboot**. To install them as Windows services that start at boot and
+restart on crash, in an elevated PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.	ools\install_services.ps1
+```
+
+`-Manual` installs them with restart-on-crash but not at boot; `-Uninstall`
+reverses it. Afterwards **`xams-ctl stop --for-labview`** is what hands the
+hardware back: it stops the services *and* suspends auto-start, so a Windows
+Update reboot at three in the morning does not quietly reclaim the
+instruments.
+
+Then, roughly in order of how much it matters:
+
+| | Why it matters |
+|---|---|
+| **Email delivery** — set `smtp_host` in `config/secrets.yaml` | SMS works and has been proven with a real message; email has never been sent. Try the Nikhef relay with no credentials first. |
+| **The Nikhef VM watchdog** — one Grafana rule, "no measurement for 15 minutes" (§12) | The one failure this system cannot report is its own machine being off. Auto-start makes that *less* likely to be noticed, not more, because the system now looks after itself well enough that nobody checks. |
+| **Replace the `tt202` sensor** | Then `enabled: true` in `channels.yaml` and `xams-ctl reload`. Nothing else changes. |
+| **Rotate the MessageBird key** | It sat in plaintext in three copies on the Desktop for years. Update `secrets.yaml` and the LabVIEW scripts together while LabVIEW is still the fallback. |
+| **Alarm thresholds for the remaining channels, and the response to each** | A threshold without a prescribed action is half the information (§14). `OPERATIONS.md` has the section waiting. |
+| **Milestone 3's empirical check** | Readings agree with LabVIEW, which cannot catch a tag that was already on the wrong channel *in* LabVIEW. Warming one sensor at a time and watching which value moves is the only thing that can. |
 
 ---
 
