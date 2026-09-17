@@ -24,7 +24,7 @@ channels:
     multiplier: 25.0
     unit: bar                 # §16 — must not be guessed
     legacy: P101
-    description: TBD — pressure, 1xx series
+    description: gas rack high pressure side
 
   - name: p102
     device: cdaq
@@ -32,7 +32,7 @@ channels:
     kind: voltage
     unit: bar
     legacy: P102
-    description: TBD — pressure, 1xx series
+    description: gas rack low pressure side
 
   - name: p103
     device: cdaq
@@ -40,7 +40,7 @@ channels:
     kind: voltage
     unit: bar
     legacy: P103
-    description: TBD — pressure, 1xx series
+    description: pump inlet
 
   - name: p104
     device: cdaq
@@ -48,7 +48,7 @@ channels:
     kind: voltage
     unit: bar
     legacy: P104
-    description: TBD — pressure, 1xx series
+    description: pump outlet
 
   - name: v4
     device: cdaq
