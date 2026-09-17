@@ -22,9 +22,16 @@ from ..model import Measurement
 
 log = logging.getLogger(__name__)
 
+# ON CONFLICT DO NOTHING, against the unique index on (t, channel, src).
+#
+# The bus re-delivers retained messages whenever this writer reconnects, so the
+# last value of every channel arrives again with its original timestamp. That
+# is MQTT working as designed, not a fault — but inserting it twice would
+# inflate the history, so the second write is simply discarded.
 INSERT = """
 INSERT INTO meas (t, channel, value, raw, unit, quality, src)
 VALUES (%s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (t, channel, src) DO NOTHING
 """
 
 
@@ -70,7 +77,10 @@ class PgWriter:
     # ------------------------------------------------------------------ writes
 
     def add(self, m: Measurement) -> None:
-        row = (m.t, m.channel, m.value, m.raw, m.unit, m.quality.value, self.src)
+        # The measurement's own provenance wins. self.src is only the default
+        # for readings that do not declare one.
+        row = (m.t, m.channel, m.value, m.raw, m.unit, m.quality.value,
+               m.src or self.src)
         with self._lock:
             if len(self._pending) >= self.max_pending:
                 # Bounded, for the same reason the bus buffer is bounded: an

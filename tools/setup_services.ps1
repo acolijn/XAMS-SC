@@ -369,6 +369,25 @@ try {
     Psql "xams" "GRANT USAGE, CREATE ON SCHEMA public TO xams" | Out-Null
     Note "granted table and sequence privileges to 'xams'"
 
+    # OWNERSHIP, not just privileges.
+    #
+    # GRANT ALL lets the role read and write. It does NOT let it create an
+    # index or alter a table - those require ownership. Without this, every
+    # future schema change needs the postgres superuser password, and
+    # re-running sql/schema.sql as the application role fails with
+    # "must be owner of table". Found the hard way on 17 September 2026.
+    $owned = Psql "xams" "SELECT tablename FROM pg_tables WHERE schemaname='public'"
+    foreach ($t in ($owned -split "`n" | Where-Object { $_.Trim() })) {
+        Psql "xams" "ALTER TABLE public.$($t.Trim()) OWNER TO xams" | Out-Null
+    }
+    Psql "xams" "ALTER SCHEMA public OWNER TO xams" | Out-Null
+    Note "transferred table ownership to 'xams' so it can manage its own schema"
+
+    # Re-apply the schema as the owner now, so any index the first pass could
+    # not create is created on this run rather than the next one.
+    $r2 = Invoke-Psql -Database "xams" -PsqlArgs @("-v", "ON_ERROR_STOP=1", "-f", $schema)
+    if ($r2.ExitCode -ne 0) { throw "re-applying schema.sql as owner failed: $($r2.Stderr)" }
+
     $tables = Psql "xams" "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
     Good "database ready: $($tables.Trim()) tables"
 } catch {

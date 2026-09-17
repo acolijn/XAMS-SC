@@ -80,7 +80,7 @@ class SimService(BaseService):
             out.append(
                 Measurement(
                     t=now, channel=ch.name, value=raw, unit=ch.unit,
-                    raw=raw, quality=Quality.OK,
+                    raw=raw, quality=Quality.OK, src="sim",
                 )
             )
         return out

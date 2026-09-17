@@ -20,7 +20,7 @@ import yaml
 
 from ..bus import Bus
 from ..config import CONFIG_DIR, ConfigError, load
-from ..service import setup_logging
+from ..service import SingleInstance, setup_logging
 from .jsonl_writer import JsonlWriter
 from .pg_writer import PgWriter
 
@@ -71,10 +71,27 @@ def main(argv=None) -> int:
 
     setup_logging("sinks", args.log_level)
 
+    # ONE INSTANCE ONLY (§6.1). The device services have always had this; the
+    # sinks did not, and on 17 September 2026 two copies ran at once — both
+    # appending to the same JSONL file and both inserting into PostgreSQL.
+    # Every reading was stored twice.
+    #
+    # Duplication here is worse than for a driver: two drivers fighting over an
+    # instrument fail loudly, whereas two writers succeed quietly and corrupt
+    # the archive in a way that only shows up as a row count.
+    lock = SingleInstance("sinks", Path("logs"))
+    if not lock.acquire():
+        log.critical(
+            "FATAL: another sinks process is already running (lock: %s). "
+            "Refusing to start — two writers would duplicate every record.",
+            lock.path)
+        return 1
+
     try:
         config = load()
     except ConfigError as exc:
         print(f"FATAL: configuration is invalid: {exc}", file=sys.stderr)
+        lock.release()
         return 2
 
     bus = Bus(client_id="sinks", host=args.broker, port=args.port)
@@ -120,6 +137,7 @@ def main(argv=None) -> int:
         if pg:
             pg.close()
         bus.disconnect()
+        lock.release()
     return 0
 
 

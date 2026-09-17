@@ -12,8 +12,9 @@ and a UPS. Storage, plotting, alarming and a small web UI.
 | Why it is built this way, and what to build next | [docs/DESIGN.md](docs/DESIGN.md) |
 | What was decided and why | [docs/OPTIONS.md](docs/OPTIONS.md) |
 
-**Current state: milestone 3 complete** — the cDAQ is read and logged for real
-on the lab PC, 19 channels at 1 Hz, every tag verified against its sensor. The CAEN supplies, the Lake Shore and the
+**Current state: milestone 4 complete, milestone 3 partial** — the cDAQ is read
+and logged for real on the lab PC, 19 channels at 1 Hz, and a week of LabVIEW
+history has been imported and validated against it. The CAEN supplies, the Lake Shore and the
 UPS are still to come, and LabVIEW remains installed as the fallback. See
 [Milestones](#milestones).
 
@@ -185,9 +186,9 @@ subscribing to one MQTT topic.
 |---|---|---|
 | 1 | Skeleton: config, bus, sinks, simulation, install | **done** |
 | 2 | cDAQ read-only | **done** |
-| 3 | Channel verification against physical sensors | **done** |
-| 4 | Scaling and history import | next |
-| 5 | Lake Shore + CAEN monitoring | |
+| 3 | Channel verification against physical sensors | **partial** — see below |
+| 4 | Scaling and history import | **done** |
+| 5 | Lake Shore + CAEN monitoring | next |
 | 6 | UPS, alarms, flow integrator | |
 | 7 | Web UI and P&ID mimic | |
 | 8 | Control path | |
@@ -206,10 +207,41 @@ dashboard, and the install is scripted and reproducible.
 (`ttamb` 24.2 °C, cryostat −90 °C, `pmain` 1.495 against LabVIEW's 1.53), and
 readings continuous across a service restart to better than 0.7%.
 
-**Milestone 3 acceptance, met 17 September 2026:** every `tt*` tag verified
-against its channel and its physical location recorded in `channels.yaml`. The
-1xx / 2xx / 3xx series are now known to mean xenon circulation, detector vessel
-and bucket, and cooling and heat exchange respectively (DESIGN.md §3).
+**Milestone 3, partially met 17 September 2026.** Every channel's physical
+location is recorded in `channels.yaml`, and the 1xx / 2xx / 3xx series are now
+known to mean xenon circulation, detector vessel and bucket, and cooling and
+heat exchange respectively (DESIGN.md §3). Readings were checked against the
+LabVIEW project and agree.
+
+**The empirical per-sensor check is still outstanding.** Agreement with LabVIEW
+confirms we read the same hardware the same way — but it cannot catch a tag
+that was already on the wrong channel *in LabVIEW*, because we would inherit
+the error and the comparison would agree perfectly. That is the specific
+failure §15 says this milestone exists to catch, so it is not yet closed.
+
+**Milestone 4 acceptance, met 17 September 2026.** The column-count census of
+§9.6 was run over all 733 log files, one week of history was imported
+(6.3 million readings, tagged `src="labview"`), and every channel present in
+both systems agrees across the changeover:
+
+```
+19 of 19 channels agree, within 0.4%
+  pmain    LabVIEW 1.495   XAMS 1.495   -0.03%
+  fm101    LabVIEW 7.136   XAMS 7.127   -0.13%
+  tt206    LabVIEW -90.317 XAMS -90.460  0.16%
+```
+
+Reproduce with `python tools/compare_to_labview.py`.
+
+The largest differences are the cryostat sensors, all drifting the same way by
+about 0.2 °C across the 4.8-minute changeover gap — consistent with slow
+cooling, not with a scaling error.
+
+**The pressure units remain unknown.** `p101`–`p104` and `pmain` still carry
+`unit: TBD`. The comparison validates the *numbers*, not the *labels*: our
+`pmain` reproduces LabVIEW's `pmain` to 0.03%, and both would be equally right
+if the unit were bar, and equally wrong if it were not. Guessing it is exactly
+the failure the `fm101` "SLPM" story records (§4.2).
 
 The verification found one fault: **the `tt202` sensor has failed** (bottom of
 the detector vessel). It is `enabled: false` pending replacement, so the cDAQ

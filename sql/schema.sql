@@ -23,6 +23,19 @@ CREATE TABLE IF NOT EXISTS meas (
 
 CREATE INDEX IF NOT EXISTS meas_channel_t_idx ON meas (channel, t DESC);
 
+-- One reading per channel per instant per source. This makes the store
+-- IDEMPOTENT, which matters because duplicates arrive by a route that is not a
+-- bug and cannot be designed away:
+--
+--   MQTT re-delivers RETAINED messages to every new subscriber. Each time the
+--   sinks reconnect they receive the last value of every channel again, with
+--   its ORIGINAL timestamp, and would insert it a second time. On 17 September
+--   2026 a stray second sinks process turned that into 46,418 duplicate rows.
+--
+-- With this constraint the writer can use ON CONFLICT DO NOTHING and a replay
+-- is harmless. Reprocessing an archive can then never inflate the history.
+CREATE UNIQUE INDEX IF NOT EXISTS meas_unique_reading ON meas (t, channel, src);
+
 -- Alarm state transitions, published on xams/alarm/<channel> and stored like
 -- any other record so Grafana can show history without being in the alarm
 -- path (§11).

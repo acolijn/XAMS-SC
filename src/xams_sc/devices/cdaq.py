@@ -298,6 +298,6 @@ class CdaqService(BaseService):
                 out.append(Measurement(
                     t=now, channel=ch.name,
                     value=apply(raw, ch.offset, ch.multiplier),
-                    unit=ch.unit, raw=raw, quality=Quality.OK,
+                    unit=ch.unit, raw=raw, quality=Quality.OK, src="sim",
                 ))
         return out
