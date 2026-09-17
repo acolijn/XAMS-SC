@@ -7,6 +7,24 @@
 #
 # The password comes from an environment variable, never from this file:
 # credentials do not enter the repository (§11).
+#
+# NOTE ON `database`, AND WHY IT IS IN TWO PLACES.
+#
+# Recent versions of the PostgreSQL datasource read the database name from
+# `jsonData.database`. The legacy top-level `database:` field is still honoured
+# by the BACKEND, which is what makes this trap so unpleasant: with only the
+# top-level field set, the datasource health check reports "Database Connection
+# OK" and queries fired at /api/ds/query return correct data — while the
+# frontend query editor, which looks only at jsonData, reports
+#
+#     "You do not currently have a default database configured"
+#
+# and refuses to issue any query at all. Every panel then shows "No data" with
+# an error marker, and nothing whatsoever appears in the Grafana server log,
+# because no request is ever made.
+#
+# Both are set below. Do not remove either without checking a panel actually
+# renders afterwards.
 
 apiVersion: 1
 
@@ -16,13 +34,17 @@ datasources:
     uid: xams-postgres
     access: proxy
     url: 127.0.0.1:5432
-    database: xams
+    database: xams                 # legacy location — read by the backend
     user: xams
     isDefault: true
     editable: false
     secureJsonData:
       password: ${XAMS_PG_PASSWORD}
     jsonData:
+      database: xams               # current location — read by the query editor
       sslmode: disable
       postgresVersion: 1600
       timescaledb: false
+      maxOpenConns: 10
+      maxIdleConns: 10
+      connMaxLifetime: 14400

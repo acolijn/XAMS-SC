@@ -4,12 +4,17 @@ Monitoring and convenience control of the XAMS slow-control hardware: one NI
 cDAQ-9174 chassis, two CAEN DT1470ET high-voltage supplies, a Lake Shore 335
 and a UPS. Storage, plotting, alarming and a small web UI.
 
-**This document is for someone reinstalling the system from scratch.** The
-design and the reasoning behind it are in [docs/DESIGN.md](docs/DESIGN.md);
-day-to-day operation will be in `OPERATIONS.md` as it is written.
+**This document is for someone reinstalling the system from scratch.**
 
-Current state: **milestone 1 — skeleton.** Simulation only, no hardware
-drivers yet. See [Milestones](#milestones).
+| | |
+|---|---|
+| How to *run* it, and what to do when it breaks | [OPERATIONS.md](OPERATIONS.md) |
+| Why it is built this way, and what to build next | [docs/DESIGN.md](docs/DESIGN.md) |
+| What was decided and why | [docs/OPTIONS.md](docs/OPTIONS.md) |
+
+**Current state: milestone 1 complete** — the full stack runs in simulation on
+the lab PC. No hardware drivers yet; LabVIEW is untouched and still the system
+of record. See [Milestones](#milestones).
 
 ---
 
@@ -44,111 +49,79 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Add `.[hardware]` for the device drivers (`nidaqmx`, `pyserial`, `lakeshore`).
-Those need the NI runtime and are not required for simulation.
+Add `.[hardware]` for the device drivers (`nidaqmx`, `pyserial`, `lakeshore`)
+from milestone 2 onward. Those need the NI runtime and are not required for
+simulation.
 
-Check that the configuration is valid:
+Check that the configuration is valid — this starts nothing:
 
 ```powershell
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl check
 ```
 
-### 2. Mosquitto (the broker)
+### 2. Mosquitto, PostgreSQL and Grafana
 
-Download from <https://mosquitto.org/download/> and install. Then **bind it to
-loopback** — this matters more than it looks:
-
-`C:\Program Files\mosquitto\mosquitto.conf`
-
-```
-listener 1883 127.0.0.1
-allow_anonymous true
-```
-
-Commands travel over MQTT (`xams/cmd/#`), so anything that can reach the
-broker can set a high voltage. A broker listening on all interfaces is an
-unauthenticated control interface on the building network. `127.0.0.1` is the
-only accepted bind address without a recorded decision to the contrary (§8).
+One script does all three, in an **elevated** PowerShell:
 
 ```powershell
-net start mosquitto
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\tools\setup_services.ps1
 ```
 
-### 3. PostgreSQL
+It asks for two passwords (the `postgres` superuser, and one for the `xams`
+role it creates), then downloads and installs the three services, binds all of
+them to loopback, creates the database, applies `sql/schema.sql`, writes
+`config/secrets.yaml`, and verifies that every port is listening on `127.0.0.1`
+**and nowhere else**.
 
-Install from <https://www.postgresql.org/download/windows/>, then:
+It is idempotent — if a step fails, fix the cause and run it again. Roughly
+870 MB of downloads, staged in `tools/installers/` (gitignored) so a re-run
+does not fetch them twice.
 
-```powershell
-psql -U postgres -c "CREATE DATABASE xams;"
-psql -U postgres -c "CREATE USER xams WITH PASSWORD 'choose-one';"
-psql -U postgres -d xams -f sql/schema.sql
-psql -U postgres -d xams -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO xams;"
-```
+**Why the loopback binding matters.** Control commands travel over MQTT
+(`xams/cmd/#`), so anything that can reach the broker can set a high voltage. A
+broker listening on `0.0.0.0` — the default in most tutorials — is an
+unauthenticated control interface on the building network. If remote viewing is
+ever wanted, the answer is an SSH tunnel or a read-only mirror, never opening
+the port (§8).
 
-In `postgresql.conf` set `listen_addresses = 'localhost'`.
+**What the script does not do:** install the XAMS services themselves as
+Windows services. Auto-start stays off while LabVIEW is the fallback, because
+every device admits only one process and a service starting at boot would lock
+LabVIEW out (§12).
 
-Copy the credentials into place — this file is in `.gitignore` and must never
-be committed:
+### 3. Grafana first login
 
-```powershell
-copy config\secrets.example.yaml config\secrets.yaml
-notepad config\secrets.yaml
-```
+<http://127.0.0.1:3000>, `admin` / `admin`, and change the password when asked.
 
-### 4. Grafana
-
-Install from <https://grafana.com/grafana/download?platform=windows>. In
-`conf\custom.ini`:
-
-```ini
-[server]
-http_addr = 127.0.0.1
-http_port = 3000
-```
-
-Point Grafana at the provisioning in this repository by copying or symlinking
-`grafana/provisioning/` into Grafana's `conf/provisioning/`, and set the
-datasource password in the environment before starting the service:
-
-```powershell
-setx XAMS_PG_PASSWORD "the-password-you-chose"
-```
-
-Dashboards live in `grafana/dashboards/*.json`, in git. Edit one in the
-Grafana UI, export it to JSON, commit it — and it appears on any other machine
-at the next `git pull`. Without this, dashboards live only in Grafana's
-internal database and are lost when it is.
+The **XAMS** datasource and the **XAMS Overview** dashboard are provisioned
+from this repository. Dashboards live in `grafana/dashboards/*.json`, in git,
+and the file is authoritative: edit a dashboard in the UI to get it right, then
+export the JSON and commit it. A dashboard that exists only in Grafana's own
+database is lost when that database is.
 
 ---
 
 ## Run it
-
-Start the broker first, then:
 
 ```powershell
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl start
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl status
 ```
 
-`start` brings up the sinks and the simulated device service; `stop` shuts
-them down and **releases all hardware for LabVIEW**, which matters while
-LabVIEW is still the fallback — every device admits only one process.
+`start` brings up the sinks and the simulated device service. **`stop` releases
+all hardware for LabVIEW.**
 
-To run one service in the foreground and watch it:
+Then open <http://127.0.0.1:3000> → **XAMS Overview**.
 
-```powershell
-.\.venv\Scripts\python.exe -m xams_sc.devices sim
-.\.venv\Scripts\python.exe -m xams_sc.sinks
-```
-
-To see everything crossing the bus, with no UI and no database involved:
+To watch everything crossing the bus, with no UI and no database involved:
 
 ```powershell
-mosquitto_sub -t "xams/#" -v
+& "$env:ProgramFiles\mosquitto\mosquitto_sub.exe" -t "xams/#" -v
 ```
 
-Archived data lands in `data/raw/<UTC date>.jsonl`, one JSON object per line,
-with a header line recording the config hash that produced it.
+Full day-to-day instructions, including what to do when something breaks, are
+in [OPERATIONS.md](OPERATIONS.md).
 
 ---
 
@@ -165,16 +138,15 @@ Everything the system knows about the hardware is in `config/`, in git.
 | `recipients.yaml` | who gets notified | the web UI, or by hand — no restart |
 | `secrets.yaml` | credentials | by hand; **never committed** |
 
-Two conventions that must not be changed:
+Three conventions that must not be changed:
 
 - **Scaling is `value = (raw - offset) * multiplier`**, in that order. It
   matches LabVIEW exactly. Changing it breaks every historical comparison.
-- **HV values are stored signed.** The supplies report unsigned magnitudes
-  with polarity separate; the sign is applied in software. Changing this
-  later silently inverts history.
-
-`xams-ctl check` validates the configuration and prints what it defines,
-without starting anything.
+- **HV values are stored signed.** The supplies report unsigned magnitudes with
+  polarity separate; the sign is applied in software. Changing this later
+  silently inverts history.
+- **Channel names are permanent.** They are the identity of a measurement in
+  the MQTT topic, the archive, the database and the UI.
 
 ---
 
@@ -184,13 +156,14 @@ without starting anything.
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-No hardware and no broker required. The suite covers the scaling conventions,
-configuration validation, and the chain from a simulated read to a record on
-disk.
+53 tests, no hardware and no broker required: the scaling conventions,
+configuration validation, bus fan-out, and the chain from a simulated read to a
+record on disk.
 
-Three of the tests exist because the system being replaced got these wrong:
-the order of operations in the scaling formula, the sign on HV channels, and
-the minutes-versus-seconds trap in the flow integrator.
+Several exist because something already went wrong once — the order of
+operations in the scaling formula, the sign on HV channels, the
+minutes-versus-seconds trap in the flow integrator, and two consumers
+subscribing to one MQTT topic.
 
 ---
 
@@ -198,8 +171,8 @@ the minutes-versus-seconds trap in the flow integrator.
 
 | # | Milestone | State |
 |---|---|---|
-| 1 | Skeleton: config, bus, sinks, simulation, install | **in progress** |
-| 2 | cDAQ read-only | |
+| 1 | Skeleton: config, bus, sinks, simulation, install | **done** |
+| 2 | cDAQ read-only | next |
 | 3 | Channel verification against physical sensors | |
 | 4 | Scaling and history import | |
 | 5 | Lake Shore + CAEN monitoring | |
@@ -212,6 +185,10 @@ the minutes-versus-seconds trap in the flow integrator.
 Each has an acceptance criterion in [docs/DESIGN.md §15](docs/DESIGN.md). Do
 not start the next before the current one passes.
 
+**Milestone 1 acceptance, met 17 September 2026:** the simulated service
+publishes, both sinks store independently, Grafana plots from the provisioned
+dashboard, and the install is scripted and reproducible.
+
 ---
 
 ## Hardware, as found on the lab PC
@@ -223,8 +200,12 @@ Verified 17 September 2026.
 | cDAQ-9174 | serial `20C5E1C`, modules 9207 / 9216 / 9216 / 9226 |
 | CAEN DT1470ET | serial **19198**, firmware 1.08 — PMT bottom, PMT top, top screen, bottom screen |
 | CAEN DT1470ET | serial **79**, firmware 1.04 — cathode, gate, anode, NaI |
-| Lake Shore 335 | `335A12T` |
-| UPS | APC, `3S2005X18782` |
+| Lake Shore 335 | `335A12T` on COM6 |
+| UPS | APC, `3S2005X18782`, USB HID |
 
-Neither CAEN unit exposes a USB serial number, so they are told apart by
-asking each board for its own `BDSNUM` — never by COM port number (§6.2).
+Neither CAEN unit exposes a USB serial number, so they are told apart by asking
+each board for its own `BDSNUM` — never by COM port number (§6.2).
+
+Of the cDAQ's 40 available channels, **20 are connected**: 6 voltage inputs on
+the 9207, 7 PT1000 on the 9226, and 7 PT100 on the first 9216. The second 9216
+is entirely free — eight spare PT100 inputs already wired into the chassis.

@@ -74,7 +74,12 @@ class Bus:
         )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
-        self._handlers: dict[str, Callable[[str, str], None]] = {}
+        # A LIST, not a dict keyed by topic. Several consumers legitimately
+        # subscribe to the same pattern - the JSONL archive, the PostgreSQL
+        # writer and the alarm engine all want xams/meas/#. Keying by topic
+        # means the second subscriber silently replaces the first, which is
+        # exactly the opposite of what the bus exists to provide (§2.1).
+        self._handlers: list[tuple[str, Callable[[str, str], None]]] = []
         self._client.on_message = self._on_message
 
     # ---------------------------------------------------------------- lifecycle
@@ -113,7 +118,7 @@ class Bus:
         if reason_code == 0:
             log.info("connected to broker %s:%s", self.host, self.port)
             self._connected.set()
-            for topic in self._handlers:
+            for topic in {pattern for pattern, _ in self._handlers}:
                 client.subscribe(topic)
             self._flush()
         else:
@@ -125,7 +130,7 @@ class Bus:
 
     def _on_message(self, client, userdata, msg):
         payload = msg.payload.decode("utf-8", errors="replace")
-        for pattern, handler in self._handlers.items():
+        for pattern, handler in self._handlers:
             if mqtt.topic_matches_sub(pattern, msg.topic):
                 try:
                     handler(msg.topic, payload)
@@ -186,7 +191,15 @@ class Bus:
         self._publish(topic, payload, retain=retain)
 
     def subscribe(self, topic: str, handler: Callable[[str, str], None]) -> None:
-        """Register a handler. Safe to call before connect()."""
-        self._handlers[topic] = handler
+        """Register a handler. Safe to call before connect().
+
+        Every handler registered for a matching pattern is called, so adding a
+        consumer never displaces one that was already there.
+        """
+        self._handlers.append((topic, handler))
         if self._connected.is_set():
             self._client.subscribe(topic)
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._handlers)

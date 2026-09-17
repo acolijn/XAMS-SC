@@ -11,7 +11,17 @@ providers:
     type: file
     disableDeletion: false
     updateIntervalSeconds: 30
-    allowUiUpdates: true
+    # FALSE, deliberately. With true, a dashboard saved in the UI wins over the
+    # file, and the two silently diverge - which happened during milestone 1:
+    # a corrected overview.json sat on disk for twenty minutes while Grafana
+    # kept serving the broken stored copy, and even a service restart did not
+    # replace it. That breaks the promise of §12, that a dashboard committed to
+    # git appears everywhere at the next `git pull`.
+    #
+    # The workflow is therefore: edit in the Grafana UI to get it right, then
+    # export the JSON, commit it, and let provisioning apply it. The file is
+    # the source of truth; the UI is where you draft.
+    allowUiUpdates: false
     options:
       path: C:/Users/localadmin/Documents/XAMS-SC/grafana/dashboards
       foldersFromFilesStructure: false
