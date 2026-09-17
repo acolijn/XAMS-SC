@@ -1,0 +1,94 @@
+"""The data model. See DESIGN.md §5.
+
+Deliberately small: a measurement, its quality, and a service state. Everything
+that crosses the bus is one of these, and nothing here knows about MQTT, about
+a database, or about any instrument.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+
+
+class Quality(str, Enum):
+    """Why a value should or should not be trusted.
+
+    Inherits from str so it serialises to JSON without a custom encoder.
+    """
+
+    OK = "ok"
+    STALE = "stale"            # not refreshed within stale_after_seconds
+    ERROR = "error"            # read failed
+    UNVERIFIED = "unverified"  # device identity not confirmed (§6.2)
+
+
+class ServiceState(str, Enum):
+    STARTING = "starting"
+    RUNNING = "running"
+    DEGRADED = "degraded"
+    STOPPED = "stopped"
+
+
+def utcnow() -> datetime:
+    """Timezone-aware UTC. Never use datetime.now() anywhere in this project."""
+    return datetime.now(timezone.utc)
+
+
+def iso(t: datetime) -> str:
+    """ISO-8601 UTC, millisecond precision — the one timestamp format."""
+    if t.tzinfo is None:
+        raise ValueError("naive datetime; timestamps must be timezone-aware")
+    return t.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@dataclass(frozen=True)
+class Measurement:
+    """One reading, in engineering units.
+
+    `t` is taken at the moment of the hardware read, NOT at publish time. A
+    timestamp applied later silently absorbs any delay in the publish path,
+    which is exactly the error that makes two channels look correlated when
+    they are not.
+    """
+
+    t: datetime
+    channel: str
+    value: float | None
+    unit: str
+    raw: float | None = None
+    quality: Quality = Quality.OK
+
+    def to_payload(self) -> dict:
+        """The MQTT/JSONL wire form. Short keys: this is written ~260k times a day."""
+        d = {
+            "t": iso(self.t),
+            "ch": self.channel,
+            "v": self.value,
+            "u": self.unit,
+            "q": self.quality.value,
+        }
+        if self.raw is not None:
+            d["raw"] = self.raw
+        return d
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_payload(), separators=(",", ":"))
+
+    @classmethod
+    def from_payload(cls, d: dict) -> "Measurement":
+        return cls(
+            t=parse_iso(d["t"]),
+            channel=d["ch"],
+            value=d.get("v"),
+            unit=d.get("u", ""),
+            raw=d.get("raw"),
+            quality=Quality(d.get("q", "ok")),
+        )
+
+
+def parse_iso(s: str) -> datetime:
+    """Parse our own timestamp format back to an aware datetime."""
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))

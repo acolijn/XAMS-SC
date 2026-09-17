@@ -1,0 +1,17 @@
+# Who receives alarm notifications. See DESIGN.md §4.4.
+#
+# Edited from the web UI (/recipients) and applied without restarting anything:
+# the alarm engine watches this file and reloads on change. Editing it by hand
+# works equally well and has the same effect.
+#
+# Everyone with `enabled: true` receives the notification. No shift roster,
+# no escalation chain: the list is the list.
+#
+# An empty list is a warning — if every recipient is disabled, alarms reach
+# nobody, and the engine raises a low-severity alarm saying so.
+
+recipients:
+  - name: Auke-Pieter Colijn
+    email: a.p.colijn@nikhef.nl
+    phone: ""              # TBD
+    enabled: true

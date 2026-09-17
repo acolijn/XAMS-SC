@@ -1,0 +1,28 @@
+# Grafana datasource, provisioned from git. See DESIGN.md §12.
+#
+# Grafana stores dashboards and datasources in its own internal database.
+# Without provisioning they are lost when that database is lost or Grafana is
+# reinstalled, taking hours of work with them. In git, installation is a
+# procedure rather than something once assembled by hand.
+#
+# The password comes from an environment variable, never from this file:
+# credentials do not enter the repository (§11).
+
+apiVersion: 1
+
+datasources:
+  - name: XAMS
+    type: postgres
+    uid: xams-postgres
+    access: proxy
+    url: 127.0.0.1:5432
+    database: xams
+    user: xams
+    isDefault: true
+    editable: false
+    secureJsonData:
+      password: ${XAMS_PG_PASSWORD}
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false

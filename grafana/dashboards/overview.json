@@ -1,0 +1,147 @@
+{
+  "uid": "xams-overview",
+  "title": "XAMS Overview",
+  "description": "Temperatures, pressures, flow and high voltage. Provisioned from git — see DESIGN.md §12. No threshold lines: thresholds live in alarms.yaml and drawing them here would duplicate the number (§11).",
+  "tags": ["xams"],
+  "timezone": "utc",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Temperatures — 2xx series (PT1000)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "fieldConfig": {
+        "defaults": { "unit": "celsius", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT t AS time, channel AS metric, value FROM meas WHERE channel LIKE 'tt2%' AND quality = 'ok' AND $__timeFilter(t) ORDER BY t"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Temperatures — 1xx / 3xx series and ambient (PT100)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "fieldConfig": {
+        "defaults": { "unit": "celsius", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT t AS time, channel AS metric, value FROM meas WHERE (channel LIKE 'tt1%' OR channel LIKE 'tt3%' OR channel = 'ttamb') AND quality = 'ok' AND $__timeFilter(t) ORDER BY t"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Pressures",
+      "description": "Units are TBD (§16) and must not be guessed — the axis is deliberately unlabelled until the transducer datasheets are checked.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT t AS time, channel AS metric, value FROM meas WHERE channel IN ('pmain','p101','p102','p103','p104') AND quality = 'ok' AND $__timeFilter(t) ORDER BY t"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Flow (fm101) — mass flow, g/min",
+      "description": "NOT SLPM. The LabVIEW front panel label is wrong (§4.2).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "lineWidth": 1, "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT t AS time, channel AS metric, value FROM meas WHERE channel = 'fm101' AND quality = 'ok' AND $__timeFilter(t) ORDER BY t"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "High voltage — VMON (signed)",
+      "description": "Values are stored signed: cathode, gate, both screens and both PMTs are negative; anode and NaI positive (§7.2).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "fieldConfig": {
+        "defaults": { "unit": "volt", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT t AS time, channel AS metric, value FROM meas WHERE channel LIKE 'hv_%_vmon' AND quality = 'ok' AND $__timeFilter(t) ORDER BY t"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "High voltage — IMON",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "fieldConfig": {
+        "defaults": { "unit": "microamp", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT t AS time, channel AS metric, value FROM meas WHERE channel LIKE 'hv_%_imon' AND quality = 'ok' AND $__timeFilter(t) ORDER BY t"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Channels not reading OK",
+      "description": "Anything stale, errored or unverified. Empty is the healthy state — a frozen plausible value is worse than a gap (principle 4).",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "postgres", "uid": "xams-postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT DISTINCT ON (channel) channel, t, quality, value, unit FROM meas WHERE quality <> 'ok' AND $__timeFilter(t) ORDER BY channel, t DESC"
+        }
+      ]
+    }
+  ]
+}

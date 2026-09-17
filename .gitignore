@@ -8,3 +8,15 @@ docs/epics.html
 
 # macOS
 .DS_Store
+
+# Credentials — never committed (§11). See config/secrets.example.yaml.
+config/secrets.yaml
+
+# Runtime output
+data/
+logs/
+*.pyc
+__pycache__/
+.venv/
+*.egg-info/
+.pytest_cache/
