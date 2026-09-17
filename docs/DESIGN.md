@@ -165,14 +165,25 @@ cdaq:
     - alias: "9226"     model: NI9226   slot: 4   serial: "02159CBB"
 
 caen:
+  # Verified on the lab PC, 17 September 2026. CAEN's own VID/PID, not FTDI;
+  # Windows enumerates both as a generic "USB Serial Device" (usbser.sys).
+  # Neither unit carries a USB serial number - the instance path
+  # (5&35CD27EE&0&5) is a hub socket and changes if the cable is moved.
+  # Identity therefore rests entirely on the BDSNUM query (§6.2).
   - id: hv_1
-    match: {vid: "0403", pid: "6001", serial: "TBD"}   # see §6.2
+    match: {vid: "21E1", pid: "0003"}
     board_address: 0
-    board_serial: "TBD"          # verified via BDSNUM on every connect
+    board_name: DT1470ET         # both checked together with the serial
+    board_serial: "19198"        # verified via BDSNUM on every connect
+    firmware: "1.08"             # informational; logged, alarmed on change
+    # PMT bottom / PMT top / top screen / bottom screen - all negative
   - id: hv_2
-    match: {vid: "0403", pid: "6001", serial: "TBD"}
-    board_address: 1
-    board_serial: "TBD"
+    match: {vid: "21E1", pid: "0003"}
+    board_address: 0             # BOTH units are address 0: two separate USB
+    board_name: DT1470ET         # connections, not a daisy chain
+    board_serial: "79"
+    firmware: "1.04"
+    # cathode / gate / anode / NaI - anode and NaI positive
 
 lakeshore:
   match: {vid: "TBD", pid: "TBD", serial: "TBD"}
@@ -183,7 +194,9 @@ ups:
   connection: TBD
 ```
 
-Device resolution never uses a COM number. It matches on USB hardware ID via `serial.tools.list_ports`, then confirms identity by querying the instrument (§6.2).
+Device resolution never uses a COM number. It narrows candidates on USB hardware ID via `serial.tools.list_ports`, then confirms identity by querying the instrument (§6.2). For the CAEN units the second step is not a confirmation of the first — it is the *only* identification, because the hardware ID cannot distinguish the two.
+
+`hv_1` is serial 19198 and `hv_2` is serial 79, confirmed 17 September 2026 against the channel assignment in §7.2: board 79 carries the anode on index 2, which is the supply LabVIEW calls "CAEN 2", channel 3.
 
 ### 4.2 `channels.yaml`
 
@@ -388,7 +401,20 @@ A device is identified by **asking it who it is**, never by which COM port it ha
    - Lake Shore: `*IDN?`
 3. Compare against `devices.yaml`.
 
-A COM port renumbered by Windows, a device moved to another hub socket, or the two supplies' cables swapped are therefore all harmless: the service finds each unit wherever it is. This holds even if the FTDI chips carry no unique USB serial numbers, because step 2 asks the instrument itself.
+**Six rules govern step 2.** They matter because for the CAEN units this query is not a cross-check on the hardware ID — it is the entire identification (§4.1).
+
+1. **Never probe a port that did not pass step 1.** Only ports already matching the configured VID/PID are opened. Writing bytes at an unknown serial device is not a neutral act: this machine also exposes `COM3` as Intel AMT Serial-over-LAN, and a stray probe there is at best meaningless and at worst confusing to something else.
+2. **Match on `BDNAME` *and* `BDSNUM` together.** One of the two units has serial `79`, low enough that a collision with some other CAEN model is not fanciful. The pair `(DT1470ET, 79)` is unambiguous; `79` alone is merely probably unambiguous, and "probably" is not an identity.
+3. **A malformed, truncated or absent reply means unidentified.** Never "probably the right one", never a retry that silently accepts the second answer. The reply is parsed strictly, and a parse failure is the same outcome as a wrong serial: refuse.
+4. **Probe every candidate before binding any.** Resolution is a two-pass operation — read all identities first, then assign. This is what makes a cable swap harmless.
+5. **Two ports reporting the same identity is a fatal error.** It means either a duplicate serial or a bug, and there is no safe way to guess which unit is which. Refuse to start and say so.
+6. **Re-verify on every reconnect, not only at startup.** A service that has been running for months and reconnects after a USB glitch must re-confirm it is still talking to the same board. A reconnect is where a swap would otherwise slip through unnoticed.
+
+**Why `BDSNUM` is trustworthy as an identity.** It is set at the factory in the board's non-volatile configuration, and the ASCII protocol has no `CMD:SET,PAR:BDSNUM` — the board cannot be talked into changing its own name, by this software or any other. The query is `CMD:MON`, so it is read-only and safe to issue on every connect, including before identity is established and therefore while all writes are still refused. The thing that makes it safe is that it is the board's own answer about itself: every failure mode that breaks COM-number matching leaves it untouched.
+
+**What it does not survive, by design: a replaced board.** A unit returned under warranty comes back with a different serial, and the service will then refuse to start. That is the intended behaviour, not a gap — replacing an instrument should require a human to edit `devices.yaml` and notice that the history before and after that date came from different hardware.
+
+A COM port renumbered by Windows, a device moved to another hub socket, or the two supplies' cables swapped are therefore all harmless: the service finds each unit wherever it is. This is not a hypothetical robustness: the CAEN units expose **no** USB serial number, so step 1 cannot tell them apart at all, and only step 2 — asking the instrument itself — distinguishes them.
 
 This replaces a real weakness of the present system, where COM8 and COM5 are fixed choices on the LabVIEW front panel. If Windows renumbers them, someone must notice and correct it by hand — and if the two supplies exchange numbers, LabVIEW will talk to the wrong one without any error, since both are valid CAEN units giving well-formed replies.
 
@@ -399,6 +425,10 @@ This replaces a real weakness of the present system, where COM8 and COM5 are fix
 | `TBD` (not yet known) | starts **read-only**; publishes with `quality=unverified`; **every write refused** |
 | set, and it matches | normal operation; writes permitted |
 | set, and it does not match | refuse to start, raise an alarm, do not guess |
+| set, but the reply is malformed or absent | treated exactly as a mismatch — refuse |
+| set, and two ports return it | fatal; refuse to start (rule 5 above) |
+
+**Both CAEN serials are now known** (`19198`, `79`, recorded in §4.1), so the supplies start in the second row rather than the first: verified, and writes permitted once the control path exists (§10). The Lake Shore reports `335A12T` in its USB descriptor *and* answers `*IDN?`, so it is verified on both counts.
 
 The first row exists so the configuration can bootstrap itself. The serial numbers are not needed in order to communicate — they are needed in order to *write safely*. Connect the service, let it report what it found, record that in `devices.yaml`, and the channel moves from `unverified` to `ok`. Monitoring (milestone 5) can therefore run before the serials are known, with the data visibly marked as unverified rather than silently trusted.
 
@@ -434,7 +464,7 @@ Read-only. The chassis has no output module, so this service has no control path
 | Task | Module alias | Channels | DAQmx call |
 |---|---|---|---|
 | 1 | `9207` | `ai0:7` voltage | `add_ai_voltage_chan` |
-| 1b | `9207` | `ai8:15` current | `add_ai_current_chan` — **TBD: confirm these are used at all** |
+| 1b | `9207` | `ai8:15` current | **not used — task not created** (confirmed, 17 September 2026) |
 | 2 | `9216_1` | `ai0:6` | `add_ai_rtd_chan` |
 | 3 | `9216_2` | — | **entirely unconnected; task not created** |
 | 4 | `9226` | `ai0:6` | `add_ai_rtd_chan` |
@@ -452,7 +482,9 @@ Read-only. The chassis has no output module, so this service has no control path
 | `9207/ai6` | `v6` | 0 | 1 | generic name — likely unused |
 | `9207/ai7` | `fm101` | 0 | 6 | **flow meter** |
 
-Current channels `ai8:15` are named `i0`–`i7` with offset 0 and multiplier 1 throughout, which suggests they are unused (§16).
+**Current channels `ai8:15` are not used** — confirmed in the lab, 17 September 2026. Their LabVIEW names `i0`–`i7` with offset 0 and multiplier 1 throughout were the hint; this is now settled. No current task is created. List them in `channels.yaml` with `enabled: false`, as with the unconnected RTD inputs, so the channel map stays complete.
+
+That leaves the 9207 carrying **6 connected voltage channels of 16**, and the chassis as a whole 14 RTDs and 6 voltages.
 
 **RTD channel map** (from the lab, September 2026):
 
@@ -502,6 +534,10 @@ For reference, the settings the LabVIEW system uses: a 2 s cycle, a moving avera
 
 Two instances, one per supply. ASCII protocol over the USB virtual COM port; no vendor library.
 
+Both units answer at **board address 0**: they are two independent USB connections, not a daisy chain, and neither responds at address 1 or 2. `<addr>` is therefore 0 in every command to either supply, and the supplies are told apart by which port their `BDSNUM` came back on (§6.2), never by address.
+
+The two run **different firmware** — 1.08 on serial 19198, 1.04 on serial 79. No protocol difference has been observed between them, but `test_caen_protocol.py` carries recorded responses from **both** units, so a divergence shows up in the tests rather than in the lab.
+
 ```
 $BD:<addr>,CMD:MON,PAR:VMON,CH:<n>        read measured voltage
 $BD:<addr>,CMD:MON,PAR:IMON,CH:<n>        read measured current
@@ -511,9 +547,36 @@ $BD:<addr>,CMD:SET,PAR:VSET,CH:<n>,VAL:<v>   set voltage   (control path, §10)
 
 Terminate with `\r\n`. Parse the response; a malformed or absent reply is a read error, never a silently substituted value.
 
-Channel names, from the LabVIEW front panel: `PMT top`, `PMT bot`, `TS`, `BS`, `Cathode`, `Gate`, `Anode`, `NaI`. The anode is on **CAEN 2, channel 3**. Mapping of the remaining seven to supply and channel index: **TBD**.
+**Channel map**, from the lab, 17 September 2026. Channel indices are 0-based as the protocol uses them; the LabVIEW front panel numbers the same channels 1–4.
 
-Two behaviours exist in the LabVIEW code whose purpose is not yet established: `anode_timing.vi` and `DAISY_polarity_signs.vi`. **TBD** — determine whether they must be reproduced before the control path is built.
+| Board | `id` | CH | Channel name | Polarity | `VSET` | `ISET` µA | `MAXV` | `RUP` | `RDW` | `TRIP` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 19198 | `hv_1` | 0 | `hv_pmt_bot` | − | 700.0 | 20 | 1100 | 1 | 20 | 2.0 |
+| 19198 | `hv_1` | 1 | `hv_pmt_top` | − | 1000.0 | 20 | 1100 | 20 | 20 | 10.0 |
+| 19198 | `hv_1` | 2 | `hv_ts` (top screen) | − | 500.0 | 5 | 1710 | 50 | 50 | 10.0 |
+| 19198 | `hv_1` | 3 | `hv_bs` (bottom screen) | − | 600.0 | 5 | 2000 | 50 | 50 | 10.0 |
+| 79 | `hv_2` | 0 | `hv_cathode` | − | 2250.0 | 310 | 2500 | 25 | 50 | 10.0 |
+| 79 | `hv_2` | 1 | `hv_gate` | − | 1750.0 | 10 | 3750 | 50 | 100 | 10.0 |
+| 79 | `hv_2` | 2 | `hv_anode` | **+** | 4200.0 | 10 | 4500 | 50 | 50 | 10.0 |
+| 79 | `hv_2` | 3 | `hv_nai` (external NaI) | **+** | 600.0 | 150 | 1000 | 50 | 50 | 10.0 |
+
+The names come from the lab; the electrical values were read from the boards themselves. **The two agree independently**: all four channels named as negative on `hv_1` report `POL:-`, and exactly the two named as positive on `hv_2` report `POL:+`. That cross-check is why this table is recorded as confirmed rather than as a transcription.
+
+The `VSET` column is the value each channel was left at, not a commissioning setpoint — all eight channels read `VMON` 0.0 and `STAT` 1024 (disabled) when this was taken. Treat it as the expected operating point to be confirmed, not as a target the software may drive to.
+
+Two asymmetries worth a question before milestone 8, since both look more like history than intent: `hv_pmt_bot` ramps at 1 V/s where every other channel is 20–50, and trips at 2.0 µA where every other channel is 10.0.
+
+### Sign convention — decide before any HV value is stored
+
+The supplies report `VMON` and `VSET` as **unsigned magnitudes**, with polarity as a separate `POL` parameter. A cathode at minus 2250 volts answers `2250.0`. Software must therefore apply the sign itself, and this is almost certainly what `DAISY_polarity_signs.vi` exists to do — the name and the hardware behaviour fit exactly.
+
+**Recommendation: store signed values.** `hv_cathode` is written as `-2250.0`, `hv_anode` as `+4200.0`. The alternative — storing magnitudes and carrying polarity as metadata — makes a plot of the cathode climb upwards as the voltage becomes more negative, and puts two channels of opposite sign on the same axis with no visible difference. This system already carries one instance of a value that was numerically right and semantically wrong for years (§4.2, the flow in "SLPM"), and an unsigned cathode voltage is the same failure waiting to happen.
+
+The cost is that `VSET` writes must be signed consistently too, and the sign stripped before the value goes back on the wire. That belongs in one place in `caen.py`, tested both directions.
+
+**TBD** — confirm the convention, then state it in `channels.yaml` and never revisit it: changing it later silently inverts history. The polarity read from each channel is also compared against the expected polarity in `devices.yaml` at startup, and a mismatch is an alarm, not a correction (§8.3).
+
+`anode_timing.vi` remains **TBD** — determine whether its behaviour must be reproduced before the control path is built (§16).
 
 ### 7.3 Lake Shore service (`devices/lakeshore.py`)
 
@@ -1070,14 +1133,16 @@ Everything marked **TBD** above, consolidated:
 |---|---|---|
 | Physical location of each `tt*` tag, and what the 1xx/2xx/3xx series denote | milestone 3 | the P&ID gives the position on the drawing; confirm against hardware and record in `description` |
 | Alarm thresholds and responses | milestone 6 | `Error and Alarm` tab screenshot |
-| HV channel → supply/index mapping | milestone 5 | `High Voltage Supply` tab screenshot |
-| HV setpoints, ramp rates, trip limits | milestone 8 | LabVIEW tab + settings stored on the CAEN units |
-| USB serial numbers of the two CAEN units | milestone 5 | `list_ports` on the lab PC |
+| ~~HV channel → supply/index mapping, and which board is `hv_1` vs `hv_2`~~ | — | **Resolved 17 September 2026.** Full map in §7.2, cross-checked against the polarity reported by each channel. |
+| HV setpoints, ramp rates, trip limits | milestone 8 | **Read from the boards, §7.2.** What remains is confirming they are intended rather than inherited — in particular the `RUP` of 1 V/s and `TRIP` of 2.0 µA on `hv_pmt_bot`. |
+| **HV sign convention: signed values or magnitudes?** | milestone 5 | §7.2. Must be settled before the first HV value is stored; changing it later inverts history. |
+| ~~USB serial numbers of the two CAEN units~~ | — | **Resolved 17 September 2026.** The units carry no USB serial number at all; board serials `19198` and `79` read via `BDSNUM` and recorded in §4.1. |
 | Lake Shore baud rate | milestone 5 | instrument front panel |
 | UPS model and connection | milestone 6 | inspect the unit |
-| Are `9207/ai8:15` current channels used? | milestone 2 | inspect wiring |
+| ~~Are `9207/ai8:15` current channels used?~~ | — | **Resolved 17 September 2026: not used.** No current task is created (§7.1). |
 | Engineering units for the pressure channels (`p101`–`p104`, `pmain`) | milestone 4 | lab knowledge, or the transducer datasheets |
-| Purpose of `anode_timing.vi`, `DAISY_polarity_signs.vi` | milestone 8 | read the block diagrams |
+| Purpose of `anode_timing.vi` | milestone 8 | read the block diagram |
+| ~~Purpose of `DAISY_polarity_signs.vi`~~ | — | **Explained 17 September 2026**, near-certainly: the supplies report unsigned magnitudes with `POL` separate, so the sign must be applied in software (§7.2). Confirm against the block diagram when convenient. |
 | Heater shut-off and HV kill: hardware or software? | milestone 8 | decision |
 | How far back the CSV history goes, and whether the column count is constant throughout | milestone 4 | the check in §9.6 |
 | Whether the P&ID of 17 May 2024 is still current | milestone 7 | ask the authors before the mimic is built on it |
