@@ -25,6 +25,7 @@ CONFIG_DIR = Path(os.environ.get("XAMS_CONFIG_DIR", ROOT / "config"))
 
 VALID_KINDS = {
     "voltage", "current", "rtd", "hv_vmon", "hv_imon", "temperature", "status",
+    "power",
 }
 
 
@@ -44,6 +45,15 @@ class Channel:
     sign: int = 1
     rtd: dict | None = None
     limits: dict | None = None
+    derive: dict | None = None
+    """Compute this channel from another, via a named transform.
+
+    {from: <channel>, transform: <name in scaling.TRANSFORMS>, **parameters}
+
+    Used where the relationship is not linear and so cannot be expressed as
+    an offset and a multiplier — the Lake Shore heater wattage, which goes as
+    the square of the percentage.
+    """
     legacy: str | None = None
     enabled: bool = True
     description: str = ""
@@ -82,8 +92,21 @@ class Config:
 def _read(path: Path) -> dict:
     if not path.exists():
         raise ConfigError(f"missing configuration file: {path}")
-    with path.open(encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        # A malformed file is a clean failure with the line number, not a
+        # traceback. The same principle as a busy device in §6.1: the reader
+        # needs to know what to fix, not where the parser gave up.
+        where = ""
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            where = f" at line {mark.line + 1}, column {mark.column + 1}"
+        problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+        raise ConfigError(f"{path.name} is not valid YAML{where}: {problem}") from exc
+    if data is not None and not isinstance(data, dict):
+        raise ConfigError(f"{path.name} must contain a mapping, got {type(data).__name__}")
     return data if data is not None else {}
 
 
@@ -156,6 +179,18 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
         if sign not in (-1, 1):
             raise ConfigError(f"channel {name!r}: sign must be -1 or 1, got {sign!r}")
 
+        derive = e.get("derive")
+        if derive is not None:
+            from .scaling import TRANSFORMS
+            for key in ("from", "transform"):
+                if key not in derive:
+                    raise ConfigError(
+                        f"channel {name!r}: derive block needs {key!r}")
+            if derive["transform"] not in TRANSFORMS:
+                raise ConfigError(
+                    f"channel {name!r}: unknown transform "
+                    f"{derive['transform']!r}; known: {sorted(TRANSFORMS)}")
+
         limits = e.get("limits")
         if limits is not None:
             if not {"min", "max"} <= set(limits):
@@ -165,8 +200,11 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
 
         # Two channels on one physical input is legitimate for HV (vmon and
         # imon share an index) but a mistake anywhere else.
+        # A derived channel shares the physical input it is computed from,
+        # exactly as hv_vmon and hv_imon share a channel index.
         phys_key = (device, str(e["phys"]))
-        if phys_key in seen_phys and not kind.startswith("hv_"):
+        shares_legitimately = kind.startswith("hv_") or derive is not None
+        if phys_key in seen_phys and not shares_legitimately:
             raise ConfigError(
                 f"channel {name!r}: physical input {phys_key[1]!r} on {device!r} "
                 f"is already used by {seen_phys[phys_key]!r}"
@@ -184,6 +222,7 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
             sign=sign,
             rtd=e.get("rtd"),
             limits=limits,
+            derive=derive,
             legacy=e.get("legacy"),
             enabled=bool(e.get("enabled", True)),
             description=str(e.get("description", "")),

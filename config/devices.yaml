@@ -78,8 +78,21 @@ lakeshore:
   #   output 2: setpoint -100.00  range 0  PID 50, 20, 120
 
 ups:
-  # APC, confirmed on the lab PC 17 Sep 2026. PowerChute Personal Edition 3.1.0
-  # is installed; this service reads the HID directly rather than through it.
-  model: "APC (USB HID)"
+  # APC, confirmed on the lab PC 17 Sep 2026. Reports itself as
+  # "Legacy Communication Card FW:LCC 03.1 / ID=5004".
+  #
+  # READ DIRECTLY FROM THE HID, alongside PowerChute Personal Edition 3.1.0.
+  # HID input is shareable on Windows, so PowerChute keeps doing its
+  # safe-shutdown job and this service just reads the same feature reports.
+  #
+  # The two routes that do NOT work here, recorded so nobody retries them:
+  #   Win32_Battery and the other WMI battery classes report no instances.
+  #   GetSystemPowerStatus answers but says BatteryFlag=128, "no system
+  #     battery" - its ACLineStatus describes the wall socket, not the UPS,
+  #     and would read "on line power" while the UPS ran on battery.
+  #
+  # Status at startup, 17 Sep 2026: ACPresent=1, battery 100%,
+  # RunTimeToEmpty 1579 s (26 min), not discharging, no replacement needed.
+  model: "APC Legacy Communication Card"
   match: {vid: "051D", pid: "0002", serial: "3S2005X18782"}
   connection: usb-hid

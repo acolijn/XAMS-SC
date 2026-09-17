@@ -22,7 +22,7 @@ channels:
     kind: voltage
     offset: 1.0
     multiplier: 25.0
-    unit: TBD                 # §16 — must not be guessed
+    unit: bar                 # §16 — must not be guessed
     legacy: P101
     description: TBD — pressure, 1xx series
 
@@ -30,7 +30,7 @@ channels:
     device: cdaq
     phys: 9207/ai1
     kind: voltage
-    unit: TBD
+    unit: bar
     legacy: P102
     description: TBD — pressure, 1xx series
 
@@ -38,7 +38,7 @@ channels:
     device: cdaq
     phys: 9207/ai2
     kind: voltage
-    unit: TBD
+    unit: bar
     legacy: P103
     description: TBD — pressure, 1xx series
 
@@ -46,7 +46,7 @@ channels:
     device: cdaq
     phys: 9207/ai3
     kind: voltage
-    unit: TBD
+    unit: bar
     legacy: P104
     description: TBD — pressure, 1xx series
 
@@ -65,7 +65,14 @@ channels:
     kind: voltage
     offset: 0.0
     multiplier: 0.714
-    unit: TBD                 # front panel shows "1.53" without a unit (§4.2)
+    # BAR. Established 17 September 2026 from the alarm limits supplied by
+    # A.P. Colijn ("high 2.1 bar, hihi 2.5 bar, low 0.9 bar"), not guessed --
+    # the LabVIEW front panel shows "1.53" with no unit at all, which is why
+    # this sat as TBD until somebody who knew said so (section 4.2, section 16).
+    #
+    # p101-p104 remain TBD. They are a different transducer with a different
+    # multiplier and nothing here says anything about them.
+    unit: bar
     legacy: Pmain
     description: detector pressure
     log_minmax: true
@@ -229,6 +236,39 @@ channels:
      description: "Lake Shore heater output 1"}
   - {name: ls_heater_2, device: lakeshore, phys: "2", kind: status, unit: percent,
      description: "Lake Shore heater output 2"}
+
+  # Heater output in watts, derived from the percentage above.
+  #
+  #     volts = percent / 100 * full_scale_v
+  #     watts = volts^2 / resistance_ohm
+  #
+  # Quadratic, so it cannot be written as an offset and a multiplier - hence a
+  # named transform rather than ordinary scaling. The percentage is kept as its
+  # own channel and is the instrument's own number; this is derived from it and
+  # can always be recomputed.
+  #
+  # The constants describe the heater at its present range setting (3, high).
+  # The 335 switches heater range in roughly tenfold power steps, so changing
+  # the range on the front panel makes these watts wrong by about that factor
+  # while the percentage stays plausible. A range guard was offered and
+  # declined on 17 Sep 2026; noted here so a surprising wattage has an obvious
+  # first place to look.
+  - name: ls_heater_1_w
+    device: lakeshore
+    phys: "1"
+    kind: power
+    unit: W
+    derive: {from: ls_heater_1, transform: heater_power,
+             full_scale_v: 45.4, resistance_ohm: 31.2}
+    description: "Lake Shore heater output 1, in watts"
+  - name: ls_heater_2_w
+    device: lakeshore
+    phys: "2"
+    kind: power
+    unit: W
+    derive: {from: ls_heater_2, transform: heater_power,
+             full_scale_v: 45.4, resistance_ohm: 31.2}
+    description: "Lake Shore heater output 2, in watts"
 
   # ------------------------------------------------------------------
   # UPS — APC over USB HID

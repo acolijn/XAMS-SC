@@ -29,7 +29,9 @@ import threading
 import time
 from pathlib import Path
 
-from .bus import Bus
+import json
+
+from .bus import TOPIC_ACK, TOPIC_RELOAD, Bus
 from .config import Config
 from .model import Measurement, Quality, ServiceState, utcnow
 
@@ -125,6 +127,56 @@ class BaseService:
     def read(self) -> list[Measurement]:
         """One acquisition cycle. Raise on failure; the loop handles backoff."""
         raise NotImplementedError
+
+    def on_reload(self, config: Config) -> bool:
+        """Apply a new configuration without restarting. See DESIGN.md §12.
+
+        Return True if this service has fully applied it, False if it needs a
+        restart instead. The default is False: a device service holds open
+        DAQmx tasks and serial ports built from the channel map, and rebuilding
+        those under a running acquisition is not something to do implicitly.
+
+        **Returning False is not a failure.** It is how `xams-ctl reload`
+        learns to tell the operator which services still need a restart,
+        rather than reporting a success it did not achieve.
+        """
+        return False
+
+    def _handle_reload(self, topic: str, payload: str) -> None:
+        from .config import ConfigError
+        from .config import load as load_config
+
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            log.error("reload refused, configuration is invalid: %s", exc)
+            self.bus.publish_raw(
+                f"{TOPIC_ACK}/{self.name}/reload",
+                json.dumps({"service": self.name, "applied": False,
+                            "error": str(exc)}))
+            return
+
+        try:
+            applied = self.on_reload(config)
+        except Exception as exc:
+            log.exception("reload raised")
+            applied = False
+            self.bus.publish_raw(
+                f"{TOPIC_ACK}/{self.name}/reload",
+                json.dumps({"service": self.name, "applied": False,
+                            "error": str(exc)}))
+            return
+
+        if applied:
+            self.config = config
+            log.info("configuration reloaded (config %s)", config.config_hash)
+        else:
+            log.info("configuration changed (config %s) but this service needs "
+                     "a restart to apply it", config.config_hash)
+        self.bus.publish_raw(
+            f"{TOPIC_ACK}/{self.name}/reload",
+            json.dumps({"service": self.name, "applied": applied,
+                        "config": config.config_hash}))
 
     def reconnect(self) -> bool:
         """Re-establish the link after a failure, and RE-VERIFY IDENTITY.
@@ -222,6 +274,7 @@ class BaseService:
             return 1
 
         self._install_signal_handlers()
+        self.bus.subscribe(TOPIC_RELOAD, self._handle_reload)
         self.bus.connect()
         self.set_state(ServiceState.STARTING)
 

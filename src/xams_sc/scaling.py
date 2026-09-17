@@ -43,6 +43,42 @@ def strip_sign(value: float) -> float:
     return abs(value)
 
 
+def heater_power(percent: float, full_scale_v: float,
+                 resistance_ohm: float) -> float:
+    """Lake Shore heater output, from percent of full scale to watts.
+
+        volts = percent / 100 * full_scale_v
+        watts = volts^2 / resistance_ohm
+
+    **This is quadratic, so it cannot be expressed as an offset and a
+    multiplier.** That is why it is a named transform rather than another row
+    of the ordinary scaling table: `(raw - offset) * multiplier` is linear by
+    definition and §4.2 says not to bend that convention.
+
+    NOTE ON HEATER RANGE. The 335 switches heater range in roughly tenfold
+    power steps, and `full_scale_v` describes one particular range — 3 (high)
+    at the time these constants were supplied. If the range is changed on the
+    instrument, the watts computed here become wrong by about that factor
+    while the percentage stays perfectly plausible.
+
+    A range guard was offered and deliberately declined on 17 September 2026.
+    It is recorded here so that a future reader finding a surprising wattage
+    knows where to look first, not as a reason to add one.
+    """
+    volts = percent / 100.0 * full_scale_v
+    return volts * volts / resistance_ohm
+
+
+# Named transforms available to channels.yaml via `derive.transform`.
+#
+# A NAME, never an expression. Putting an eval-able formula string in the
+# configuration would make config into code, and channels.yaml is edited by
+# people who should not have to think about what they are executing.
+TRANSFORMS = {
+    "heater_power": heater_power,
+}
+
+
 def integrate_step(flow_per_minute: float, dt_seconds: float) -> float:
     """Mass passed during one interval, in grams.
 

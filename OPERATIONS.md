@@ -250,15 +250,58 @@ the frontend never asked, which rules out the database, the SQL, the time range
 and the credentials in one step — and points at the datasource or the dashboard
 document instead.
 
-### Grafana: a dashboard edit does not take effect
+### Editing a dashboard, and getting it into git
 
-Provisioned dashboards are re-read from `grafana/dashboards/*.json`. If a change
-to the file does not appear, restart Grafana.
+Dashboards are **not** provisioned from a file, so the Grafana UI edits and
+saves them normally. Provisioning would refuse every save with "cannot be
+saved from the Grafana UI because it has been provisioned from another
+source", and the setting that permits it is only read when the service starts.
 
-`allowUiUpdates` is **false** so the file always wins. To change a dashboard:
-edit it in the UI until it looks right, **export the JSON**, commit it to
-`grafana/dashboards/`, and let provisioning apply it. A dashboard that exists
-only in Grafana's own database is lost when that database is.
+**After editing in the UI**, put it in git:
+
+```powershell
+.\.venv\Scripts\python.exe tools\save_dashboard.py --password <grafana password>
+git add grafana/dashboards-archive && git commit -m "grafana: update dashboards"
+```
+
+**A dashboard that exists only in Grafana's own database is lost when that
+database is.** That command is the one step that makes §12 true, and nothing
+runs it for you.
+
+**On a fresh install**, put them back:
+
+```powershell
+.\.venv\Scripts\python.exe tools\save_dashboard.py --load --password <pw>
+```
+
+**To check whether Grafana and git have drifted:**
+
+```powershell
+.\.venv\Scripts\python.exe tools\save_dashboard.py --check --password <pw>
+```
+
+Worth running before a reinstall, and after anyone has been editing.
+
+### Grafana: a panel mixing channels from two services shows nothing
+
+Every channel read by one service shares a timestamp; a different service is on
+its own loop phase and never lands on the same instant. Grafana pivots a long
+result into a wide frame **by exact timestamp**, so a panel mixing two services
+produces rows that are ~50% NULL, and with `spanNulls` off there are no two
+adjacent points to draw a line between — the series vanishes entirely.
+
+Bucket the query so every channel lands on the same grid:
+
+```sql
+SELECT $__timeGroupAlias(t, $__interval), channel AS metric, avg(value) AS value
+FROM meas WHERE <selection> GROUP BY 1, 2 ORDER BY 1
+```
+
+All the provisioned panels do this. Use it for any new one.
+
+`spanNulls` is set to **45000 ms**, not `true`: enough to bridge sampling
+jitter between services, far too short to hide a real outage. A service being
+down still breaks the line, which is how a gap is supposed to look (§9.1).
 
 ### psql reports "NOTICE: relation already exists, skipping"
 

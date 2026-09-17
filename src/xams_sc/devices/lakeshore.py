@@ -131,7 +131,11 @@ class LakeShoreService(BaseService):
         super().__init__(config, bus, simulate=simulate, **kw)
         self._spec = config.devices.get("lakeshore", {}) or {}
         self._device: LakeShore | None = None
-        self._channels = config.channels_for("lakeshore")
+        all_channels = config.channels_for("lakeshore")
+        # Read channels come from the instrument; derived ones are computed
+        # from a read channel after the fact.
+        self._channels = [c for c in all_channels if c.derive is None]
+        self._derived = [c for c in all_channels if c.derive is not None]
 
     def verify_identity(self) -> bool:
         if self.simulate:
@@ -266,6 +270,45 @@ class LakeShoreService(BaseService):
 
         if out and failures == len(out):
             raise RuntimeError("Lake Shore did not answer any query; link lost")
+
+        out.extend(self._derive_from(out, now))
+        return out
+
+    def _derive_from(self, readings: list[Measurement],
+                     now) -> list[Measurement]:
+        """Compute the derived channels from the readings just taken.
+
+        Same timestamp as their source, deliberately: a derived value and the
+        reading it came from must line up exactly, or a plot of the two will
+        show a phantom lag.
+
+        A derived channel inherits its source's quality. If the heater
+        percentage could not be read, its wattage is not zero — it is unknown.
+        """
+        from ..scaling import TRANSFORMS
+
+        by_name = {m.channel: m for m in readings}
+        out = []
+        for ch in self._derived:
+            source = by_name.get(ch.derive["from"])
+            if source is None:
+                continue
+            if source.quality is not Quality.OK or source.value is None:
+                out.append(Measurement(t=now, channel=ch.name, value=None,
+                                       unit=ch.unit, quality=source.quality))
+                continue
+            params = {k: v for k, v in ch.derive.items()
+                      if k not in ("from", "transform")}
+            try:
+                value = TRANSFORMS[ch.derive["transform"]](source.value, **params)
+            except Exception:
+                log.exception("could not derive %s from %s", ch.name, source.channel)
+                out.append(Measurement(t=now, channel=ch.name, value=None,
+                                       unit=ch.unit, quality=Quality.ERROR))
+                continue
+            out.append(Measurement(t=now, channel=ch.name, value=value,
+                                   unit=ch.unit, raw=source.value,
+                                   quality=Quality.OK, src=source.src))
         return out
 
     def _read_simulated(self) -> list[Measurement]:

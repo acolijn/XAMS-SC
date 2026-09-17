@@ -33,8 +33,7 @@ from ..config import CONFIG_DIR, ConfigError, load
 #
 #     python -m xams_sc.devices sim
 #
-# Real drivers join this list as milestone 6 is built (ups).
-SERVICES = ["sinks", "cdaq", "caen", "lakeshore"]
+SERVICES = ["sinks", "cdaq", "caen", "lakeshore", "ups", "derived", "alarms"]
 
 PID_DIR = Path("logs")
 
@@ -64,8 +63,8 @@ def _running(name: str) -> int | None:
 
 
 def _command_for(name: str) -> list[str]:
-    if name == "sinks":
-        return [sys.executable, "-m", "xams_sc.sinks"]
+    if name in ("sinks", "alarms"):
+        return [sys.executable, "-m", f"xams_sc.{name}"]
     return [sys.executable, "-m", "xams_sc.devices", name]
 
 
@@ -86,7 +85,25 @@ def cmd_start(args) -> int:
     return 0
 
 
+def _lock_held(name: str) -> bool:
+    """True while a service still holds its lock file.
+
+    On Windows an open file cannot be deleted, so being able to remove it is
+    proof that nothing holds it. The lock is recreated by the service itself
+    on the next start, so removing a released one here is harmless.
+    """
+    path = PID_DIR / f"{name}.lock"
+    if not path.exists():
+        return False
+    try:
+        path.unlink()
+        return False
+    except OSError:
+        return True
+
+
 def cmd_stop(args) -> int:
+    stopped = []
     for name in reversed(SERVICES):
         pid = _running(name)
         if not pid:
@@ -96,14 +113,39 @@ def cmd_stop(args) -> int:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                        capture_output=True, timeout=15)
         _pid_file(name).unlink(missing_ok=True)
+        stopped.append(name)
         print(f"  {name:12s} stopped")
+
+    # WAIT FOR THE PROCESSES TO ACTUALLY GO.
+    #
+    # taskkill returns as soon as it has asked. The process may take a moment
+    # to die, and until it does it still holds its single-instance lock and
+    # its hardware. `restart` then failed with "another cdaq service is
+    # already running" — the lock working exactly as intended against a stop
+    # that had not finished. Waiting for the locks to clear is what makes
+    # stop mean stopped.
+    held = []
+    if stopped:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            held = [n for n in stopped if _lock_held(n)]
+            if not held:
+                break
+            time.sleep(0.3)
+        if held:
+            print(f"\n  WARNING: still holding a lock after 15s: {', '.join(held)}")
+            print("  Their hardware may not be released yet.")
+            return 1
+
     print("\nAll hardware released. LabVIEW can be started.")
     return 0
 
 
 def cmd_restart(args) -> int:
-    cmd_stop(args)
-    time.sleep(1)
+    if cmd_stop(args) != 0:
+        print("\nNot restarting: something did not stop cleanly.")
+        return 1
+    print()
     return cmd_start(args)
 
 
@@ -182,11 +224,42 @@ def cmd_reload(args) -> int:
         bus.disconnect()
         return 1
 
+    # Collect acknowledgements and report what ACTUALLY reloaded.
+    #
+    # An earlier version published the command and printed "reload requested",
+    # which was true and useless: nothing subscribed to the topic, so the
+    # command reported success while changing nothing. A threshold edit
+    # followed by `reload` left the old limit in force, silently. Reporting
+    # only what came back is the fix.
+    acks: dict[str, dict] = {}
+    bus.subscribe("xams/ack/+/reload",
+                  lambda t, p: acks.__setitem__(t.split("/")[2], json.loads(p)))
+    time.sleep(0.3)
     bus.publish_raw("xams/cmd/all/reload", json.dumps({"config": config.config_hash}))
-    time.sleep(0.5)
+    time.sleep(2.5)
     bus.disconnect()
-    print(f"reload requested (config {config.config_hash})")
-    return 0
+
+    if not acks:
+        print("No service acknowledged the reload.")
+        print("Nothing has changed. Are the services running?")
+        return 1
+
+    applied = sorted(k for k, v in acks.items() if v.get("applied"))
+    refused = sorted(k for k, v in acks.items() if not v.get("applied"))
+
+    print(f"config {config.config_hash}")
+    for name in applied:
+        print(f"  {name:12s} reloaded")
+    for name in refused:
+        why = acks[name].get("error")
+        print(f"  {name:12s} {'REFUSED: ' + why if why else 'needs a restart to apply this'}")
+
+    if refused and not any(acks[n].get("error") for n in refused):
+        print()
+        print("Services that hold hardware rebuild their tasks from the channel")
+        print("map at startup, so a channel change needs:")
+        print("  xams-ctl restart")
+    return 0 if not any(acks[n].get("error") for n in refused) else 2
 
 
 def cmd_check(args) -> int:

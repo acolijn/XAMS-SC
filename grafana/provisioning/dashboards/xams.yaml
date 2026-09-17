@@ -1,27 +1,33 @@
-# Tells Grafana where the dashboard JSON lives. See DESIGN.md §12.
+# Dashboard provisioning is DISABLED, deliberately. See DESIGN.md section 12.
 #
-# Update the path to match where the repository is cloned on this machine.
+# Grafana refuses every UI save of a provisioned dashboard:
+#
+#   "This dashboard cannot be saved from the Grafana UI because it has been
+#    provisioned from another source."
+#
+# The setting that would permit it, allowUiUpdates, is only read when the
+# service STARTS - the admin API reload updates the config but leaves each
+# dashboard's provisioning record in place. Restarting the service needs
+# administrator rights, and on this machine that could not be done. Editing a
+# dashboard is a daily action; it must not depend on a service restart.
+#
+# So dashboards are no longer provisioned from a file. Instead:
+#
+#   Grafana owns the live dashboard, and the UI edits and saves it freely.
+#   grafana/dashboards-archive/ is the copy that git tracks.
+#   tools/save_dashboard.py moves it in both directions.
+#
+# After editing in the UI:
+#     python tools/save_dashboard.py --password <pw>    then commit
+# On a fresh install:
+#     python tools/save_dashboard.py --load --password <pw>
+#
+# section 12's requirement is that a dashboard survives losing Grafana's own
+# database. An archive in git plus a load command satisfies that exactly as
+# well as provisioning did, and does not make every edit a fight.
+#
+# The DATASOURCE is still provisioned - see ../datasources/xams.yaml. Nothing
+# edits a datasource by hand, so it has none of this friction.
 
 apiVersion: 1
-
-providers:
-  - name: XAMS
-    orgId: 1
-    folder: XAMS
-    type: file
-    disableDeletion: false
-    updateIntervalSeconds: 30
-    # FALSE, deliberately. With true, a dashboard saved in the UI wins over the
-    # file, and the two silently diverge - which happened during milestone 1:
-    # a corrected overview.json sat on disk for twenty minutes while Grafana
-    # kept serving the broken stored copy, and even a service restart did not
-    # replace it. That breaks the promise of §12, that a dashboard committed to
-    # git appears everywhere at the next `git pull`.
-    #
-    # The workflow is therefore: edit in the Grafana UI to get it right, then
-    # export the JSON, commit it, and let provisioning apply it. The file is
-    # the source of truth; the UI is where you draft.
-    allowUiUpdates: false
-    options:
-      path: C:/Users/localadmin/Documents/XAMS-SC/grafana/dashboards
-      foldersFromFilesStructure: false
+providers: []

@@ -86,7 +86,12 @@ _T_9216_2 = [None] * 8                      # module entirely unconnected
 _T_9226 = ["tt201", "tt202", "tt203", "tt204", "tt205", "tt206", "tt207", None]
 _V_9207 = ["p101", "p102", "p103", "p104", None, "pmain", None, "fm101"]
 _I_9207 = [None] * 8                        # current inputs, unused (§7.1)
-_LAKESHORE = ["ls_sensor_a", "ls_sensor_b", "ls_heater_1", None]
+# The Lake Shore sensor inputs were renamed ls_sensor_a/b -> tt401/tt402 on
+# 17 Sep 2026, bringing them into the plant tag scheme. Historic data must be
+# imported under the CURRENT names or the history is orphaned under a channel
+# that no longer exists - which is exactly why section 3 says names are
+# permanent. Any already-imported rows were renamed in place at the same time.
+_LAKESHORE = ["tt401", "tt402", "ls_heater_1", None]
 
 LAYOUTS = {
     # Time + 24 temperatures + 8 voltages + 8 currents + 4 Lake Shore + 2 time
