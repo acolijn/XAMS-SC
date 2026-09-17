@@ -17,7 +17,8 @@ import threading
 import time
 from dataclasses import dataclass
 
-from ..bus import TOPIC_ALARM, TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, Bus
+from ..bus import (TOPIC_ALARM, TOPIC_FLOW_RESET, TOPIC_MEAS, TOPIC_RELOAD,
+                   TOPIC_STATUS, Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ class SystemState:
         self._states: dict[str, str] = {}
         self._alarms: dict[str, dict] = {}
         self._flow_gaps: float = 0.0
+        self._flow_ack: dict | None = None
         self.started = utcnow()
 
     # ---------------------------------------------------------------- inputs
@@ -150,7 +152,35 @@ class SystemState:
                              json.dumps({"service": "webui", "applied": True,
                                          "config": new_config.config_hash}))
 
+    def reset_flow(self, who: str, timeout_s: float = 8.0) -> dict | None:
+        """Close the running flow period and open a new one (§7.5).
+
+        Returns the closed period, or None if the derived service did not
+        acknowledge. **Nothing is erased**: the closed period keeps its total
+        and its gaps, which is the whole difference between this and zeroing a
+        counter.
+
+        The UI does not perform the reset itself — it asks, over the bus, and
+        reports what came back. The integrator owns its own state, and a web
+        request must not be able to reach around it.
+        """
+        self._flow_ack = None
+        self.bus.publish_raw(TOPIC_FLOW_RESET, json.dumps({"by": who}))
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self._flow_ack is not None:
+                return self._flow_ack
+            time.sleep(0.15)
+        return None
+
+    def _on_flow_ack(self, topic: str, payload: str) -> None:
+        try:
+            self._flow_ack = json.loads(payload)
+        except ValueError:
+            pass
+
     def start(self) -> None:
+        self.bus.subscribe("xams/ack/derived/flow_reset", self._on_flow_ack)
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)
         self.bus.subscribe(f"{TOPIC_ALARM}/#", self._on_alarm)
@@ -251,10 +281,11 @@ class SystemState:
         return sorted(faults, key=lambda f: f["channel"])
 
     def flow_total(self) -> dict:
-        view = self.channel("fm101_total")
         with self._lock:
             gaps = self._flow_gaps
-        return {"view": view, "gaps_s": gaps}
+        return {"view": self.channel("fm101_total"),
+                "rate": self.channel("fm101"),
+                "gaps_s": gaps}
 
     def uptime(self) -> str:
         seconds = (utcnow() - self.started).total_seconds()

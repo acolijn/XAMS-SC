@@ -21,6 +21,10 @@ hardware = [
 api = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    # Required to read the flow-reset form (§7.5). NOT optional despite
+    # looking like it: FastAPI raises at import time on a Form parameter
+    # when this is absent, so the web UI would not start at all.
+    "python-multipart>=0.0.9",
 ]
 # Alarm delivery. The same gateway the LabVIEW system uses, so the numbers,
 # the message format and the costs are already known (§11).
@@ -29,6 +33,7 @@ notify = [
 ]
 dev = [
     "pytest>=8.0",
+    "httpx>=0.27",       # fastapi.testclient, for the web UI tests
 ]
 
 [project.scripts]

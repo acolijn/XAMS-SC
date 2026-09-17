@@ -84,6 +84,17 @@
         {{ f.formatted() if f else '—' }}
         <span class="unit" style="font-size:1rem">g</span>
       </div>
+      {# The rate as well as the total: the total answers "how much has gone
+         through", the rate answers "is it flowing now", and reading the
+         second off a rising number is guesswork. Smaller, because the total
+         is what this card is for. #}
+      {% set r = flow.rate %}
+      <div style="font-size:1.15rem;font-variant-numeric:tabular-nums;
+                  font-family:Consolas,monospace;margin-top:.15rem"
+           class="{{ '' if r and r.healthy else 'dim' }}">
+        {{ r.formatted() if r else '—' }}
+        <span class="unit" style="font-size:.8rem">{{ r.unit if r else '' }}</span>
+      </div>
       <div class="dim" style="margin-top:.5rem">
         since the period started
         {% if flow.gaps_s > 0 %}
@@ -93,11 +104,29 @@
           <br>no gaps in this period
         {% endif %}
       </div>
+
+      {% if reset == 'ok' %}
+        <div class="flash good">Period closed at {{ reset_total }} g. A new
+          one is running; the old one is kept in <code>flow_periods</code>.</div>
+      {% elif reset == 'failed' %}
+        <div class="flash bad">The derived service did not acknowledge.
+          <strong>Nothing was reset.</strong> Is it running?</div>
+      {% endif %}
+
+      {# §8.1 wants a confirmation step on anything that acts. The typed name
+         is the audit trail (§10) — there is no login here, so it is taken on
+         trust, exactly as `xams-ctl flow-reset --by` does. #}
+      <form method="post" action="/flow/reset" class="reset-form"
+            onsubmit="return confirm('Close the current flow period and start a new one?\n\nNothing is erased — the period is kept in flow_periods.');">
+        <input type="text" name="by" maxlength="40" placeholder="your name"
+               aria-label="who is resetting the integrator">
+        <button type="submit">Reset</button>
+      </form>
     </div>
     <div class="note">
       Reset closes the period into <code>flow_periods</code> and opens a new
-      one; nothing is erased (§7.5):<br>
-      <code>xams-ctl flow-reset --by &lt;you&gt;</code>
+      one; nothing is erased (§7.5). Also
+      <code>xams-ctl flow-reset --by &lt;you&gt;</code>.
     </div>
   </div>
 

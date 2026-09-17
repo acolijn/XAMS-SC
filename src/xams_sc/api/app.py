@@ -23,8 +23,9 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
+                               RedirectResponse)
 from fastapi.templating import Jinja2Templates
 
 from ..bus import Bus
@@ -114,7 +115,37 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     unhealthy=state.unhealthy_channels(),
                     faults=state.known_faults(),
                     flow=state.flow_total(),
+                    reset=request.query_params.get("reset"),
+                    reset_total=request.query_params.get("total"),
                     ups=state.channels("ups"))
+
+    @app.post("/flow/reset")
+    def flow_reset(request: Request, by: str = Form("")):
+        """Close the flow period and open a new one (§7.5).
+
+        The one thing this UI can change, and it changes a RECORD, not an
+        instrument: the closed period keeps its total and its gaps in
+        `flow_periods`. That is the whole difference between this and zeroing
+        a counter, and it is why it can exist before milestone 8.
+
+        Audited like any other control action (§10), which means it needs a
+        name. There is no login on this UI, so the name is typed and taken on
+        trust — weak, but a weak attribution recorded honestly beats an
+        anonymous one, and it matches what `xams-ctl flow-reset --by` does.
+
+        POST, then redirect: a GET that mutates would fire on a refresh or a
+        prefetch, and this page refreshes itself every ten seconds.
+        """
+        who = (by or "").strip() or "webui (unnamed)"
+        closed = state.reset_flow(who)
+        if closed is None:
+            log.warning("flow reset by %s was not acknowledged", who)
+            return RedirectResponse("/?reset=failed", status_code=303)
+        log.info("flow period closed by %s: %.3f g over %.0f s of gaps",
+                 who, closed.get("total_g", 0.0), closed.get("gaps_s", 0.0))
+        return RedirectResponse(
+            "/?reset=ok&total=%.3f" % closed.get("total_g", 0.0),
+            status_code=303)
 
     @app.get("/status", response_class=HTMLResponse)
     def status(request: Request):
