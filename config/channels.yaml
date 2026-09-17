@@ -223,6 +223,42 @@ channels:
      description: "external NaI detector current"}
 
   # ------------------------------------------------------------------
+  # CAEN channel STATUS words (§7.2)
+  #
+  # The board's own STAT bitmask per channel, stored as a number. Bit 0 is
+  # the output being ENABLED and bit 10 its being DISABLED, and the two are
+  # not the same question as "is there voltage on it":
+  #
+  #   17 Sep 2026, hv_1 ch1 — STAT=1 (ON), VSET=0.0, VMON=0.0
+  #
+  # That channel is switched on and sitting at zero volts. Inferring on/off
+  # from VMON, as the web UI first did, calls that "off" and would call a
+  # supply whose setpoint had been wound to zero "off" as well, when it is
+  # live and one knob-turn from putting volts on an electrode.
+  #
+  # Storing the whole word rather than a decoded flag keeps TRIP, INTERLOCK,
+  # OVER_CURRENT and OVER_TEMP available. They are on the same wire and cost
+  # nothing extra to record, and alarming on them later (§16) needs no new
+  # channel and so no gap in their history.
+  # ------------------------------------------------------------------
+  - {name: hv_pmt_bot_stat, device: hv_1, phys: 0, kind: hv_stat, unit: bits,
+     description: "PMT bottom status word"}
+  - {name: hv_pmt_top_stat, device: hv_1, phys: 1, kind: hv_stat, unit: bits,
+     description: "PMT top status word"}
+  - {name: hv_ts_stat, device: hv_1, phys: 2, kind: hv_stat, unit: bits,
+     description: "top screen status word"}
+  - {name: hv_bs_stat, device: hv_1, phys: 3, kind: hv_stat, unit: bits,
+     description: "bottom screen status word"}
+  - {name: hv_cathode_stat, device: hv_2, phys: 0, kind: hv_stat, unit: bits,
+     description: "TPC cathode status word"}
+  - {name: hv_gate_stat, device: hv_2, phys: 1, kind: hv_stat, unit: bits,
+     description: "TPC gate status word"}
+  - {name: hv_anode_stat, device: hv_2, phys: 2, kind: hv_stat, unit: bits,
+     description: "TPC anode status word"}
+  - {name: hv_nai_stat, device: hv_2, phys: 3, kind: hv_stat, unit: bits,
+     description: "external NaI detector status word"}
+
+  # ------------------------------------------------------------------
   # Lake Shore 335
   # ------------------------------------------------------------------
   # UNIT IS CELSIUS, not Kelvin. An earlier draft of this file said K; the

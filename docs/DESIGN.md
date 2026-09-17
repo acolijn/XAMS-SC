@@ -434,6 +434,19 @@ A device is identified by **asking it who it is**, never by which COM port it ha
 5. **Two ports reporting the same identity is a fatal error.** It means either a duplicate serial or a bug, and there is no safe way to guess which unit is which. Refuse to start and say so.
 6. **Re-verify on every reconnect, not only at startup.** A service that has been running for months and reconnects after a USB glitch must re-confirm it is still talking to the same board. A reconnect is where a swap would otherwise slip through unnoticed.
 
+**On/off comes from the board's STAT word, never from VMON.** Each channel has a physical enable, and a channel can be enabled while sitting at zero volts. Read from the hardware on 17 September 2026:
+
+```
+hv_1 ch1 — STAT=1 (bit 0, ON), VSET=0.0, VMON=0.0
+every other channel — STAT=1024 (bit 10, DISABLED)
+```
+
+The web UI first inferred the state from `VMON > 1` and so showed that channel as **off**. It is not off: it is switched on, at zero, and one setpoint away from putting volts on a photomultiplier. A display that understates what is live is the kind of wrong that gets somebody hurt, so the word is read per channel and stored as `hv_*_stat`.
+
+The page distinguishes three states: **ON** (putting volts out), **enabled** (switched on, at zero) and **off** (output disabled). A trip, interlock or over-current replaces all three. Where the word cannot be read the page says **no reading** rather than falling back to the voltage — the fallback *is* the bug.
+
+The whole bitmask is stored rather than a decoded flag, so `TRIP`, `INTERLOCK`, `OVER_CURRENT` and `OVER_TEMP` come along on the same wire at no extra cost. Alarming on them later (§16) then needs no new channel, and so leaves no gap in their history.
+
 **Why `BDSNUM` is trustworthy as an identity.** It is set at the factory in the board's non-volatile configuration, and the ASCII protocol has no `CMD:SET,PAR:BDSNUM` — the board cannot be talked into changing its own name, by this software or any other. The query is `CMD:MON`, so it is read-only and safe to issue on every connect, including before identity is established and therefore while all writes are still refused. The thing that makes it safe is that it is the board's own answer about itself: every failure mode that breaks COM-number matching leaves it untouched.
 
 **What it does not survive, by design: a replaced board.** A unit returned under warranty comes back with a different serial, and the service will then refuse to start. That is the intended behaviour, not a gap — replacing an instrument should require a human to edit `devices.yaml` and notice that the history before and after that date came from different hardware.

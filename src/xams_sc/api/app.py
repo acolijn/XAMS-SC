@@ -30,6 +30,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..bus import Bus
 from ..config import load
+from ..hv_status import describe_status, is_enabled, status_faults
 from ..grafana import DriftWatcher
 from .state import SystemState
 
@@ -173,12 +174,27 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 index = int(ch.phys)
                 imon_name = ch.name.replace("_vmon", "_imon")
                 expect = (spec.get("expect") or {}).get(index, {})
+                stat_view = state.channel(ch.name.replace("_vmon", "_stat"))
+
+                # The board's own STAT word decides on/off, NEVER whether
+                # VMON is above zero: a channel can be enabled and sitting at
+                # zero volts (§7.2). None means the word could not be read,
+                # and the page says so rather than guessing from the voltage.
+                word = None
+                if (stat_view is not None and stat_view.healthy
+                        and stat_view.value is not None):
+                    word = int(stat_view.value)
+
                 channels.append({
                     "index": index,
                     "label": ch.name.replace("hv_", "").replace("_vmon", ""),
                     "description": ch.description,
                     "vmon": state.channel(ch.name),
                     "imon": state.channel(imon_name),
+                    "stat": stat_view,
+                    "enabled": None if word is None else is_enabled(word),
+                    "faults": [] if word is None else status_faults(word),
+                    "flags": "" if word is None else describe_status(word),
                     "expect": expect,
                     "limits": ch.limits or {},
                     "sign": ch.sign,
