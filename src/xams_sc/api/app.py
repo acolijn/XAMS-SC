@@ -30,6 +30,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..bus import Bus
 from ..config import load
+from ..grafana import DriftWatcher
 from .state import SystemState
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,10 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
     app = FastAPI(title="XAMS Slow Control", docs_url=None, redoc_url=None)
     app.state.system = state
     app.state.config = config
+    # Cached: this page reloads every 10 s and must not make an HTTP request
+    # to Grafana per view, nor wait on one.
+    drift = DriftWatcher()
+    app.state.drift = drift
 
     def page(request: Request, name: str, **context):
         status, css = state.overall()
@@ -115,6 +120,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     unhealthy=state.unhealthy_channels(),
                     faults=state.known_faults(),
                     flow=state.flow_total(),
+                    drift=drift.get(),
                     reset=request.query_params.get("reset"),
                     reset_total=request.query_params.get("total"),
                     ups=state.channels("ups"))
