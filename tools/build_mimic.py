@@ -2,7 +2,7 @@
 
     python tools/build_mimic.py
 
-Converts `docs/xams_piping_and_instrumentation.pdf` into
+Converts `notes/xams_piping_and_instrumentation.pdf` into
 `src/xams_sc/api/static/xams_pid.svg`, and adds an empty `<text>` node beside
 every instrument tag that corresponds to a channel. The web page fills those
 in; the SVG itself is a static file.
@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from xams_sc.config import load  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-PDF = ROOT / "docs" / "xams_piping_and_instrumentation.pdf"
+PDF = ROOT / "notes" / "xams_piping_and_instrumentation.pdf"
 OUT = ROOT / "src" / "xams_sc" / "api" / "static" / "xams_pid.svg"
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -98,7 +98,7 @@ def strip_sheet_furniture(page) -> None:
     do the work.
 
     Nothing is lost: the drawing, its authors and its date live in
-    docs/xams_piping_and_instrumentation.pdf, which is the source this file is
+    notes/xams_piping_and_instrumentation.pdf, which is the source this file is
     generated from and where anyone asking "whose drawing is this?" should look.
     """
     page.add_redact_annot(pymupdf.Rect(*TITLE_BLOCK))
@@ -181,7 +181,7 @@ def main() -> int:
     # as a screenshot of some other application pasted into the page.
     #
     # The information is not lost — the drawing, its authors and its date are
-    # in docs/xams_piping_and_instrumentation.pdf, which is what the SVG is
+    # in notes/xams_piping_and_instrumentation.pdf, which is what the SVG is
     # generated from and where anyone asking "whose drawing is this?" should
     # look (§8.2 keeps the PDF as the source).
     recolour_for_dark(root)

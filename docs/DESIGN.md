@@ -12,7 +12,7 @@ Status of this document: authoritative for implementation. Anything marked **TBD
 
 **In scope.** Monitoring and convenience control of the XAMS slow-control hardware: one NI cDAQ-9174 chassis (20 connected channels of 40 available), two CAEN DT1470ET HV supplies (8 channels), one Lake Shore 335, one UPS. Storage, plotting, alarming, and a small web UI.
 
-**Platform decision, 16 September 2026.** A Python service stack on Windows, on the existing control PC. EPICS was specified in full as an alternative (`EPICS.md`) and set aside: the CompactDAQ carries 20 of the 30 connected channels, has no maintained EPICS device support, and so needs a Python soft IOC either way — EPICS would mean maintaining two paradigms instead of one.
+**Platform decision, 16 September 2026.** A Python service stack on Windows, on the existing control PC. EPICS was specified in full as an alternative ([`notes/EPICS.md`](https://github.com/acolijn/XAMS-SC/tree/main/notes/EPICS.md)) and set aside: the CompactDAQ carries 20 of the 30 connected channels, has no maintained EPICS device support, and so needs a Python soft IOC either way — EPICS would mean maintaining two paradigms instead of one.
 
 **Out of scope.** Safety interlocks. Anything that protects hardware or people belongs in hardware or in the instrument's own limits. See §10.
 
@@ -30,8 +30,16 @@ Status of this document: authoritative for implementation. Anything marked **TBD
 
 ```
 xams-sc/
-├── README.md
-├── DESIGN.md                   this document
+├── README.md                   short front page; the manual is docs/
+├── mkdocs.yml                  the manual, served by the web UI at /manual
+├── docs/
+│   ├── index.md                what it is, and where to start
+│   ├── install.md              reinstalling from scratch
+│   ├── status.md               milestones, and what still needs doing
+│   ├── operating/              running it, and what to do when it breaks
+│   ├── software/  drivers/  grafana/  reference/
+│   └── DESIGN.md               this document
+├── notes/                      working material: EPICS.md, PDF toolchain, P&ID, LabVIEW export
 ├── pyproject.toml
 ├── config/
 │   ├── channels.yaml           channel definitions — single source of truth
@@ -114,7 +122,7 @@ Note for context: MQTT is mainstream in industry and IoT, but it is *not* the co
 
 **Channel names** are the identity of a measurement, used in MQTT topics, JSONL records, the database and the UI. They must be stable forever — renaming breaks history.
 
-**Use the instrument tag names the lab already uses**, lowercased. `TT201` becomes `tt201`. The authoritative list is the P&ID, `docs/xams_piping_and_instrumentation.pdf` (Sarfemijn and Sluitman, 17 May 2024) — the same drawing the web UI renders as a live mimic (§8.2). These are ISA-style tags (`TT` = temperature transmitter, `P` = pressure, `FM` = flow meter) that match the plant numbering, so they carry meaning that an invented scheme would discard. An earlier draft of this document proposed names like `t_cathode_top`; that is superseded.
+**Use the instrument tag names the lab already uses**, lowercased. `TT201` becomes `tt201`. The authoritative list is the P&ID, `notes/xams_piping_and_instrumentation.pdf` (Sarfemijn and Sluitman, 17 May 2024) — the same drawing the web UI renders as a live mimic (§8.2). These are ISA-style tags (`TT` = temperature transmitter, `P` = pressure, `FM` = flow meter) that match the plant numbering, so they carry meaning that an invented scheme would discard. An earlier draft of this document proposed names like `t_cathode_top`; that is superseded.
 
 Rules: lowercase, ASCII, no separator inside a tag, `snake_case` only where a tag has no established form.
 
@@ -787,7 +795,7 @@ For debugging, `mosquitto_sub -t 'xams/#'` shows everything live with no UI invo
 
 ### 8.2 The P&ID mimic
 
-`/mimic` renders `docs/xams_piping_and_instrumentation.pdf` as a live diagram: the plant as drawn, with the current value written next to every instrument bubble. It answers the question the status table cannot — *where* is `tt203`, and what is it next to. This is the one place where the tag names of §3 stop being labels and become a map.
+`/mimic` renders `notes/xams_piping_and_instrumentation.pdf` as a live diagram: the plant as drawn, with the current value written next to every instrument bubble. It answers the question the status table cannot — *where* is `tt203`, and what is it next to. This is the one place where the tag names of §3 stop being labels and become a map.
 
 It earns its own page rather than a place on `/`. The landing page must answer "is everything all right?" in one glance with no scrolling; a full P&ID needs zoom and attention. Both are wanted, and they are wanted at different moments.
 
@@ -1202,12 +1210,14 @@ All of it lives in the repository, in git, beside the code.
 
 | Document | Audience | Written |
 |---|---|---|
-| `README.md` | someone reinstalling the system from scratch | milestone 1 |
-| `OPERATIONS.md` | the group, daily | grows with each milestone |
+| `docs/install.md` | someone reinstalling the system from scratch | milestone 1 |
+| `docs/operating/` | the group, daily | grows with each milestone |
 | `DESIGN.md` | someone changing the system | this document |
 | Docstrings, and `description` in `channels.yaml` | someone reading the code or the config | as written |
 
-### `OPERATIONS.md`
+The first two began life as `README.md` and `OPERATIONS.md` at the repository root and were moved into `docs/` when the manual was built, so that the whole of it is one searchable site served alongside the web UI. The names below are kept where they read naturally; *the operations document* is `docs/operating/`.
+
+### The operations document
 
 The most important of the four, and the one most often missing. Not architecture — actions:
 

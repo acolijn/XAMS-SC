@@ -1,0 +1,134 @@
+# Documentation site. Built with MkDocs + Material; served by the web UI at
+# /manual, so the manual is present on the lab PC whether or not the building
+# network is (see DESIGN.md §8.1 for why that matters).
+#
+#   python -m mkdocs serve -a 127.0.0.1:8001     write and preview
+#   python -m mkdocs build                       produce src/xams_sc/api/site
+#
+# NOT port 8000 — that is the web UI itself.
+
+site_name: XAMS Slow Control
+site_description: Acquisition, storage, alarming and control of the XAMS detector
+site_author: XAMS
+repo_url: https://github.com/acolijn/XAMS-SC
+repo_name: acolijn/XAMS-SC
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+# Built straight into the package, so the API can serve it without a copy step
+# and without knowing where the repository is. Git-ignored.
+site_dir: src/xams_sc/api/site
+
+# A broken cross-reference is a documentation bug and should fail the build,
+# not ship. MkDocs resolves links against its own case-sensitive file index,
+# so this catches a DESIGN.md/design.md mismatch on macOS and Windows too —
+# which the filesystem itself would not.
+strict: true
+
+theme:
+  name: material
+  # No Google Fonts. The lab PC may not reach the internet, and a manual that
+  # renders in a fallback font offline is fine; one that blocks on a CDN is not.
+  font: false
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+# Translates the PDF pipeline's `:::warn` callouts and `{+}` cell markers.
+# Without it the build FAILS: `:::` is mkdocstrings' autodoc marker.
+hooks:
+  - tools/mkdocs_hooks.py
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - tools/gen_doc_pages.py
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            heading_level: 3
+            members_order: source
+            separate_signature: true
+
+nav:
+  - Home: index.md
+  - Installation: install.md
+  - Project status: status.md
+  - Operating:
+      - operating/index.md
+      - Starting and stopping: operating/running.md
+      - Tests: operating/tests.md
+      - Emergency card: operating/emergency.md
+  - Software:
+      - Architecture: software/architecture.md
+      - Topic contract: software/topics.md
+      - Configuration files: software/config.md
+      - Storage and sinks: software/storage.md
+      - Alarm engine: software/alarms.md
+      - Web UI: software/webui.md
+  - Drivers:
+      - drivers/index.md
+      - NI cDAQ-9174: drivers/cdaq.md
+      - CAEN DT1470ET: drivers/caen.md
+      - Lake Shore 335: drivers/lakeshore.md
+      - UPS: drivers/ups.md
+      - Derived channels: drivers/derived.md
+      - Writing a new driver: drivers/writing.md
+  - Grafana:
+      - grafana/index.md
+      - Editing dashboards: grafana/dashboards.md
+      - Drift test: grafana/drift.md
+  - Reference:
+      - Command line: reference/cli.md
+      - Channels: reference/channels.md
+      - Alarms: reference/alarms.md
+      - Hardware: reference/hardware.md
+      - Python API: reference/api.md
+  - Decisions:
+      - Design specification: DESIGN.md
+      - Options and rationale: OPTIONS.md
+      - Document sources: sources.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
