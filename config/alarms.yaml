@@ -81,7 +81,7 @@ channels:
     hihi: {value: 65.0, severity: major, notify: [sms, email, sound]}
 
   tt302:
-    high: {value: 30.0, severity: minor, notify: [email]}
+    high: {value: 20.0, severity: minor, notify: [email]}
     hihi: {value: 35.0, severity: major, notify: [sms, email, sound]}
 
 routing:
