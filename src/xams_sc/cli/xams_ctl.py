@@ -33,8 +33,8 @@ from ..config import CONFIG_DIR, ConfigError, load
 #
 #     python -m xams_sc.devices sim
 #
-# Real drivers join this list as milestones 5 and 6 are built.
-SERVICES = ["sinks", "cdaq"]
+# Real drivers join this list as milestone 6 is built (ups).
+SERVICES = ["sinks", "cdaq", "caen", "lakeshore"]
 
 PID_DIR = Path("logs")
 

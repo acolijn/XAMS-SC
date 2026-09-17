@@ -22,16 +22,35 @@ from ..model import Measurement
 
 log = logging.getLogger(__name__)
 
-# ON CONFLICT DO NOTHING, against the unique index on (t, channel, src).
+# Two forms of the insert, chosen at connect time by whether the unique index
+# actually exists (see _detect_upsert).
 #
-# The bus re-delivers retained messages whenever this writer reconnects, so the
-# last value of every channel arrives again with its original timestamp. That
-# is MQTT working as designed, not a fault — but inserting it twice would
-# inflate the history, so the second write is simply discarded.
-INSERT = """
+# ON CONFLICT DO NOTHING needs the unique index on (t, channel, src). The bus
+# re-delivers retained messages whenever this writer reconnects, so the last
+# value of every channel arrives again with its original timestamp — MQTT
+# working as designed, not a fault — and inserting it twice would inflate the
+# history.
+#
+# But the writer MUST NOT hard-depend on that index being present. On
+# 17 September 2026 it did, the index creation had failed on a permissions
+# problem, and every insert then failed with "there is no unique or exclusion
+# constraint matching the ON CONFLICT specification". The database stopped
+# receiving data entirely while the archive carried on, which is the right way
+# round but is not a state to enter silently.
+INSERT_UPSERT = """
 INSERT INTO meas (t, channel, value, raw, unit, quality, src)
 VALUES (%s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (t, channel, src) DO NOTHING
+"""
+
+INSERT_PLAIN = """
+INSERT INTO meas (t, channel, value, raw, unit, quality, src)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+"""
+
+HAS_UNIQUE_INDEX = """
+SELECT 1 FROM pg_indexes
+WHERE tablename = 'meas' AND indexname = 'meas_unique_reading'
 """
 
 
@@ -58,6 +77,8 @@ class PgWriter:
         self._pending: list[tuple] = []
         self._lock = threading.Lock()
         self._conn = None
+        self._insert = INSERT_PLAIN
+        self._warned_no_index = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._written = 0
@@ -71,8 +92,31 @@ class PgWriter:
         if self._conn is not None and not self._conn.closed:
             return self._conn
         self._conn = psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        self._detect_upsert(self._conn)
         log.info("[%s] connected", self.label)
         return self._conn
+
+    def _detect_upsert(self, conn) -> None:
+        """Use ON CONFLICT only if the unique index is actually there.
+
+        Adapting beats failing: a missing index costs duplicate protection,
+        which is recoverable, whereas refusing to insert costs the data.
+        """
+        try:
+            with conn.cursor() as cur:
+                cur.execute(HAS_UNIQUE_INDEX)
+                present = cur.fetchone() is not None
+        except Exception:
+            present = False
+
+        self._insert = INSERT_UPSERT if present else INSERT_PLAIN
+        if not present and not self._warned_no_index:
+            log.warning(
+                "[%s] the unique index meas_unique_reading is missing, so "
+                "duplicate readings cannot be rejected by the database. "
+                "Writing anyway. Apply sql/schema.sql as the table owner to "
+                "restore it.", self.label)
+            self._warned_no_index = True
 
     # ------------------------------------------------------------------ writes
 
@@ -99,7 +143,7 @@ class PgWriter:
         try:
             conn = self._connect()
             with conn.cursor() as cur:
-                cur.executemany(INSERT, batch)
+                cur.executemany(self._insert, batch)
             self._written += len(batch)
             return len(batch)
         except Exception as exc:

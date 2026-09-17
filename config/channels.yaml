@@ -213,9 +213,17 @@ channels:
   # ------------------------------------------------------------------
   # Lake Shore 335
   # ------------------------------------------------------------------
-  - {name: ls_sensor_a, device: lakeshore, phys: A, kind: temperature, unit: K,
+  # UNIT IS CELSIUS, not Kelvin. An earlier draft of this file said K; the
+  # imported LabVIEW history then showed these channels ranging from -90 to
+  # +21.8, and there is no such thing as a negative Kelvin. They also track
+  # the cryostat RTDs (tt206/tt207) closely, which settles it.
+  #
+  # The driver therefore reads CRDG? (Celsius), not KRDG? (Kelvin). This is
+  # the same failure as the flow meter labelled "SLPM" (section 4.2): the
+  # number was right and the label was wrong. Do not "correct" it back.
+  - {name: tt401, device: lakeshore, phys: A, kind: temperature, unit: C,
      description: "Lake Shore input A"}
-  - {name: ls_sensor_b, device: lakeshore, phys: B, kind: temperature, unit: K,
+  - {name: tt402, device: lakeshore, phys: B, kind: temperature, unit: C,
      description: "Lake Shore input B"}
   - {name: ls_heater_1, device: lakeshore, phys: "1", kind: status, unit: percent,
      description: "Lake Shore heater output 1"}

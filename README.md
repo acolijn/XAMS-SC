@@ -12,9 +12,10 @@ and a UPS. Storage, plotting, alarming and a small web UI.
 | Why it is built this way, and what to build next | [docs/DESIGN.md](docs/DESIGN.md) |
 | What was decided and why | [docs/OPTIONS.md](docs/OPTIONS.md) |
 
-**Current state: milestone 4 complete, milestone 3 partial** — the cDAQ is read
-and logged for real on the lab PC, 19 channels at 1 Hz, and a week of LabVIEW
-history has been imported and validated against it. The CAEN supplies, the Lake Shore and the
+**Current state: milestone 5 complete, milestone 3 partial** — the cDAQ, both
+CAEN supplies and the Lake Shore are read and logged for real on the lab PC,
+39 channels, with a week of LabVIEW history imported and validated against
+them. Everything is still read-only; no setpoint can be written. The CAEN supplies, the Lake Shore and the
 UPS are still to come, and LabVIEW remains installed as the fallback. See
 [Milestones](#milestones).
 
@@ -188,8 +189,8 @@ subscribing to one MQTT topic.
 | 2 | cDAQ read-only | **done** |
 | 3 | Channel verification against physical sensors | **partial** — see below |
 | 4 | Scaling and history import | **done** |
-| 5 | Lake Shore + CAEN monitoring | next |
-| 6 | UPS, alarms, flow integrator | |
+| 5 | Lake Shore + CAEN monitoring | **done** |
+| 6 | UPS, alarms, flow integrator | next |
 | 7 | Web UI and P&ID mimic | |
 | 8 | Control path | |
 | 9 | Procedures | |
@@ -236,6 +237,28 @@ Reproduce with `python tools/compare_to_labview.py`.
 The largest differences are the cryostat sensors, all drifting the same way by
 about 0.2 °C across the 4.8-minute changeover gap — consistent with slow
 cooling, not with a scaling error.
+
+**Milestone 5 acceptance, met 17 September 2026.** Both CAEN supplies and the
+Lake Shore are read, identity-verified and logged:
+
+```
+  2 candidate ports for 21E1:0003: COM4, COM5
+  COM4 reports DT1470ET / 19198    -> hv_1
+  COM5 reports DT1470ET / 79       -> hv_2
+  COM6 reports MODEL335 / 335A12T  -> lakeshore
+```
+
+**Unplug test passes.** With the link cut under a running service: readings are
+published `quality=error`, the service goes `degraded` and stays alive, and
+after two failures it re-enumerates the ports and re-asks every board for its
+serial before resuming. A reconnect re-verifies identity rather than merely
+reopening the port — a swapped cable during an outage would otherwise resume
+under the wrong name (§6.2 rule 6).
+
+Two things the instruments confirmed that the design had recorded from the old
+system: the Lake Shore PID is **100, 20, 0**, exactly as §7.3 says, and all
+eight HV channels are `DISABLED` with the protection settings in `devices.yaml`
+matching the boards.
 
 **The pressure units remain unknown.** `p101`–`p104` and `pmain` still carry
 `unit: TBD`. The comparison validates the *numbers*, not the *labels*: our

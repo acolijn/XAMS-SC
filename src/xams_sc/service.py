@@ -111,6 +111,7 @@ class BaseService:
         self._state = ServiceState.STARTING
         self._broker_down_since: float | None = None
         self._next_broker_warning = 0.0
+        self._failures = 0
 
     # ------------------------------------------------------- to be implemented
 
@@ -124,6 +125,23 @@ class BaseService:
     def read(self) -> list[Measurement]:
         """One acquisition cycle. Raise on failure; the loop handles backoff."""
         raise NotImplementedError
+
+    def reconnect(self) -> bool:
+        """Re-establish the link after a failure, and RE-VERIFY IDENTITY.
+
+        Called by the loop after repeated read failures. The default does
+        nothing, which suits a device that cannot be unplugged.
+
+        For serial instruments this must re-run identity verification, not
+        merely reopen the port (§6.2 rule 6). A reconnect after a USB glitch
+        is precisely where a swapped cable would otherwise slip through: the
+        port reopens, readings resume, and they are the wrong instrument's.
+
+        Return False if the device could not be identified. The service keeps
+        retrying rather than exiting — it exits only when it cannot be
+        identified AT STARTUP (§6.1).
+        """
+        return True
 
     def close(self) -> None:
         """Release hardware. Called on shutdown, always."""
@@ -278,12 +296,30 @@ class BaseService:
                         log.info("device recovered")
                         self.set_state(ServiceState.RUNNING)
                     self._backoff = 1.0
+                    self._failures = 0
                     next_read = now + self.interval_s
                 except Exception as exc:
                     # The service never exits because a device disappeared:
                     # publish the failure, back off, and keep trying (§6.1).
                     self._publish_error(str(exc))
                     self.set_state(ServiceState.DEGRADED)
+                    self._failures += 1
+
+                    # Retrying a read on a link that is gone will never
+                    # succeed. After a couple of failures, try to rebuild the
+                    # connection — which for a serial device means asking it
+                    # again who it is.
+                    if self._failures >= 2:
+                        try:
+                            if self.reconnect():
+                                log.info("reconnected and identity re-verified")
+                                self._failures = 0
+                                self._backoff = 1.0
+                            else:
+                                log.warning("reconnect failed; will retry")
+                        except Exception:
+                            log.exception("reconnect raised")
+
                     next_read = now + self._backoff
                     self._backoff = min(self._backoff * 2, 30.0)
 

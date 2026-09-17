@@ -64,7 +64,18 @@ caen:
 lakeshore:
   match: {vid: "1FB9", pid: "0300", serial: "335A12T"}
   idn_contains: "MODEL335"
-  baud: 57600                  # TBD — confirm against the instrument front panel
+  # Confirmed working 17 Sep 2026: 57600 baud, 7 data bits, ODD parity, 1 stop.
+  # 7-O-1 is the 335 factory setting and is not a typo. At 8-N-1 the port opens
+  # and the instrument returns nothing intelligible, which looks like a dead
+  # instrument rather than a wrong setting.
+  baud: 57600
+  # *IDN? answers 'LSCI,MODEL335,335A12T/#######,1.2'. The third field is
+  # <instrument serial>/<option card serial>; only the part before the slash
+  # identifies the unit, and it matches the USB descriptor serial above.
+  # Settings read at startup, 17 Sep 2026 (displayed and alarmed on, never
+  # written - section 8.3):
+  #   output 1: setpoint -90.000  range 3  PID 100, 20, 0
+  #   output 2: setpoint -100.00  range 0  PID 50, 20, 120
 
 ups:
   # APC, confirmed on the lab PC 17 Sep 2026. PowerChute Personal Edition 3.1.0
