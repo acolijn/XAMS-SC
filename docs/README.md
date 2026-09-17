@@ -5,6 +5,7 @@
 | `OPTIONS.md` | **source** | The decision document: why this approach, and what was decided. |
 | `DESIGN.md` | **source** | Software design specification. The document to hand to whoever writes the code. |
 | `EPICS.md` | **source** | The EPICS alternative, specified in full and set aside on 16 September 2026. |
+| `xams_piping_and_instrumentation.pdf` | **source** | The P&ID (Sarfemijn and Sluitman, 17 May 2024). Authoritative for instrument tag names, and the drawing the web UI renders as a live mimic — see `DESIGN.md` §8.2. |
 | `XAMS-slow-control-options.pdf` | generated | from `OPTIONS.md` |
 | `XAMS-SC-design.pdf` | generated | from `DESIGN.md` |
 | `XAMS-SC-epics.pdf` | generated | from `EPICS.md` |

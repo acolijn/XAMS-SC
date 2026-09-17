@@ -62,7 +62,9 @@ xams-sc/
 │   │   └── notify.py           SMS, email, sound
 │   ├── api/
 │   │   ├── app.py              FastAPI: setpoints, status, web UI (127.0.0.1 only)
-│   │   └── client.py           Python client for scripts and notebooks
+│   │   ├── client.py           Python client for scripts and notebooks
+│   │   └── static/
+│   │       └── xams_pid.svg    the P&ID, tag bubbles carry channel ids (§8.2)
 │   └── cli/
 │       └── xams_ctl.py         start/stop/status for all services
 ├── sql/
@@ -110,7 +112,7 @@ Note for context: MQTT is mainstream in industry and IoT, but it is *not* the co
 
 **Channel names** are the identity of a measurement, used in MQTT topics, JSONL records, the database and the UI. They must be stable forever — renaming breaks history.
 
-**Use the instrument tag names the lab already uses**, lowercased. `TT201` becomes `tt201`. These are ISA-style tags (`TT` = temperature transmitter, `P` = pressure, `FM` = flow meter) that match the plant numbering, so they carry meaning that an invented scheme would discard. An earlier draft of this document proposed names like `t_cathode_top`; that is superseded.
+**Use the instrument tag names the lab already uses**, lowercased. `TT201` becomes `tt201`. The authoritative list is the P&ID, `docs/xams_piping_and_instrumentation.pdf` (Sarfemijn and Sluitman, 17 May 2024) — the same drawing the web UI renders as a live mimic (§8.2). These are ISA-style tags (`TT` = temperature transmitter, `P` = pressure, `FM` = flow meter) that match the plant numbering, so they carry meaning that an invented scheme would discard. An earlier draft of this document proposed names like `t_cathode_top`; that is superseded.
 
 Rules: lowercase, ASCII, no separator inside a tag, `snake_case` only where a tag has no established form.
 
@@ -604,13 +606,14 @@ Separated by how often they are touched and how much a mistake costs.
 │  Alarms            none active                 │
 │  Disk              C: 812 GB free              │
 ├────────────────────────────────────────────────┤
-│  Grafana  ·  Status  ·  Recipients  ·  Logs    │
+│  Grafana · Mimic · Status · Recipients · Logs  │
 └────────────────────────────────────────────────┘
 ```
 
 | Page | Contents |
 |---|---|
 | `/` | the overview above, self-refreshing |
+| `/mimic` | the P&ID with live values on it (§8.2) |
 | `/status` | per channel: value, unit, age, `quality` |
 | `/recipients` | edit the notification list (§4.4) |
 | `/logs` | the last lines of each service log — saves logging in and hunting for files |
@@ -652,7 +655,25 @@ This is what makes the system useful beyond monitoring: calibration runs, script
 
 For debugging, `mosquitto_sub -t 'xams/#'` shows everything live with no UI involved.
 
-### 8.2 What is deliberately not in any interface
+### 8.2 The P&ID mimic
+
+`/mimic` renders `docs/xams_piping_and_instrumentation.pdf` as a live diagram: the plant as drawn, with the current value written next to every instrument bubble. It answers the question the status table cannot — *where* is `tt203`, and what is it next to. This is the one place where the tag names of §3 stop being labels and become a map.
+
+It earns its own page rather than a place on `/`. The landing page must answer "is everything all right?" in one glance with no scrolling; a full P&ID needs zoom and attention. Both are wanted, and they are wanted at different moments.
+
+**How it is built.** The PDF is converted once to `api/static/xams_pid.svg` (`pdf2svg`, or Inkscape) and committed. Each instrument bubble is given `id="<channel>"` — `tt201`, `pt101`, `fm101` — matching `name` in `channels.yaml` exactly, and holds an empty `<text>` node for the value. The page then needs perhaps thirty lines of `fetch` and `getElementById`: no framework, no build step, the same constraint as the rest of the UI. The SVG is a static file; an SVG editor is the only tool needed to touch it.
+
+**It reads MQTT retained topics, not the database** — the same source as `/status`, for the same reason (§8.1). Alarm state comes from `xams/alarm/<channel>` and colours the bubble.
+
+**A stale channel goes grey, never keeps its last number.** A mimic diagram showing a frozen value as though it were live is the classic failure of this kind of display, and it is worse than showing nothing: it invites a decision based on a reading that stopped being true an hour ago. Staleness is already defined for alarms (§11) — the same threshold applies here.
+
+**Read-only. Valves are drawn, never clickable.** Control stays on `/control`, where every write is validated, confirmed and audited (§10). A diagram is an invitation to click, and the valves on this drawing are manual hardware in any case.
+
+**The drift risk, and the check that catches it.** The SVG is a copy of a drawing that will eventually change, and a mimic quietly out of date with the plant is a liability. At service start, every `id` in the SVG is compared against `channels.yaml` in both directions, and any tag present in one and missing from the other is logged as an error. Roughly ten lines; it is what makes the page survivable three years from now. The SVG is re-exported when the P&ID is revised — a step for `OPERATIONS.md` (§14).
+
+**Tags on the drawing that are not instrumented** — `SG101`, `SG102`, the RGA, `EVM116`, the valves `V1`–`V28`, the compressor and the pulse tube — are drawn without a value and greyed. That is informative in itself: it shows at a glance how much of the plant the slow control actually sees, and what a later phase could add.
+
+### 8.3 What is deliberately not in any interface
 
 Ramp rates, trip currents, over-voltage limits, heater range and setpoint limits live on the instruments themselves. The software **displays** them and raises an alarm if they differ from the expected values in `devices.yaml`, but it cannot change them. This is what keeps the software out of the protection path (§10).
 
@@ -1032,7 +1053,7 @@ Each milestone has an acceptance criterion. Do not start the next before the cur
 | 4 | Scaling and history | Column-count check passed (§9.6), history imported, and scaled values agree with the LabVIEW record for the same sensors within expected tolerance. |
 | 5 | Lake Shore + CAEN monitoring | Read-only. Identity verification working. Unplug test passes. |
 | 6 | UPS, alarms, flow integrator | Thresholds from `alarms.yaml`, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm. Integrator survives a service restart without losing its total. |
-| 7 | Web UI | Current values, alarm state, service health. Read-only, bound to `127.0.0.1`. Python client works from a notebook. |
+| 7 | Web UI | Current values, alarm state, service health. Read-only, bound to `127.0.0.1`. Python client works from a notebook. The P&ID mimic (§8.2) shows live values on the drawing, greys stale channels, and the SVG-vs-`channels.yaml` tag check passes in both directions. |
 | 8 | Control path | Lake Shore setpoint, then HV — only after §10's open decision is made and monitoring has run reliably for weeks. Audit log complete; every write validated; dry run works. |
 | 9 | Procedures | Named sequences (§10) run, abort cleanly, and are audited step by step. |
 | 10 | Production | `SERVICE_AUTO_START`, LabVIEW retired but installed. **`OPERATIONS.md` passes the acceptance test of §14** — a colleague operates the system from it unaided. |
@@ -1047,7 +1068,7 @@ Everything marked **TBD** above, consolidated:
 
 | Item | Needed for | How to resolve |
 |---|---|---|
-| Physical location of each `tt*` tag, and what the 1xx/2xx/3xx series denote | milestone 3 | lab knowledge; record in `description` |
+| Physical location of each `tt*` tag, and what the 1xx/2xx/3xx series denote | milestone 3 | the P&ID gives the position on the drawing; confirm against hardware and record in `description` |
 | Alarm thresholds and responses | milestone 6 | `Error and Alarm` tab screenshot |
 | HV channel → supply/index mapping | milestone 5 | `High Voltage Supply` tab screenshot |
 | HV setpoints, ramp rates, trip limits | milestone 8 | LabVIEW tab + settings stored on the CAEN units |
@@ -1059,4 +1080,5 @@ Everything marked **TBD** above, consolidated:
 | Purpose of `anode_timing.vi`, `DAISY_polarity_signs.vi` | milestone 8 | read the block diagrams |
 | Heater shut-off and HV kill: hardware or software? | milestone 8 | decision |
 | How far back the CSV history goes, and whether the column count is constant throughout | milestone 4 | the check in §9.6 |
+| Whether the P&ID of 17 May 2024 is still current | milestone 7 | ask the authors before the mimic is built on it |
 | Second maintainer | production | decision |
