@@ -167,8 +167,27 @@ class CaenService(BaseService):
         # phys is the 0-based channel index on its board.
         self._channels = [c for c in config.enabled_channels()
                           if c.device in {s["id"] for s in self._specs}]
+        # Consecutive read cycles in which a given supply answered nothing.
+        # Tracked PER DEVICE: two supplies share this service, and one can
+        # lose its USB while the other keeps answering perfectly.
+        self._link_down: dict[str, int] = {}
+        self._next_relink = 0.0
 
     # --------------------------------------------------------------- identity
+
+    def _probe(self, port: str) -> tuple[str, ...] | None:
+        """Open a port, ask whoever is there who they are, and let go."""
+        address = int(self._specs[0].get("board_address", 0))
+        baud = int(self._specs[0].get("baud", 9600))
+        reader = CaenChannelReader("probe", port, address, baud, "", "")
+        try:
+            reader.open()
+            return reader.identity()
+        except Exception as exc:
+            log.warning("could not probe %s: %s", port, exc)
+            return None
+        finally:
+            reader.close()
 
     def verify_identity(self) -> bool:
         if self.simulate:
@@ -185,21 +204,7 @@ class CaenService(BaseService):
             for (vid, pid), expected in by_vidpid.items():
                 probes: dict[str, CaenChannelReader] = {}
 
-                def ask(port: str, vid=vid, pid=pid) -> tuple[str, ...] | None:
-                    address = int(self._specs[0].get("board_address", 0))
-                    baud = int(self._specs[0].get("baud", 9600))
-                    reader = CaenChannelReader("probe", port, address, baud, "", "")
-                    try:
-                        reader.open()
-                        identity = reader.identity()
-                    except Exception as exc:
-                        log.warning("could not probe %s: %s", port, exc)
-                        identity = None
-                    finally:
-                        reader.close()
-                    return identity
-
-                mapping = resolve(vid, pid, ask, expected)
+                mapping = resolve(vid, pid, self._probe, expected)
 
                 for spec in self._specs:
                     if spec["id"] not in mapping:
@@ -260,9 +265,17 @@ class CaenService(BaseService):
 
         now = utcnow()
         out: list[Measurement] = []
+        # False until a channel on that supply answers. A supply whose reader
+        # is missing entirely - a relink that has not found it yet - stays
+        # False, and its channels report error rather than going quietly
+        # stale.
+        alive = {c.device: False for c in self._channels}
+
         for ch in self._channels:
             reader = self._readers.get(ch.device)
             if reader is None:
+                out.append(Measurement(t=now, channel=ch.name, value=None,
+                                       unit=ch.unit, quality=Quality.ERROR))
                 continue
             index = int(ch.phys)
             par = "VMON" if ch.kind == "hv_vmon" else "IMON"
@@ -275,16 +288,35 @@ class CaenService(BaseService):
                                        unit=ch.unit, quality=Quality.ERROR))
                 continue
 
+            alive[ch.device] = True
             value = apply_sign(magnitude, ch.sign) if ch.kind == "hv_vmon" else magnitude
             out.append(Measurement(t=now, channel=ch.name, value=value,
                                    unit=ch.unit, raw=magnitude, quality=Quality.OK))
 
-        if out and all(m.quality is Quality.ERROR for m in out):
-            # Every channel failing means the link is gone, not that the
-            # readings are bad. Raise so BaseService backs off and retries,
-            # and so the unplug test produces a reconnect rather than a
-            # stream of errors (§6.1).
+        if out and not any(alive.values()):
+            # Nothing anywhere answered: the link is gone, not the readings.
+            # Raise so BaseService backs off and retries (§6.1).
             raise RuntimeError("no CAEN channel answered; link lost")
+
+        # ONE supply can lose its USB while the other keeps answering, and it
+        # must still be recovered. This used to require EVERY channel in the
+        # service to fail, so unplugging a single unit left it publishing
+        # errors forever with its healthy neighbour holding the service up -
+        # and nothing in the log, because a failed command is logged at debug.
+        # Liveness is tracked per device because the link is per device.
+        for device_id, ok in alive.items():
+            if ok:
+                if self._link_down.get(device_id):
+                    log.info("%s: answering again", device_id)
+                self._link_down[device_id] = 0
+                continue
+            self._link_down[device_id] = self._link_down.get(device_id, 0) + 1
+            if self._link_down[device_id] == 2:
+                log.warning("%s stopped answering; its channels now read "
+                            "error and a relink will be attempted", device_id)
+
+        if any(n >= 2 for n in self._link_down.values()):
+            self._relink()
         return out
 
     def _read_simulated(self) -> list[Measurement]:
@@ -303,21 +335,73 @@ class CaenService(BaseService):
                                    quality=Quality.OK, src="sim"))
         return out
 
-    def reconnect(self) -> bool:
-        """Close everything and resolve the supplies again from scratch.
+    def _relink(self, force: bool = False) -> bool:
+        """Re-resolve the supplies after a link loss, keeping what still works.
 
-        Deliberately a FULL re-resolution, not a reopen: the ports are
-        enumerated again and every board is asked for its BDSNUM. If the two
-        cables were swapped while the link was down, this finds each unit
-        where it now is instead of reading the wrong supply under the right
-        name (§6.2 rule 6).
+        Deliberately a FULL re-resolution, never a bare reopen. A replugged
+        unit can come back on a different COM number, and the handle held
+        before the unplug is dead regardless; the ports are enumerated again
+        and every board is asked for its BDSNUM, so if the two cables were
+        swapped while the link was down this finds each unit where it now is
+        rather than reading the wrong supply under the right name (§6.2
+        rule 6).
+
+        Unlike startup this is FORGIVING, and that is the point. Startup is
+        strict by design - refuse to run rather than guess (§6.1) - and
+        verify_identity() clears every reader before it raises, so reusing it
+        here would drop a healthy supply on the floor the moment its
+        neighbour went missing. Each supply is resolved on its own: one that
+        is still unplugged costs the other nothing.
+
+        Returns True if at least one supply is connected afterwards.
         """
         if self.simulate:
             return True
+
+        now = time.monotonic()
+        if not force and now < self._next_relink:
+            return bool(self._readers)
+        # Enumerating and probing costs a second or two, during which the
+        # healthy supply is not read. Once every 10 s keeps a dead cable from
+        # starving a live one.
+        self._next_relink = now + 10.0
+
         for reader in self._readers.values():
             reader.close()
         self._readers.clear()
-        return self.verify_identity()
+
+        for spec in self._specs:
+            vid, pid = spec["match"]["vid"], spec["match"]["pid"]
+            expected = {spec["id"]: (spec["board_name"], str(spec["board_serial"]))}
+            try:
+                mapping = resolve(vid, pid, self._probe, expected)
+            except IdentityError as exc:
+                log.warning("%s: not found; leaving it disconnected (%s)",
+                            spec["id"], str(exc).split(".")[0])
+                continue
+            reader = CaenChannelReader(
+                device_id=spec["id"], port=mapping[spec["id"]],
+                address=int(spec.get("board_address", 0)),
+                baud=int(spec.get("baud", 9600)),
+                board_name=spec["board_name"],
+                board_serial=str(spec["board_serial"]))
+            try:
+                reader.open()
+            except Exception as exc:
+                log.warning("%s: could not open %s: %s",
+                            spec["id"], reader.port, exc)
+                continue
+            self._readers[spec["id"]] = reader
+            self._link_down[spec["id"]] = 0
+            log.info("%s: relinked on %s, serial %s re-verified",
+                     spec["id"], reader.port, reader.board_serial)
+            self._check_expectations(spec["id"], reader)
+
+        return bool(self._readers)
+
+    def reconnect(self) -> bool:
+        """Called by BaseService when every channel has failed (§6.1)."""
+        return self._relink(force=True)
 
     def close(self) -> None:
         for reader in self._readers.values():

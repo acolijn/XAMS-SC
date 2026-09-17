@@ -401,6 +401,18 @@ resolve device  →  verify identity  →  configure  →  loop { read, publish,
 - **One instance only.** A named mutex (Windows) or lock file prevents a second copy.
 - **Reconnect loop.** On a read failure: publish `quality=error`, back off (1 s, 2 s, 4 s … capped at 30 s), retry indefinitely. The service never exits because a device disappeared; it exits only when it cannot be identified at startup.
 
+**Liveness is judged per device, never per service.** One service may hold more than one instrument — `caen.py` holds both supplies — and they fail independently. A check of the form "every channel in this service failed" cannot see one of two instruments die, because the healthy one keeps the condition false.
+
+This was not hypothetical. On 17 September 2026 the USB was pulled from one CAEN supply and replugged; it never came back, and sat publishing `quality=error` until the service was restarted by hand. Its neighbour was answering perfectly, so the service-wide check never fired, the reconnect path was never reached, and **nothing appeared in the log** — a failed command is logged at debug.
+
+Three rules follow, and `test_caen_link.py` holds each of them down:
+
+1. **Count failures per device.** Two consecutive cycles in which a given instrument answers nothing is a lost link, whatever its neighbours are doing.
+2. **A relink must be forgiving where startup is strict.** Startup refuses to run rather than guess (above), and clears every reader before it raises. Reusing that logic for recovery would drop a healthy instrument the moment its neighbour went missing. Each device is re-resolved on its own.
+3. **Never discard good readings to signal a bad link.** The reconnect path is reached by raising, and a raise throws away everything read in that cycle. If one instrument is unplugged for a week, raising would stop the other being published for a week. A partial failure is handled inside the driver and the good data still goes out.
+
+A relink is a **full re-resolution**, never a bare reopen: the handle held before the unplug is dead, a replugged unit can return on a different COM number, and the cables may have been swapped while the link was down (§6.2 rule 6). It is rate-limited to one attempt per 10 s, because enumerating and probing takes a second or two during which the healthy instrument is not being read.
+
 ### 6.2 Identity verification
 
 Applies to every serial device, and is mandatory before any write.
@@ -652,6 +664,12 @@ The total then carries the evidence that it is an underestimate, instead of that
 
 This keeps the history of how much passed through during each period, rather than a number somebody once discarded. A reset is a control action and goes through the audit log (§10).
 
+**Two ways to ask, one thing that does it.** Either `xams-ctl flow-reset --by <you>` or the button on `/`. Both publish to `xams/cmd/derived/flow_reset` and wait for the derived service to acknowledge; neither touches the accumulator itself. The integrator owns its own state, and something that reached around it could not be audited and would race the service still accumulating into it (§2.1).
+
+**A reset nobody acknowledged is reported as a failure.** If the derived service is down, the period was *not* closed, and both callers say so rather than returning quietly. Reporting success for work that did not happen is the failure mode that `xams-ctl reload` shipped with and somebody had to catch in the lab.
+
+**The attribution is taken on trust.** There is no login on the web UI, so `reset_by` is whatever was typed into the box — "apc", or `webui (unnamed)` if it was left empty. That is weak, and it is recorded honestly rather than dressed up: a name taken on trust is still better than an anonymous change, and it matches what `--by` already does. Real attribution needs authentication, which arrives with §10 if it arrives at all.
+
 **Units.** `fm101` is a **mass flow in g/min** — *per minute*. The integral is `Σ (flow × dt)` with `dt` in **minutes**, giving a mass in **grams**; `fm101_total` therefore has unit `g`. Grafana may display kilograms, but the stored value is grams.
 
 Two traps, both covered explicitly in `test_scaling.py`: a `dt` in seconds produces a factor-60 error that looks entirely plausible, and the LabVIEW front panel labels this channel "Flow (SLPM)", which is wrong — it is not a volumetric standard-litre flow.
@@ -707,7 +725,7 @@ Separated by how often they are touched and how much a mistake costs.
 
 | Page | Contents |
 |---|---|
-| `/` | the overview above, self-refreshing |
+| `/` | the overview above, self-refreshing; carries the flow-integrator reset (§7.5) |
 | `/mimic` | the P&ID with live values on it (§8.2) |
 | `/status` | per channel: value, unit, age, `quality` |
 | `/recipients` | edit the notification list (§4.4) |
@@ -719,6 +737,10 @@ Plus links to Grafana on `:3000` and to `DESIGN.md` and `OPERATIONS.md` in the r
 **The status page reads from MQTT retained topics, never from the database.** If PostgreSQL is down the page must still work — that is precisely when it is needed. A status page that fails together with the component it reports on is worthless.
 
 Kept deliberately plain: server-rendered HTML from FastAPI, a meta refresh or a few lines of `fetch`, no JavaScript framework and no build step. In three years a student must be able to change it without installing a toolchain.
+
+**The one thing this UI can change is the flow-integrator reset**, and it is allowed to exist before §10 because it changes a *record* rather than an instrument — nothing is erased, the period is kept (§7.5). It is a `POST` followed by a redirect, never a `GET`: the overview reloads itself every ten seconds, so a mutating `GET` would fire on its own, repeatedly, with nobody at the machine.
+
+That self-reload is suspended while anything on the page has focus. A ten-second refresh that clears a half-typed name, and the click that was about to follow it, makes the page actively hostile to the one action it offers.
 
 **Web UI — control.** Current value of every channel, alarm state, service health, and the control actions. Per HV channel it shows `VSET`, `VMON`, `IMON`, on/off state and ramping status.
 

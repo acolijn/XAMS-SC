@@ -3,7 +3,27 @@
 <head>
 <meta charset="utf-8">
 <title>XAMS Slow Control — {% block title %}{% endblock %}</title>
-{% block refresh %}<meta http-equiv="refresh" content="10">{% endblock %}
+{% block refresh %}
+<noscript><meta http-equiv="refresh" content="10"></noscript>
+<script>
+/* The page reloads every 10 s — but NOT while somebody is typing into it.
+   A meta refresh cannot be cancelled once the page has been parsed, and it
+   would clear the name half-entered in the flow-reset form (§7.5) and throw
+   away the click that was about to follow. The meta is kept for no-script.
+   Vanilla, inline, no framework and no build step (§8.1). */
+(function () {
+  var timer = null;
+  function start() { if (!timer) timer = setTimeout(function () {
+      location.reload(); }, 10000); }
+  function stop() { clearTimeout(timer); timer = null; }
+  document.addEventListener('focusin', function (e) {
+    if (e.target.closest('input, textarea, select, button')) stop();
+  });
+  document.addEventListener('focusout', start);
+  start();
+})();
+</script>
+{% endblock %}
 <style>
 /* Deliberately one stylesheet, inline, no framework and no build step (§8.1).
    A student must be able to change this in three years without a toolchain. */
@@ -56,6 +76,25 @@ tr:last-child td { border-bottom:none; }
 pre { margin:0; padding:.9rem; overflow-x:auto; font-size:.8rem; line-height:1.45;
       font-family:Consolas,monospace; color:var(--text); }
 .note { color:var(--dim); font-size:.8rem; padding:.5rem .9rem; line-height:1.5; }
+
+/* The one form in this UI: the flow-integrator reset (§7.5). Styled here
+   rather than inline because a second one will want to look the same. */
+.reset-form { display:flex; gap:.4rem; margin-top:.9rem; }
+.reset-form input {
+  flex:1; min-width:0; padding:.35rem .5rem; font:inherit; font-size:.85rem;
+  color:var(--text); background:var(--bg); border:1px solid var(--line);
+  border-radius:3px; }
+.reset-form input:focus { outline:none; border-color:var(--dim); }
+.reset-form button {
+  padding:.35rem .9rem; font:inherit; font-size:.85rem; font-weight:600;
+  color:var(--text); background:var(--panel); border:1px solid var(--line);
+  border-radius:3px; cursor:pointer; }
+.reset-form button:hover { border-color:var(--warn); color:var(--warn); }
+
+.flash { margin-top:.8rem; padding:.45rem .6rem; border-radius:3px;
+         font-size:.82rem; line-height:1.45; }
+.flash.good { background:rgba(63,185,80,.12); color:var(--good); }
+.flash.bad  { background:rgba(248,81,73,.12); color:var(--bad); }
 footer { padding:1rem 1.2rem; color:var(--dim); font-size:.78rem;
          border-top:1px solid var(--line); }
 a { color:#79b8ff; }

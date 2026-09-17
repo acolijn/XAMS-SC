@@ -31,11 +31,41 @@ a heartbeat. Heartbeat ages come from the **retained MQTT topics, not the
 database** — the status view works even when PostgreSQL does not, which is
 precisely when it is needed.
 
+Web UI: <http://127.0.0.1:8000>, the page to bookmark.
 Grafana: <http://127.0.0.1:3000>, the **XAMS Overview** dashboard.
 
 What "healthy" looks like: every service running, every heartbeat a few
 seconds old, and the *"Channels not reading OK"* panel **empty**. That panel
 being empty is the point — a frozen plausible value is worse than a gap.
+
+---
+
+## Resetting the flow integrator
+
+The **Integrated flow** card on <http://127.0.0.1:8000> shows the total since
+the period started, the current rate underneath it, and a **Reset** button.
+Type your name in the box and click it. Equivalently, from a terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl flow-reset --by <you>
+```
+
+**Nothing is erased.** The running period is closed into the `flow_periods`
+table with its total, its gaps and your name, and a new one is opened. The
+history of how much passed through during each period survives — unlike a
+counter somebody zeroed, which is simply gone.
+
+The name is taken on trust: there is no login on this UI, and leaving the box
+empty records `webui (unnamed)` rather than a blank. Weak attribution recorded
+honestly beats an anonymous change.
+
+If the **derived** service is not running, the reset fails and says so.
+Nothing is closed in that case — check `xams-ctl status` and the button again.
+
+> **`N s of gaps`** on that card means the integrator was not running for part
+> of the period, so the total is an underestimate by whatever flowed during
+> them. That is recorded rather than papered over; extrapolating the last
+> known rate would be inventing data.
 
 ---
 
@@ -512,14 +542,38 @@ Its sensors read **Celsius**. The driver sends `CRDG?`, not `KRDG?`.
 Cutting the link is safe and recovers on its own:
 
 - readings are published `quality=error`, never a stale number
-- the service goes `degraded` and **stays running**
-- after two failures it re-enumerates the ports and re-asks every board for its
-  serial before resuming
+- the service **stays running**
+- after two failed cycles it re-enumerates the ports and re-asks every board
+  for its serial before resuming
 
-That last step matters: a reconnect **re-verifies identity** rather than just
-reopening the port. If two cables were swapped while the link was down, the
-service finds each unit where it now is instead of reading the wrong supply
-under the right name.
+That last step matters: a relink **re-verifies identity** rather than just
+reopening the port. The handle held before the unplug is dead in any case, a
+replugged unit can come back on a different COM number, and if two cables were
+swapped while the link was down the service finds each unit where it now is
+instead of reading the wrong supply under the right name.
+
+Expect this in `logs\caen.log`, within about ten seconds of replugging:
+
+```
+WARNING  hv_1 stopped answering; its channels now read error and a relink will be attempted
+INFO     2 candidate port(s) for 21E1:0003: COM4, COM5
+INFO     COM4 reports DT1470ET / 19198
+INFO     hv_1: relinked on COM4, serial 19198 re-verified
+```
+
+**If only one of the two CAEN supplies is unplugged**, the other keeps being
+read normally throughout — its numbers do not stop and its channels do not go
+stale. Only the unplugged unit's eight channels read `error`.
+
+> **Fixed 17 September 2026.** Before that date this case did *not* recover:
+> one supply could be unplugged and replugged and would never come back, with
+> nothing in the log to say so, because liveness was judged over the whole
+> service and the healthy supply kept it looking fine. If you are running an
+> older checkout and a single supply is stuck on `error`, restart the service
+> — and update. See §6.1.
+
+A supply that stays unplugged is retried every 10 seconds indefinitely. It
+costs the healthy one nothing, so there is no hurry to plug it back in.
 
 ---
 
