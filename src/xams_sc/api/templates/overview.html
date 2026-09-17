@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+
+{% if alarms %}
+<div class="card">
+  <h2>Active alarms</h2>
+  <table>
+    <tr><th>Channel</th><th>State</th><th>Threshold</th>
+        <th class="num">Value</th><th></th></tr>
+    {% for a in alarms %}
+    <tr>
+      <td><span class="dot {{ 'bad' if a.state != 'minor' else 'warn' }}"></span>{{ a.channel }}
+          {% if a.description %}<span class="dim"> — {{ a.description }}</span>{% endif %}</td>
+      <td class="{{ 'bad' if a.state != 'minor' else 'warn' }}">{{ a.state }}</td>
+      <td class="dim">{{ a.threshold or '—' }}</td>
+      <td class="num">{% if a.value is not none %}{{ '%.3f'|format(a.value) }}{% else %}—{% endif %}</td>
+      <td class="dim">{{ 'acknowledged' if a.acknowledged else '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="note">
+    Acknowledging stops the repeating notification; it does not fix the
+    condition, and the two must never look alike (§8.1).
+  </div>
+</div>
+{% endif %}
+
+<div class="grid">
+
+  <div class="card">
+    <h2>Services</h2>
+    <table>
+      {% for s in services %}
+      <tr>
+        <td>
+          {% if not s.expects_heartbeat %}<span class="dot off"></span>
+          {% elif s.healthy %}<span class="dot good"></span>
+          {% else %}<span class="dot bad"></span>{% endif %}{{ s.name }}
+        </td>
+        <td class="dim">{{ s.state }}</td>
+        <td class="num dim">
+          {% if s.age_s is not none %}{{ '%.0f'|format(s.age_s) }}s ago
+          {% elif not s.expects_heartbeat %}no heartbeat
+          {% else %}<span class="bad">silent</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="note">
+      `sinks` and `alarms` publish no heartbeat, so a dash there is not a
+      fault. The alarm engine cannot report that the alarm engine has stopped
+      — that needs the outside watchdog of §12.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>UPS</h2>
+    <table>
+      {% for c in ups %}
+      <tr>
+        <td>{{ c.description or c.name }}</td>
+        <td class="num">
+          {% if c.name == 'ups_on_battery' and c.healthy %}
+            {% if c.value and c.value > 0.5 %}<span class="bad">ON BATTERY</span>
+            {% else %}<span class="good">line power</span>{% endif %}
+          {% else %}{{ c.formatted() }} <span class="unit">{{ c.unit }}</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="note">
+      A power event is one of the few things that can end a run, which is why
+      the smallest service in the system earns its place (§7.4).
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Integrated flow</h2>
+    <div class="body">
+      {% set f = flow.view %}
+      <div style="font-size:1.9rem;font-variant-numeric:tabular-nums;
+                  font-family:Consolas,monospace">
+        {{ f.formatted() if f else '—' }}
+        <span class="unit" style="font-size:1rem">g</span>
+      </div>
+      <div class="dim" style="margin-top:.5rem">
+        since the period started
+        {% if flow.gaps_s > 0 %}
+          <br><span class="warn">{{ '%.0f'|format(flow.gaps_s) }} s of gaps</span>
+          — the total is an underestimate by whatever flowed during them
+        {% else %}
+          <br>no gaps in this period
+        {% endif %}
+      </div>
+    </div>
+    <div class="note">
+      Reset closes the period into <code>flow_periods</code> and opens a new
+      one; nothing is erased (§7.5):<br>
+      <code>xams-ctl flow-reset --by &lt;you&gt;</code>
+    </div>
+  </div>
+
+</div>
+
+{% if unhealthy %}
+<div class="card">
+  <h2>Channels not reading OK</h2>
+  <table>
+    <tr><th>Channel</th><th>Quality</th><th class="num">Age</th><th></th></tr>
+    {% for c in unhealthy %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td class="warn">{{ c.quality }}</td>
+      <td class="num dim">{{ '%.0f'|format(c.age_s) if c.age_s < 100000 else '∞' }}s</td>
+      <td class="dim">{{ c.description }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if faults %}
+<div class="card">
+  <h2>Known faults</h2>
+  <table>
+    <tr><th>Channel</th><th>Where</th><th></th></tr>
+    {% for f in faults %}
+    <tr>
+      <td><span class="dot warn"></span>{{ f.channel }}</td>
+      <td class="dim">{{ f.device }} {{ f.phys }}</td>
+      <td class="dim">{{ f.description }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="note">
+    Disabled in <code>channels.yaml</code>, so they produce no data at all and
+    cannot appear anywhere driven by measurements. Listed here from the
+    configuration so a known fault stays visible without being a permanently
+    active alarm that people learn to ignore.
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

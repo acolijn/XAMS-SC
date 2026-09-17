@@ -37,7 +37,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..bus import TOPIC_MEAS, Bus
+from ..bus import TOPIC_FLOW_PERIOD, TOPIC_FLOW_RESET, TOPIC_MEAS, Bus
 from ..model import Measurement, Quality, iso, parse_iso, utcnow
 from ..scaling import integrate_step
 from ..service import BaseService
@@ -214,8 +214,34 @@ class DerivedService(BaseService):
     def verify_identity(self) -> bool:
         return True
 
+    def _handle_reset(self, topic: str, payload: str) -> None:
+        """Close the running period and open a new one. See DESIGN.md §7.5.
+
+        A reset is a CONTROL ACTION, so it is audited and acknowledged like
+        any other (§10) — even though it writes nothing to hardware. What it
+        changes is the record, and a number somebody quietly discarded is
+        exactly what §7.5 exists to prevent.
+        """
+        try:
+            who = (json.loads(payload) or {}).get("by") or "unknown"
+        except ValueError:
+            who = "unknown"
+
+        closed = self.integrator.reset(who)
+
+        # Published, not written. Nothing here touches a database directly
+        # (§2.1) — a sink subscribes and stores it, exactly like a
+        # measurement.
+        self.bus.publish_raw(TOPIC_FLOW_PERIOD,
+                             json.dumps({"channel": self.integrator.output,
+                                         **closed}, separators=(",", ":")))
+        self.bus.publish_raw(
+            "xams/ack/derived/flow_reset",
+            json.dumps({"ok": True, **closed}, separators=(",", ":")))
+
     def run(self) -> int:
         self.integrator.start()
+        self.bus.subscribe(TOPIC_FLOW_RESET, self._handle_reset)
         return super().run()
 
     def read(self) -> list[Measurement]:

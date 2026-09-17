@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}High voltage{% endblock %}
+{% block content %}
+
+{% for s in supplies %}
+<div class="card">
+  <h2>{{ s.id }} — {{ s.model }} serial {{ s.serial }}
+      <span class="dim" style="text-transform:none;letter-spacing:0">
+        (firmware {{ s.firmware }})</span></h2>
+  <table>
+    <tr>
+      <th>CH</th><th>Channel</th>
+      <th class="num">VMON</th><th class="num">IMON</th>
+      <th>Status</th>
+      <th class="num">MAXV</th><th class="num">RUP</th><th class="num">RDW</th>
+      <th class="num">TRIP</th><th>POL</th>
+    </tr>
+    {% for c in s.channels %}
+    <tr>
+      <td class="dim">{{ c.index }}</td>
+      <td>{{ c.label }}<span class="dim"> — {{ c.description }}</span></td>
+      <td class="num {{ 'dim' if not (c.vmon and c.vmon.healthy) }}">
+        {{ c.vmon.formatted() if c.vmon else '—' }}
+        <span class="unit">V</span></td>
+      <td class="num {{ 'dim' if not (c.imon and c.imon.healthy) }}">
+        {{ c.imon.formatted() if c.imon else '—' }}
+        <span class="unit">µA</span></td>
+      <td>
+        {% if c.vmon and c.vmon.healthy and c.vmon.value is not none
+              and c.vmon.value|abs > 1 %}
+          <span class="dot good"></span><span class="good">ON</span>
+        {% elif c.vmon and c.vmon.healthy %}
+          <span class="dot off"></span><span class="dim">off</span>
+        {% else %}
+          <span class="dot bad"></span><span class="bad">no reading</span>
+        {% endif %}
+      </td>
+      <td class="num dim">{{ c.expect.get('maxv', '—') }}</td>
+      <td class="num dim">{{ c.expect.get('rup', '—') }}</td>
+      <td class="num dim">{{ c.expect.get('rdw', '—') }}</td>
+      <td class="num dim">{{ c.expect.get('trip', '—') }}</td>
+      <td class="dim">{{ c.expect.get('pol', '—') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endfor %}
+
+<div class="card">
+  <h2>What these columns are, and what this page cannot do</h2>
+  <div class="note">
+    <p><strong>VMON and IMON</strong> are what the supply is measuring now.
+    Voltages are stored <strong>signed</strong>: the supplies report unsigned
+    magnitudes with polarity as a separate parameter, so the sign is applied
+    in software and the cathode reads negative while the anode reads positive
+    (§7.2). A supply that is off reads 0 and is shown as off, not as a fault.</p>
+
+    <p><strong>MAXV, RUP, RDW, TRIP and POL</strong> are the board's own
+    protection settings, shown from <code>devices.yaml</code>. The software
+    <em>displays</em> them and raises an alarm if the board disagrees with
+    what is recorded — it <strong>cannot change them</strong> (§8.3). Ramp
+    rate, trip current and over-voltage limit live on the instrument, and
+    that is what keeps this software out of the protection path (§10).</p>
+
+    <p><strong>Nothing here can set a voltage.</strong> The control surface is
+    milestone 8, and only after §10's open decision about the LabVIEW heater
+    shut-off and KILL VOLTAGE behaviours is resolved. Until then the supplies
+    are operated from their own front panels.</p>
+
+    <p>The two units are told apart by asking each board for its own serial
+    number over the wire, never by COM port. Swapping the USB cables is
+    therefore harmless (§6.2).</p>
+  </div>
+</div>
+
+{% endblock %}

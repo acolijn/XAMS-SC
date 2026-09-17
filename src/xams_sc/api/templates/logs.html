@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block refresh %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Service logs</h2>
+  <div class="body">
+    {% for name in available %}
+      <a href="/logs?service={{ name }}"
+         style="margin-right:.8rem;{{ 'font-weight:600' if name == selected }}">{{ name }}</a>
+    {% endfor %}
+  </div>
+  <pre>{{ text }}</pre>
+</div>
+{% endblock %}

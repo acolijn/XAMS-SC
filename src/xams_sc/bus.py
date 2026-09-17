@@ -38,6 +38,8 @@ TOPIC_ALARM = "xams/alarm"
 TOPIC_CMD = "xams/cmd"
 TOPIC_ACK = "xams/ack"
 TOPIC_RELOAD = "xams/cmd/all/reload"
+TOPIC_FLOW_RESET = "xams/cmd/derived/flow_reset"
+TOPIC_FLOW_PERIOD = "xams/flow/period"
 
 
 class Bus:
