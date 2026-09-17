@@ -1224,10 +1224,12 @@ Everything marked **TBD** above, consolidated:
 | **Replace the `tt202` sensor** (bottom of the detector vessel) | — | hardware repair. Then set `enabled: true` in `channels.yaml`; nothing else changes. |
 | Alarm thresholds and responses | milestone 6 | `Error and Alarm` tab screenshot |
 | ~~HV channel → supply/index mapping, and which board is `hv_1` vs `hv_2`~~ | — | **Resolved 17 September 2026.** Full map in §7.2, cross-checked against the polarity reported by each channel. |
+| ~~HV channel identity verification~~ | — | **Working, 17 September 2026.** Both boards resolved by `BDSNUM` over enumerated ports, unplug test passes, and a reconnect re-runs the full identity check (§6.2 rule 6). |
 | HV setpoints, ramp rates, trip limits | milestone 8 | **Read from the boards, §7.2.** What remains is confirming they are intended rather than inherited — in particular the `RUP` of 1 V/s and `TRIP` of 2.0 µA on `hv_pmt_bot`. |
 | **HV sign convention: signed values or magnitudes?** | milestone 5 | §7.2. Must be settled before the first HV value is stored; changing it later inverts history. |
 | ~~USB serial numbers of the two CAEN units~~ | — | **Resolved 17 September 2026.** The units carry no USB serial number at all; board serials `19198` and `79` read via `BDSNUM` and recorded in §4.1. |
-| Lake Shore baud rate | milestone 5 | instrument front panel |
+| ~~Lake Shore baud rate~~ | — | **Resolved 17 September 2026: 57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is the factory setting and is not a typo — at 8-N-1 the port opens and the instrument returns nothing intelligible, which looks like a dead instrument rather than a wrong setting. |
+| ~~Lake Shore sensor units~~ | — | **Celsius, not Kelvin.** An earlier draft of `channels.yaml` said K; the imported history then showed these channels ranging to −90, and there is no negative Kelvin. Confirmed against the instrument: `CRDG? A` = −89.998 and `KRDG? A` = +183.15 describe the same temperature. The driver reads `CRDG?`. |
 | UPS model and connection | milestone 6 | inspect the unit |
 | ~~Are `9207/ai8:15` current channels used?~~ | — | **Resolved 17 September 2026: not used.** No current task is created (§7.1). |
 | Engineering units for the pressure channels (`p101`–`p104`, `pmain`) | milestone 4 | lab knowledge, or the transducer datasheets |

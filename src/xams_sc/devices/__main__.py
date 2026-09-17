@@ -16,9 +16,9 @@ from ..service import setup_logging
 SERVICES = {
     "sim": ("xams_sc.devices.sim", "SimService"),
     "cdaq": ("xams_sc.devices.cdaq", "CdaqService"),
-    # Real drivers land here as milestone 5 is built:
-    # "caen": ("xams_sc.devices.caen", "CaenService"),
-    # "lakeshore": ("xams_sc.devices.lakeshore", "LakeShoreService"),
+    "caen": ("xams_sc.devices.caen", "CaenService"),
+    "lakeshore": ("xams_sc.devices.lakeshore", "LakeShoreService"),
+    # Milestone 6:
     # "ups": ("xams_sc.devices.ups", "UpsService"),
 }
 

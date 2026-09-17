@@ -421,6 +421,65 @@ the database after you delete it. Clearing the broker is the only fix.
 
 ---
 
+## The CAEN supplies and the Lake Shore
+
+`xams-ctl start` brings both up alongside the cDAQ. **Everything is read-only.**
+The CAEN driver issues `CMD:MON` only and the Lake Shore driver sends only
+queries; a test asserts this by inspecting the commands each module actually
+sends. Setpoint control is milestone 8.
+
+### They are found by asking, not by COM port
+
+Neither CAEN unit exposes a USB serial number and both present the same
+VID/PID, so the COM port tells you nothing. The driver enumerates matching
+ports, asks every board for its `BDSNUM`, and binds each to the serial recorded
+in `devices.yaml`:
+
+```
+  COM4 reports DT1470ET / 19198  -> hv_1
+  COM5 reports DT1470ET / 79     -> hv_2
+```
+
+**Swapping the two USB cables is therefore harmless** — each unit is found
+wherever it is. So is a COM renumbering by Windows.
+
+### "no port reported the expected identity"
+
+The service refuses to start. This is correct behaviour, not a fault: a device
+that has not said who it is is not trusted and not written to.
+
+Check in this order:
+
+1. Is the unit powered? `python tools/clear_retained.py` is unrelated — use
+   Device Manager or simply look at the front panel.
+2. Is something else holding the port? LabVIEW is the usual answer.
+3. Has a board been replaced? A new board has a new serial, and
+   `devices.yaml` must be edited deliberately — that is the point.
+
+### Lake Shore serial settings
+
+**57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is the 335's factory
+setting and is not a typo. At 8-N-1 the port opens happily and the instrument
+returns nothing intelligible, which looks exactly like a dead instrument.
+
+Its sensors read **Celsius**. The driver sends `CRDG?`, not `KRDG?`.
+
+### Unplugging an instrument
+
+Cutting the link is safe and recovers on its own:
+
+- readings are published `quality=error`, never a stale number
+- the service goes `degraded` and **stays running**
+- after two failures it re-enumerates the ports and re-asks every board for its
+  serial before resuming
+
+That last step matters: a reconnect **re-verifies identity** rather than just
+reopening the port. If two cables were swapped while the link was down, the
+service finds each unit where it now is instead of reading the wrong supply
+under the right name.
+
+---
+
 ## What each alarm means *(not yet — milestone 6)*
 
 This section is the reason `OPERATIONS.md` exists, and it is currently empty.
