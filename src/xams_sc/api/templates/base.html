@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XAMS Slow Control — {% block title %}{% endblock %}</title>
+{% block refresh %}<meta http-equiv="refresh" content="10">{% endblock %}
+<style>
+/* Deliberately one stylesheet, inline, no framework and no build step (§8.1).
+   A student must be able to change this in three years without a toolchain. */
+:root {
+  --bg:#12151a; --panel:#1b1f27; --line:#2a303b; --text:#dfe4ec;
+  --dim:#8b95a6; --good:#3fb950; --warn:#d29922; --bad:#f85149;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
+       font-family:"Segoe UI",system-ui,sans-serif; }
+header { display:flex; align-items:baseline; gap:1rem; flex-wrap:wrap;
+         padding:.8rem 1.2rem; background:var(--panel);
+         border-bottom:1px solid var(--line); }
+header h1 { margin:0; font-size:1.05rem; font-weight:600; }
+header .meta { color:var(--dim); font-size:.82rem; }
+.badge { margin-left:auto; padding:.25rem .7rem; border-radius:3px;
+         font-weight:600; letter-spacing:.02em; }
+.badge.good { background:rgba(63,185,80,.15); color:var(--good); }
+.badge.warn { background:rgba(210,153,34,.15); color:var(--warn); }
+.badge.bad  { background:rgba(248,81,73,.15);  color:var(--bad); }
+nav { display:flex; gap:.2rem; padding:0 1.2rem; background:var(--panel);
+      border-bottom:1px solid var(--line); }
+nav a { padding:.5rem .9rem; color:var(--dim); text-decoration:none;
+        border-bottom:2px solid transparent; }
+nav a:hover { color:var(--text); }
+nav a.on { color:var(--text); border-bottom-color:var(--good); }
+main { padding:1.2rem; display:grid; gap:1.2rem; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:6px; }
+.card > h2 { margin:0; padding:.6rem .9rem; font-size:.8rem; font-weight:600;
+             text-transform:uppercase; letter-spacing:.06em; color:var(--dim);
+             border-bottom:1px solid var(--line); }
+.card > .body { padding:.9rem; }
+.grid { display:grid; gap:1.2rem; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-weight:600; color:var(--dim); font-size:.78rem;
+     text-transform:uppercase; letter-spacing:.04em; padding:.35rem .9rem;
+     border-bottom:1px solid var(--line); }
+td { padding:.3rem .9rem; border-bottom:1px solid rgba(42,48,59,.5); }
+tr:last-child td { border-bottom:none; }
+.num { text-align:right; font-variant-numeric:tabular-nums;
+       font-family:Consolas,monospace; }
+.unit { color:var(--dim); font-size:.85em; }
+.dim { color:var(--dim); }
+.good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+       margin-right:.45rem; }
+.dot.good { background:var(--good); } .dot.warn { background:var(--warn); }
+.dot.bad { background:var(--bad); }  .dot.off { background:var(--dim); }
+.empty { color:var(--dim); padding:.6rem .9rem; font-style:italic; }
+pre { margin:0; padding:.9rem; overflow-x:auto; font-size:.8rem; line-height:1.45;
+      font-family:Consolas,monospace; color:var(--text); }
+.note { color:var(--dim); font-size:.8rem; padding:.5rem .9rem; line-height:1.5; }
+footer { padding:1rem 1.2rem; color:var(--dim); font-size:.78rem;
+         border-top:1px solid var(--line); }
+a { color:#79b8ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>XAMS Slow Control</h1>
+  <span class="meta">config {{ config.config_hash }} · up {{ state.uptime() }}</span>
+  <span class="badge {{ overall_class }}">{{ overall }}</span>
+</header>
+<nav>
+  {% set page = request.url.path %}
+  <a href="/"       class="{{ 'on' if page == '/' }}">Overview</a>
+  <a href="/status" class="{{ 'on' if page == '/status' }}">Channels</a>
+  <a href="/hv"     class="{{ 'on' if page == '/hv' }}">High voltage</a>
+  <a href="/logs"   class="{{ 'on' if page == '/logs' }}">Logs</a>
+  <a href="http://127.0.0.1:3000" target="_blank">Grafana &nearr;</a>
+</nav>
+<main>{% block content %}{% endblock %}</main>
+<footer>
+  Read-only. No setpoint can be written from this interface — the control
+  surface is milestone 8 (DESIGN.md §10). Bound to 127.0.0.1 only.
+</footer>
+</body>
+</html>

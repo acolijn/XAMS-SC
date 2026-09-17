@@ -24,6 +24,7 @@ import yaml
 
 from ..bus import Bus
 from ..config import CONFIG_DIR, ConfigError, load
+from ..model import ServiceState
 from ..service import SingleInstance, setup_logging
 from .engine import AlarmEngine
 from .flight_recorder import FlightRecorder
@@ -128,6 +129,7 @@ def main(argv=None) -> int:
     bus.subscribe("xams/cmd/all/reload", handle_reload)
 
     bus.connect()
+    bus.publish_state("alarms", ServiceState.RUNNING)
     log.info("alarm engine running (stale after %.0fs, repeat every %.0f min)",
              engine.stale_after, engine.min_repeat_s / 60)
 
@@ -149,6 +151,7 @@ def main(argv=None) -> int:
         log.info("shutting down; %d flight-recorder dump(s) this run",
                  recorder.dumps)
         engine.stop()
+        bus.publish_state("alarms", ServiceState.STOPPED)
         bus.disconnect()
         lock.release()
     return 0

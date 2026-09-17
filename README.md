@@ -12,10 +12,11 @@ and a UPS. Storage, plotting, alarming and a small web UI.
 | Why it is built this way, and what to build next | [docs/DESIGN.md](docs/DESIGN.md) |
 | What was decided and why | [docs/OPTIONS.md](docs/OPTIONS.md) |
 
-**Current state: milestone 5 complete, milestone 3 partial** — the cDAQ, both
-CAEN supplies and the Lake Shore are read and logged for real on the lab PC,
-39 channels, with a week of LabVIEW history imported and validated against
-them. Everything is still read-only; no setpoint can be written. The CAEN supplies, the Lake Shore and the
+**Current state: milestone 6 complete, milestone 3 partial** — the cDAQ, both
+CAEN supplies, the Lake Shore and the UPS are read and logged on the lab PC,
+45 channels, with alarms, notifications and the flow integrator running and a
+week of LabVIEW history imported alongside. Everything is still read-only; no
+setpoint can be written to any instrument. The CAEN supplies, the Lake Shore and the
 UPS are still to come, and LabVIEW remains installed as the fallback. See
 [Milestones](#milestones).
 
@@ -190,8 +191,8 @@ subscribing to one MQTT topic.
 | 3 | Channel verification against physical sensors | **partial** — see below |
 | 4 | Scaling and history import | **done** |
 | 5 | Lake Shore + CAEN monitoring | **done** |
-| 6 | UPS, alarms, flow integrator | next |
-| 7 | Web UI and P&ID mimic | |
+| 6 | UPS, alarms, flow integrator | **done** |
+| 7 | Web UI and P&ID mimic | next |
 | 8 | Control path | |
 | 9 | Procedures | |
 | 10 | Production | |
@@ -259,6 +260,26 @@ Two things the instruments confirmed that the design had recorded from the old
 system: the Lake Shore PID is **100, 20, 0**, exactly as §7.3 says, and all
 eight HV channels are `DISABLED` with the protection settings in `devices.yaml`
 matching the boards.
+
+**Milestone 6 acceptance, met 17 September 2026.**
+
+- **Thresholds** from `alarms.yaml` on `pmain`, `tt104`, `tt302` and three UPS
+  channels. Editing one and running `xams-ctl reload` applies it live.
+- **Staleness alarms fire.** Proven twice on unplanned faults, not just tests:
+  a service that died from a bad config deploy was reported 60 s later, and a
+  channel rename produced a staleness alarm for the old name.
+- **Flight-recorder dumps** are written on every alarm, holding the ten
+  minutes of full-rate data leading up to it.
+- **SMS delivered** — one real message through the existing MessageBird
+  gateway. Email is not yet configured (no `smtp_host`).
+- **The integrator survives a restart** and records gaps rather than
+  inventing flow across them. A reset closes a period into `flow_periods`
+  with its total, its gaps and who did it, and is written to the audit log.
+
+The UPS is read from its HID **alongside PowerChute**, which keeps doing its
+safe-shutdown job. Two other routes were tried and rejected: WMI reports no
+battery at all, and `GetSystemPowerStatus` describes the wall socket rather
+than the UPS — it would have read "on line power" while running on battery.
 
 **The pressure units remain unknown.** `p101`–`p104` and `pmain` still carry
 `unit: TBD`. The comparison validates the *numbers*, not the *labels*: our

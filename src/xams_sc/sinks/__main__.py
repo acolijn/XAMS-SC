@@ -20,8 +20,10 @@ import yaml
 
 from ..bus import Bus
 from ..config import CONFIG_DIR, ConfigError, load
+from ..model import ServiceState, utcnow
 from ..service import SingleInstance, setup_logging
 from .alarm_writer import AlarmWriter
+from .flow_writer import FlowPeriodWriter
 from .jsonl_writer import JsonlWriter
 from .pg_writer import PgWriter
 
@@ -103,6 +105,7 @@ def main(argv=None) -> int:
 
     pg = None
     alarm_writer = None
+    flow_writer = None
     dsn = args.dsn or dsn_from_secrets()
     if args.no_postgres:
         log.info("PostgreSQL writer disabled (--no-postgres)")
@@ -116,6 +119,12 @@ def main(argv=None) -> int:
         alarm_writer = AlarmWriter(bus, dsn)
         alarm_writer.start()
         log.info("alarm-state writer started")
+        # Closed flow-integrator periods (§7.5). A reset closes a period
+        # rather than zeroing a counter, and this is what preserves it.
+        flow_writer = FlowPeriodWriter(bus, dsn)
+        flow_writer.start()
+        flow_writer.ensure_open_period("fm101_total", utcnow())
+        log.info("flow-period writer started")
     else:
         # Not an error. Milestone 1 is expected to run before the database
         # exists, and the archive is what matters.
@@ -125,6 +134,10 @@ def main(argv=None) -> int:
         )
 
     bus.connect()
+    # Say we are running. The bus registers a retained last-will of "stopped",
+    # so without this the status page shows a healthy service as stopped for
+    # its entire life — the will is only correct once the process is gone.
+    bus.publish_state("sinks", ServiceState.RUNNING)
 
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -147,6 +160,9 @@ def main(argv=None) -> int:
         if alarm_writer:
             log.info("%d alarm transition(s) recorded this run", alarm_writer.written)
             alarm_writer.close()
+        if flow_writer:
+            flow_writer.close()
+        bus.publish_state("sinks", ServiceState.STOPPED)
         bus.disconnect()
         lock.release()
     return 0

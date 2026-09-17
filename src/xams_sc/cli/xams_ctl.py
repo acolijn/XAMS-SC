@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -262,6 +263,55 @@ def cmd_reload(args) -> int:
     return 0 if not any(acks[n].get("error") for n in refused) else 2
 
 
+def cmd_flow_reset(args) -> int:
+    """Close the running flow-integrator period and open a new one (§7.5).
+
+    Nothing is erased. The closed period keeps its total and its gaps, so the
+    history of how much passed through during each period survives — unlike a
+    counter somebody zeroed, which is gone.
+    """
+    from ..bus import TOPIC_FLOW_RESET, Bus
+
+    who = args.by or os.environ.get("USERNAME") or "unknown"
+    result = {}
+
+    bus = Bus(client_id="xams-ctl-flow-reset", host=args.broker, port=args.port)
+    bus.subscribe("xams/ack/derived/flow_reset",
+                  lambda t, p: result.update(json.loads(p)))
+    bus.connect()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not bus.connected:
+        time.sleep(0.1)
+    if not bus.connected:
+        print("broker not reachable; nothing was reset")
+        bus.disconnect()
+        return 1
+
+    time.sleep(0.3)
+    bus.publish_raw(TOPIC_FLOW_RESET, json.dumps({"by": who}))
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and not result:
+        time.sleep(0.2)
+    bus.disconnect()
+
+    if not result:
+        print("The derived service did not acknowledge. Is it running?")
+        print("Nothing has been reset.")
+        return 1
+
+    print(f"Flow period closed by {who}:")
+    print(f"  started   {result.get('start')}")
+    print(f"  stopped   {result.get('stop')}")
+    print(f"  total     {result.get('total_g', 0):.3f} g")
+    print(f"  gaps      {result.get('gaps_s', 0):.0f} s")
+    if result.get("gaps_s", 0) > 0:
+        print("            (the total is an underestimate by whatever flowed")
+        print("             during those gaps — that is why they are recorded)")
+    print()
+    print("A new period is now open. The closed one is kept in flow_periods.")
+    return 0
+
+
 def cmd_check(args) -> int:
     """Validate the configuration and print what it defines. No side effects."""
     try:
@@ -312,6 +362,11 @@ def main(argv=None) -> int:
         ("status", cmd_status), ("reload", cmd_reload), ("check", cmd_check),
     ]:
         sub.add_parser(verb).set_defaults(func=fn)
+
+    flow = sub.add_parser("flow-reset",
+                          help="close the flow-integrator period and open a new one")
+    flow.add_argument("--by", help="who is doing this (recorded in the audit log)")
+    flow.set_defaults(func=cmd_flow_reset)
 
     args = p.parse_args(argv)
     return args.func(args)

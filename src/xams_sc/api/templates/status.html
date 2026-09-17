@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Channels{% endblock %}
+{% block content %}
+{% for device, channels in by_device.items() %}
+<div class="card">
+  <h2>{{ device }}</h2>
+  <table>
+    <tr><th>Channel</th><th class="num">Value</th><th>Unit</th>
+        <th class="num">Age</th><th>Quality</th><th>Alarm</th><th>Description</th></tr>
+    {% for c in channels %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td class="num {{ 'dim' if not c.healthy }}">{{ c.formatted() }}</td>
+      <td class="unit">{{ c.unit }}</td>
+      <td class="num dim">{{ '%.0f'|format(c.age_s) if c.age_s < 100000 else '—' }}s</td>
+      <td class="{{ 'good' if c.healthy else 'warn' }}">{{ c.quality }}</td>
+      <td class="{{ 'bad' if c.alarm not in ('ok',) else 'dim' }}">
+        {{ c.alarm }}{% if c.alarm_threshold %} ({{ c.alarm_threshold }}){% endif %}</td>
+      <td class="dim">{{ c.description }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endfor %}
+<div class="card">
+  <div class="note">
+    Values come from the retained MQTT topics, never from the database — this
+    page must work when PostgreSQL does not, which is exactly when it is
+    needed (§8.1). A stale channel shows a dash, never its last number: a
+    frozen value displayed as though it were live invites a decision based on
+    a reading that stopped being true an hour ago.
+  </div>
+</div>
+{% endblock %}
