@@ -40,6 +40,45 @@ SERVICES = ["sinks", "cdaq", "caen", "lakeshore", "ups", "derived", "alarms",
 PID_DIR = Path("logs")
 
 
+SERVICE_PREFIX = "XAMS-"
+
+
+def _service_name(name: str) -> str:
+    return f"{SERVICE_PREFIX}{name}"
+
+
+def _installed_as_service(name: str) -> bool:
+    """True when this service is registered with Windows (via NSSM).
+
+    Everything below branches on this, because the two modes need opposite
+    handling: a plain process is stopped by killing it, whereas killing a
+    NSSM-managed one just makes NSSM start it again ten seconds later.
+    """
+    try:
+        out = subprocess.run(["sc", "query", _service_name(name)],
+                             capture_output=True, text=True, timeout=10)
+        return out.returncode == 0
+    except Exception:
+        return False
+
+
+def _service_mode() -> bool:
+    """True when the stack is installed as Windows services."""
+    return any(_installed_as_service(n) for n in SERVICES)
+
+
+def _sc(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(["sc", *args], capture_output=True, text=True, timeout=30)
+
+
+def _service_state(name: str) -> str:
+    out = _sc("query", _service_name(name)).stdout
+    for token in ("RUNNING", "STOPPED", "START_PENDING", "STOP_PENDING", "PAUSED"):
+        if token in out:
+            return token.lower()
+    return "unknown"
+
+
 def _pid_file(name: str) -> Path:
     return PID_DIR / f"{name}.pid"
 
@@ -73,6 +112,8 @@ def _command_for(name: str) -> list[str]:
 
 
 def cmd_start(args) -> int:
+    if _service_mode():
+        return _start_services()
     PID_DIR.mkdir(parents=True, exist_ok=True)
     for name in SERVICES:
         if _running(name):
@@ -106,7 +147,78 @@ def _lock_held(name: str) -> bool:
         return True
 
 
+def _start_services() -> int:
+    """Start the Windows services, and restore auto-start if it was suspended."""
+    failed = []
+    for name in SERVICES:
+        if not _installed_as_service(name):
+            continue
+        # Undo a previous `stop --for-labview`, which set these to demand so a
+        # reboot could not quietly take the instruments back.
+        _sc("config", _service_name(name), "start=", "auto")
+        if _service_state(name) == "running":
+            print(f"  {name:12s} already running")
+            continue
+        result = _sc("start", _service_name(name))
+        if result.returncode == 0:
+            print(f"  {name:12s} started")
+        else:
+            failed.append(name)
+            print(f"  {name:12s} FAILED to start")
+        time.sleep(0.8)
+    if failed:
+        print()
+        print(f"  {len(failed)} service(s) did not start. Look in logs/<name>.log")
+        return 1
+    print()
+    print("Auto-start is on: the stack returns by itself after a reboot.")
+    return 0
+
+
+def _stop_services(for_labview: bool) -> int:
+    failed = []
+    for name in reversed(SERVICES):
+        if not _installed_as_service(name):
+            continue
+        if _service_state(name) != "stopped":
+            result = _sc("stop", _service_name(name))
+            if result.returncode != 0 and "1062" not in result.stdout:
+                failed.append(name)
+        if for_labview:
+            # Stopping alone is not enough: a service left on automatic comes
+            # back at the next reboot and takes the hardware from LabVIEW,
+            # with nobody present to notice.
+            _sc("config", _service_name(name), "start=", "demand")
+        print(f"  {name:12s} stopped" + ("  (auto-start suspended)" if for_labview else ""))
+        time.sleep(0.4)
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if all(_service_state(n) == "stopped"
+               for n in SERVICES if _installed_as_service(n)):
+            break
+        time.sleep(0.5)
+
+    if failed:
+        print()
+        print(f"  WARNING: {', '.join(failed)} did not stop cleanly.")
+        return 1
+
+    print()
+    print("All hardware released. LabVIEW can be started.")
+    if for_labview:
+        print("Auto-start is suspended, so a reboot will NOT take it back.")
+        print("Run `xams-ctl start` when you want the slow control again.")
+    else:
+        print("NOTE: auto-start is still on — a reboot will bring these back")
+        print("and reclaim the instruments. Use `stop --for-labview` to")
+        print("suspend that as well.")
+    return 0
+
+
 def cmd_stop(args) -> int:
+    if _service_mode():
+        return _stop_services(getattr(args, "for_labview", False))
     stopped = []
     for name in reversed(SERVICES):
         pid = _running(name)
@@ -165,9 +277,20 @@ def cmd_status(args) -> int:
           f"{len(enabled)} enabled of {len(config.channels)} channels")
     print()
 
-    for name in SERVICES:
-        pid = _running(name)
-        print(f"  {name:12s} {'running (pid %d)' % pid if pid else 'stopped'}")
+    if _service_mode():
+        print("  (running as Windows services)")
+        for name in SERVICES:
+            if not _installed_as_service(name):
+                print(f"  {name:12s} not installed as a service")
+                continue
+            state = _service_state(name)
+            boot = "auto" if "AUTO_START" in _sc(
+                "qc", _service_name(name)).stdout else "manual"
+            print(f"  {name:12s} {state:8s} (start: {boot})")
+    else:
+        for name in SERVICES:
+            pid = _running(name)
+            print(f"  {name:12s} {'running (pid %d)' % pid if pid else 'stopped'}")
 
     # Heartbeat ages come from the retained MQTT topics, never from the
     # database: the status view must work when the database does not (§8.1).
@@ -361,10 +484,16 @@ def main(argv=None) -> int:
     p.add_argument("--port", type=int, default=1883)
     sub = p.add_subparsers(dest="command", required=True)
     for verb, fn in [
-        ("start", cmd_start), ("stop", cmd_stop), ("restart", cmd_restart),
+        ("start", cmd_start), ("restart", cmd_restart),
         ("status", cmd_status), ("reload", cmd_reload), ("check", cmd_check),
     ]:
         sub.add_parser(verb).set_defaults(func=fn)
+
+    stop = sub.add_parser("stop", help="stop the services and release the hardware")
+    stop.add_argument("--for-labview", action="store_true",
+                      help="also suspend auto-start, so a reboot does not take "
+                           "the instruments back")
+    stop.set_defaults(func=cmd_stop)
 
     flow = sub.add_parser("flow-reset",
                           help="close the flow-integrator period and open a new one")
