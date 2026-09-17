@@ -22,15 +22,67 @@ staleness:
   notify: [email]
 
 channels:
-  # pmain:
-  #   high: {value: 1.8, severity: minor}
-  #   hihi: {value: 2.0, severity: major, notify: [sms, email, sound]}
-  #   low:  {value: 0.9, severity: minor}
+
+  # ------------------------------------------------------------------
+  # Detector pressure. Thresholds from A.P. Colijn, 17 September 2026.
   #
-  # Left commented deliberately. A guessed threshold is worse than none: it
-  # looks like protection and is not. Fill from the LabVIEW Error and Alarm
-  # tab before milestone 6.
-  {}
+  # THE UNIT IS BAR, and this is where that was established — the limits were
+  # given as "high 2.1 bar, hihi 2.5 bar, low 0.9 bar", which closes a §16
+  # item open since the design was written. It was never guessed: §4.2 is
+  # explicit that a wrong unit propagates into every plot, every threshold,
+  # and eventually into a paper.
+  #
+  # For scale: pmain read 1.495 bar when these were set, so `high` is about
+  # 40% above the working point and `low` about 40% below it.
+  # ------------------------------------------------------------------
+  pmain:
+    low:  {value: 0.9, severity: minor, notify: [email]}
+    high: {value: 2.1, severity: minor, notify: [email]}
+    hihi: {value: 2.5, severity: major, notify: [sms, email, sound]}
+
+  # ------------------------------------------------------------------
+  # UPS. A power event is one of the few things that can end a run (§7.4),
+  # so mains loss goes to SMS at once rather than waiting for the battery to
+  # run down.
+  #
+  # ups_on_battery is 0 or 1, so a limit of 0.5 means "is 1". Written as an
+  # ordinary threshold rather than a special case: everything else in this
+  # file is a threshold, and one mechanism is easier to reason about than two.
+  # ------------------------------------------------------------------
+  ups_on_battery:
+    high: {value: 0.5, severity: major, notify: [sms, email, sound]}
+
+  # Charge and remaining runtime. These matter most while on battery, but they
+  # are also how a failing battery announces itself on line power: a pack that
+  # no longer holds charge reads low even while charging.
+  #
+  # Present values for scale: 100% and 26 minutes.
+  ups_battery_pct:
+    low:  {value: 50.0, severity: minor, notify: [email]}
+    lolo: {value: 25.0, severity: major, notify: [sms, email]}
+
+  ups_runtime_min:
+    lolo: {value: 5.0, severity: major, notify: [sms, email]}
+
+  # ------------------------------------------------------------------
+  # Circulation pump outlets. Thresholds from A.P. Colijn, 17 September 2026.
+  #
+  # Both sides of the same pump: tt104 is the xenon leaving it, tt302 the
+  # cooling water leaving it. They are the two places the pump announces that
+  # it is running hot, which is why they are the only 1xx/3xx channels with
+  # limits — the inlets (tt103, tt301) tell you about the process, the outlets
+  # tell you about the pump.
+  #
+  # Working points when these were set: tt104 48.8 C, tt302 22.8 C, so `high`
+  # sits about 11 C and 7 C above normal respectively.
+  # ------------------------------------------------------------------
+  tt104:
+    high: {value: 60.0, severity: minor, notify: [email]}
+    hihi: {value: 65.0, severity: major, notify: [sms, email, sound]}
+
+  tt302:
+    high: {value: 30.0, severity: minor, notify: [email]}
+    hihi: {value: 35.0, severity: major, notify: [sms, email, sound]}
 
 routing:
   sms:   {recipients: enabled}    # everyone enabled in recipients.yaml

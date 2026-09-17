@@ -164,3 +164,125 @@ class TestReadOnly:
             assert "?" in command, (
                 f"lakeshore.py sends {command!r}, which is not a query. "
                 f"Only queries belong here until milestone 8.")
+
+
+class TestHeaterPower:
+    """Percent of full scale to watts (§ the derive block in channels.yaml).
+
+    Quadratic, so it cannot be an offset and a multiplier. The percentage
+    stays the instrument's own number and this is derived from it.
+    """
+
+    def test_recorded_working_point(self):
+        """51.1% was the real output on 17 September 2026."""
+        from xams_sc.scaling import heater_power
+        assert heater_power(51.1, 45.4, 31.2) == pytest.approx(17.25, abs=0.01)
+
+    def test_zero_percent_is_zero_watts(self):
+        from xams_sc.scaling import heater_power
+        assert heater_power(0.0, 45.4, 31.2) == 0.0
+
+    def test_full_scale(self):
+        from xams_sc.scaling import heater_power
+        assert heater_power(100.0, 45.4, 31.2) == pytest.approx(66.06, abs=0.01)
+
+    def test_it_is_quadratic_not_linear(self):
+        """Doubling the percentage quadruples the power. A linear scaling
+        would give twice — which is why this cannot be expressed as a
+        multiplier."""
+        from xams_sc.scaling import heater_power
+        at_25 = heater_power(25.0, 45.4, 31.2)
+        at_50 = heater_power(50.0, 45.4, 31.2)
+        assert at_50 == pytest.approx(4 * at_25)
+
+    def test_transform_is_registered_by_name(self):
+        from xams_sc.scaling import TRANSFORMS
+        assert "heater_power" in TRANSFORMS
+
+    def test_config_declares_the_derived_channels(self):
+        from xams_sc.config import load
+        cfg = load()
+        for name, source in (("ls_heater_1_w", "ls_heater_1"),
+                             ("ls_heater_2_w", "ls_heater_2")):
+            ch = cfg.channels[name]
+            assert ch.unit == "W"
+            assert ch.derive["from"] == source
+            assert ch.derive["transform"] == "heater_power"
+            assert ch.derive["full_scale_v"] == 45.4
+            assert ch.derive["resistance_ohm"] == 31.2
+
+    def test_the_percentage_channel_is_kept(self):
+        """The instrument's own number must survive alongside the derived
+        one — everything else can be recomputed from it."""
+        from xams_sc.config import load
+        cfg = load()
+        assert cfg.channels["ls_heater_1"].unit == "percent"
+        assert cfg.channels["ls_heater_1"].derive is None
+
+    def test_an_unknown_transform_is_refused(self, tmp_path):
+        import textwrap
+
+        from xams_sc.config import ConfigError, load
+        (tmp_path / "devices.yaml").write_text("lakeshore: {}\n", encoding="utf-8")
+        (tmp_path / "alarms.yaml").write_text("defaults: {}\nchannels: {}\n",
+                                              encoding="utf-8")
+        (tmp_path / "channels.yaml").write_text(textwrap.dedent("""
+            channels:
+              - {name: x_w, device: lakeshore, phys: "1", kind: power, unit: W,
+                 derive: {from: x, transform: no_such_transform}}
+        """), encoding="utf-8")
+        with pytest.raises(ConfigError, match="unknown transform"):
+            load(tmp_path)
+
+
+class TestDerivedQuality:
+    def test_a_failed_source_gives_no_wattage(self):
+        """If the percentage could not be read, the wattage is unknown — not
+        zero. A derived value inherits its source's quality."""
+        from xams_sc.config import load
+        from xams_sc.devices.lakeshore import LakeShoreService
+        from xams_sc.model import Measurement, Quality, utcnow
+
+        class NullBus:
+            connected = True
+            def publish_measurement(self, m): pass
+            def publish_state(self, s, st): pass
+            def publish_heartbeat(self, s): pass
+            def subscribe(self, t, h): pass
+            def connect(self): pass
+            def disconnect(self): pass
+
+        svc = LakeShoreService(load(), NullBus(), simulate=True)
+        now = utcnow()
+        failed = [Measurement(t=now, channel="ls_heater_1", value=None,
+                              unit="percent", quality=Quality.ERROR)]
+        derived = svc._derive_from(failed, now)
+        watts = [m for m in derived if m.channel == "ls_heater_1_w"]
+        assert len(watts) == 1
+        assert watts[0].value is None
+        assert watts[0].quality is Quality.ERROR
+
+    def test_derived_shares_its_source_timestamp(self):
+        """A phantom lag between a value and the thing it was computed from
+        is the kind of artefact that gets mistaken for physics."""
+        from xams_sc.config import load
+        from xams_sc.devices.lakeshore import LakeShoreService
+        from xams_sc.model import Measurement, Quality, utcnow
+
+        class NullBus:
+            connected = True
+            def publish_measurement(self, m): pass
+            def publish_state(self, s, st): pass
+            def publish_heartbeat(self, s): pass
+            def subscribe(self, t, h): pass
+            def connect(self): pass
+            def disconnect(self): pass
+
+        svc = LakeShoreService(load(), NullBus(), simulate=True)
+        now = utcnow()
+        good = [Measurement(t=now, channel="ls_heater_1", value=51.1,
+                            unit="percent", quality=Quality.OK)]
+        derived = svc._derive_from(good, now)
+        watts = next(m for m in derived if m.channel == "ls_heater_1_w")
+        assert watts.t == now
+        assert watts.value == pytest.approx(17.25, abs=0.01)

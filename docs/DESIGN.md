@@ -1232,7 +1232,8 @@ Everything marked **TBD** above, consolidated:
 | ~~Lake Shore sensor units~~ | — | **Celsius, not Kelvin.** An earlier draft of `channels.yaml` said K; the imported history then showed these channels ranging to −90, and there is no negative Kelvin. Confirmed against the instrument: `CRDG? A` = −89.998 and `KRDG? A` = +183.15 describe the same temperature. The driver reads `CRDG?`. |
 | UPS model and connection | milestone 6 | inspect the unit |
 | ~~Are `9207/ai8:15` current channels used?~~ | — | **Resolved 17 September 2026: not used.** No current task is created (§7.1). |
-| Engineering units for the pressure channels (`p101`–`p104`, `pmain`) | milestone 4 | lab knowledge, or the transducer datasheets |
+| ~~Engineering unit for `pmain`~~ | — | **Resolved 17 September 2026: bar.** Established from the alarm limits supplied by A.P. Colijn, not guessed. |
+| Engineering units for `p101`–`p104` | milestone 7 | lab knowledge, or the transducer datasheets. A different transducer from `pmain` with a different multiplier, so `pmain` being bar says nothing about these. |
 | Purpose of `anode_timing.vi` | milestone 8 | read the block diagram |
 | ~~Purpose of `DAISY_polarity_signs.vi`~~ | — | **Explained 17 September 2026**, near-certainly: the supplies report unsigned magnitudes with `POL` separate, so the sign must be applied in software (§7.2). Confirm against the block diagram when convenient. |
 | Heater shut-off and HV kill: hardware or software? | milestone 8 | decision |

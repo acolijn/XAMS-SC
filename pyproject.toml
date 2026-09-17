@@ -16,10 +16,16 @@ hardware = [
     "nidaqmx>=1.0",
     "pyserial>=3.5",
     "lakeshore>=1.7",
+    "pywinusb>=0.4",     # APC UPS over HID (§7.4)
 ]
 api = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
+]
+# Alarm delivery. The same gateway the LabVIEW system uses, so the numbers,
+# the message format and the costs are already known (§11).
+notify = [
+    "messagebird>=2.0",
 ]
 dev = [
     "pytest>=8.0",

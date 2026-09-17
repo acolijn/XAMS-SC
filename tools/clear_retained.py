@@ -120,6 +120,16 @@ def main(argv=None) -> int:
                 stale.append((topic, f"last published {age/3600:.1f} h ago — "
                                      f"nothing is producing it"))
 
+        elif len(parts) == 3 and parts[1] == "alarm":
+            # Alarm state is retained too, and a retained alarm for a channel
+            # that no longer exists can never clear: nothing will ever publish
+            # an "ok" for it. It then sits in the active-alarms table forever,
+            # which trains people to ignore that table.
+            channel = parts[2]
+            if channel not in known:
+                stale.append((topic, f"alarm for {channel!r}, which is not in "
+                                     f"channels.yaml"))
+
         elif len(parts) == 4 and parts[1] == "status":
             if parts[2] not in KNOWN_SERVICES:
                 stale.append((topic, f"unknown service {parts[2]!r}"))

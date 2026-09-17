@@ -18,8 +18,8 @@ SERVICES = {
     "cdaq": ("xams_sc.devices.cdaq", "CdaqService"),
     "caen": ("xams_sc.devices.caen", "CaenService"),
     "lakeshore": ("xams_sc.devices.lakeshore", "LakeShoreService"),
-    # Milestone 6:
-    # "ups": ("xams_sc.devices.ups", "UpsService"),
+    "ups": ("xams_sc.devices.ups", "UpsService"),
+    "derived": ("xams_sc.devices.derived", "DerivedService"),
 }
 
 

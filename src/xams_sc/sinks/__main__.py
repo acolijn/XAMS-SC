@@ -21,6 +21,7 @@ import yaml
 from ..bus import Bus
 from ..config import CONFIG_DIR, ConfigError, load
 from ..service import SingleInstance, setup_logging
+from .alarm_writer import AlarmWriter
 from .jsonl_writer import JsonlWriter
 from .pg_writer import PgWriter
 
@@ -101,6 +102,7 @@ def main(argv=None) -> int:
     log.info("JSONL archive -> %s", args.data_dir)
 
     pg = None
+    alarm_writer = None
     dsn = args.dsn or dsn_from_secrets()
     if args.no_postgres:
         log.info("PostgreSQL writer disabled (--no-postgres)")
@@ -108,6 +110,12 @@ def main(argv=None) -> int:
         pg = PgWriter(bus, dsn)
         pg.start()
         log.info("PostgreSQL writer started")
+        # Alarm state, recorded so Grafana can show it without being part of
+        # the alarm path (§11). Another subscriber; no driver or alarm logic
+        # is touched by its existence.
+        alarm_writer = AlarmWriter(bus, dsn)
+        alarm_writer.start()
+        log.info("alarm-state writer started")
     else:
         # Not an error. Milestone 1 is expected to run before the database
         # exists, and the archive is what matters.
@@ -136,6 +144,9 @@ def main(argv=None) -> int:
         jsonl.close()
         if pg:
             pg.close()
+        if alarm_writer:
+            log.info("%d alarm transition(s) recorded this run", alarm_writer.written)
+            alarm_writer.close()
         bus.disconnect()
         lock.release()
     return 0

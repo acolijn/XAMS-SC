@@ -37,6 +37,7 @@ TOPIC_STATUS = "xams/status"
 TOPIC_ALARM = "xams/alarm"
 TOPIC_CMD = "xams/cmd"
 TOPIC_ACK = "xams/ack"
+TOPIC_RELOAD = "xams/cmd/all/reload"
 
 
 class Bus:
