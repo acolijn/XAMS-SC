@@ -50,6 +50,104 @@ TAG_ALIASES = {
 
 TAG_PATTERN = re.compile(r"[A-Z]{1,3}\d{2,3}")
 
+# Channels that have no instrument tag of their own, anchored to a label that
+# IS on the drawing.
+#
+# The Lake Shore heater is drawn as a plain "Heater" box beside TT401/TT402
+# rather than as a tagged instrument, so nothing in the tag sweep picks it up.
+# Its power is worth seeing next to the two sensors that control it: output 1
+# regulates on input A (setpoint -90 C), which is what tt401 reads.
+# channel -> (anchor label, dx, dy), offset from the CENTRE of that label in
+# final rotated coordinates, centre-anchored.
+#
+# The offsets exist because a plain label has no bubble to sit in, and the
+# surrounding drawing decides what room there is. The heater reading goes
+# BELOW its label: to the right it runs into the EVN116 valve symbol and then
+# reads as though it belonged to that valve, which is worse than being hard to
+# find.
+EXTRA_PLACEMENTS = {
+    "ls_heater_1_w": ("Heater", 0.0, 12.0),
+}
+
+
+
+# The sheet furniture, in the ORIGINAL (unrotated) page coordinates.
+# Measured from the PDF. The title block sits in the corner; the frame is the
+# sheet border, removed by cropping just inside it.
+TITLE_BLOCK = (25.0, 820.0, 160.0, 1180.0)      # x0, y0, x1, y1
+BORDER_INSET = 10.0                              # points to crop off each edge
+
+# Black ink on white paper becomes light ink on a dark page. The two source
+# colours are the drawing's own: solid black for the pipework and instruments,
+# and a mid grey for secondary detail such as hatching and the vessel internals.
+DARK_COLOURS = {
+    "#000000": "#c4ccd8",      # main linework and text
+    "#939598": "#5d6673",      # secondary detail, kept clearly subordinate
+}
+
+
+def strip_sheet_furniture(page) -> None:
+    """Remove the title block and the sheet frame, at the PDF level.
+
+    Doing this on the PDF rather than on the generated SVG is deliberate.
+    An earlier version filtered SVG <path> elements by parsing the numbers out
+    of their `d` attribute — which silently produced nonsense, because SVG path
+    data uses `H` and `V` commands that take a SINGLE coordinate and the naive
+    pairing of numbers into (x, y) then has everything after the first such
+    command offset by one. pymupdf already knows the real geometry, so let it
+    do the work.
+
+    Nothing is lost: the drawing, its authors and its date live in
+    docs/xams_piping_and_instrumentation.pdf, which is the source this file is
+    generated from and where anyone asking "whose drawing is this?" should look.
+    """
+    page.add_redact_annot(pymupdf.Rect(*TITLE_BLOCK))
+    page.apply_redactions()
+
+    r = page.rect
+    page.set_cropbox(pymupdf.Rect(r.x0 + BORDER_INSET, r.y0 + BORDER_INSET,
+                                  r.x1 - BORDER_INSET, r.y1 - BORDER_INSET))
+
+
+# The drawing's own labels. Brighter than the linework: on a dark background
+# thin glyphs need more contrast than strokes do to read at the same weight.
+DARK_TEXT = "#dfe4ec"
+
+# How a unit is written on the drawing. The stored unit strings are chosen for
+# machines; these are for people reading a diagram at a glance.
+UNIT_LABEL = {
+    "C": "°C", "K": "K", "bar": "bar", "g/min": "g/min", "g": "g",
+    "V": "V", "uA": "µA", "W": "W", "percent": "%", "min": "min",
+    "bool": "",            # "on battery" is not a quantity; no unit to show
+    "TBD": "?",            # a unit nobody has established yet, said out loud
+}
+
+
+def recolour_for_dark(root) -> None:
+    """Light ink on a dark page, so the mimic belongs to the interface."""
+    changed = 0
+    for el in root.iter():
+        for attr in ("stroke", "fill"):
+            value = el.get(attr)
+            if value in DARK_COLOURS:
+                el.set(attr, DARK_COLOURS[value])
+                changed += 1
+
+    # TEXT WITH NO fill AT ALL DEFAULTS TO BLACK.
+    #
+    # Recolouring only the elements that name a colour leaves every label in
+    # the drawing invisible on a dark page — 82 of them here, because the
+    # generated SVG relies on the SVG default rather than stating it. An
+    # attribute that is absent still has a value, and this is where that bites.
+    labels = 0
+    for el in root.iter():
+        if el.tag.split("}")[-1] != "text":
+            continue
+        if el.get("fill") is None:
+            el.set("fill", DARK_TEXT)
+            labels += 1
+    print(f"  recoloured {changed} attribute(s) and {labels} unstyled label(s)")
+
 
 def channel_for(tag: str, channels: set[str]) -> str | None:
     if tag in TAG_ALIASES:
@@ -66,10 +164,27 @@ def main() -> int:
 
     doc = pymupdf.open(PDF)
     page = doc[0]
+
+    # Before anything reads coordinates: cropping moves the origin, and every
+    # tag position below must be measured in the cropped space.
+    strip_sheet_furniture(page)
     width, height = page.rect.width, page.rect.height
 
     svg_text = page.get_svg_image(text_as_path=False)
     root = ET.fromstring(svg_text)
+
+    # STRIP THE DRAWING FURNITURE, AND RECOLOUR FOR A DARK PAGE.
+    #
+    # The PDF is a printable A3 sheet: an outer frame, a title block with the
+    # authors and the date, black ink on white. All of that is right for paper
+    # and wrong for a live mimic embedded in a dark interface, where it reads
+    # as a screenshot of some other application pasted into the page.
+    #
+    # The information is not lost — the drawing, its authors and its date are
+    # in docs/xams_piping_and_instrumentation.pdf, which is what the SVG is
+    # generated from and where anyone asking "whose drawing is this?" should
+    # look (§8.2 keeps the PDF as the source).
+    recolour_for_dark(root)
 
     # ROTATE THE DRAWING 90 DEGREES COUNTER-CLOCKWISE.
     #
@@ -144,8 +259,15 @@ def main() -> int:
             fx, fy = rotated(*bubble)
             fy += 3.2                       # optical centre of the circle
         else:
-            fx, fy = rotated(x1, cy)        # just past the end of the label
-            fx += 16
+            # Just past the END of the label, in the FINAL orientation.
+            #
+            # The text runs vertically in the original page (direction 0,1),
+            # so its last character is at y1 — and after the rotation that
+            # becomes the right-hand end. Offsetting the original x instead
+            # moves the value along the wrong axis and drops it on top of the
+            # label, which is exactly what the first attempt did.
+            fx, fy = rotated(cx, y1)
+            fx += 6
             fy += 3.2
         # TWO elements: a white outline underneath, then the number on top.
         #
@@ -155,8 +277,11 @@ def main() -> int:
         # swallows a 9 px character entirely. Drawing the halo as a separate
         # element underneath works everywhere, which matters for a page that
         # has to keep working for years without anyone maintaining it.
+        # Centred inside a bubble; left-aligned when it sits beside a label,
+        # so a negative sign grows away from the text rather than into it.
         common = {
-            "x": f"{fx:.1f}", "y": f"{fy:.1f}", "text-anchor": "middle",
+            "x": f"{fx:.1f}", "y": f"{fy:.1f}",
+            "text-anchor": "middle" if bubble is not None else "start",
             "font-family": "Consolas, monospace", "font-size": "9",
             "font-weight": "bold",
         }
@@ -168,7 +293,7 @@ def main() -> int:
         for k, v in common.items():
             halo.set(k, v)
         halo.set("fill", "none")
-        halo.set("stroke", "#ffffff")
+        halo.set("stroke", "#1b1f27")
         halo.set("stroke-width", "3")
         halo.set("stroke-linejoin", "round")
         halo.text = "—"
@@ -177,9 +302,69 @@ def main() -> int:
         value.set("id", f"v-{channel}")
         for k, v in common.items():
             value.set(k, v)
-        value.set("fill", "#8b95a6")
+        value.set("fill", "#6e7681")
         value.text = "—"
+
+        # THE UNIT, placed differently depending on the room available.
+        #
+        # Inside a bubble there is space for a second, smaller line under the
+        # number — about four characters at 9 px is all a 23 pt circle takes,
+        # so the unit cannot share the line. Beside a label there is plenty of
+        # horizontal room, so the unit rides along in the same text node and
+        # the page writes "-60.7 degC" as one string. Marking which is which
+        # here keeps that decision out of the JavaScript.
+        unit_text = UNIT_LABEL.get(config.channels[channel].unit,
+                                   config.channels[channel].unit)
+        value.set("data-unit", unit_text)
+        if bubble is not None and unit_text:
+            unit = ET.SubElement(root, f"{{{SVG_NS}}}text")
+            unit.set("id", f"u-{channel}")
+            unit.set("x", f"{fx:.1f}")
+            unit.set("y", f"{fy + 7.0:.1f}")
+            unit.set("text-anchor", "middle")
+            unit.set("font-family", "Consolas, monospace")
+            unit.set("font-size", "6.5")
+            unit.set("fill", "#6e7681")   # replaced by the page as soon as a value arrives
+            unit.text = unit_text
+        else:
+            value.set("data-unit-inline", "1")
+
         placed[channel] = (word, "bubble" if bubble is not None else "beside")
+
+    # Channels anchored to a plain label rather than to an instrument tag.
+    for channel, (anchor, dx, dy) in EXTRA_PLACEMENTS.items():
+        if channel not in known or channel in placed:
+            continue
+        spot = next((w for w in page.get_text("words") if w[4] == anchor), None)
+        if spot is None:
+            print(f"  WARNING: no label {anchor!r} on the drawing for {channel}")
+            continue
+        x0, y0, x1, y1 = spot[:4]
+        fx, fy = rotated((x0 + x1) / 2, (y0 + y1) / 2)
+        fx += dx
+        fy += dy
+        unit_text = UNIT_LABEL.get(config.channels[channel].unit,
+                                   config.channels[channel].unit)
+        common = {"x": f"{fx:.1f}", "y": f"{fy:.1f}", "text-anchor": "middle",
+                  "font-family": "Consolas, monospace", "font-size": "9",
+                  "font-weight": "bold"}
+        halo = ET.SubElement(root, f"{{{SVG_NS}}}text")
+        halo.set("id", f"h-{channel}")
+        for k, v in common.items():
+            halo.set(k, v)
+        halo.set("fill", "none"); halo.set("stroke", "#1b1f27")
+        halo.set("stroke-width", "3"); halo.set("stroke-linejoin", "round")
+        halo.text = "—"
+
+        value = ET.SubElement(root, f"{{{SVG_NS}}}text")
+        value.set("id", f"v-{channel}")
+        for k, v in common.items():
+            value.set(k, v)
+        value.set("fill", "#6e7681")
+        value.set("data-unit", unit_text)
+        value.set("data-unit-inline", "1")
+        value.text = "—"
+        placed[channel] = (anchor, "anchored")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))

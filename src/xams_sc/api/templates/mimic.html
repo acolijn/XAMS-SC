@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Mimic{% endblock %}
+{% block title %}P&amp;I{% endblock %}
 {# No meta refresh: the values are updated in place by fetch, so the drawing
    never flickers and your zoom and scroll position survive. #}
 {% block refresh %}{% endblock %}
 {% block content %}
 
 <div class="card">
-  <h2>P&amp;ID — live values</h2>
-  <div class="body" style="background:#fff;overflow:auto;max-height:80vh">
+  <h2>P&amp;I — live values</h2>
+  <div class="body" style="overflow:auto;max-height:82vh">
     {{ svg|safe }}
   </div>
   <div class="note">
@@ -32,8 +32,12 @@
 // About thirty lines of fetch and getElementById, as §8.2 asks for. No
 // framework, no build step: in three years a student must be able to change
 // this without installing a toolchain.
-const ALARM_COLOUR = {ok: "#117733", minor: "#b8860b", major: "#c0392b",
-                      critical: "#c0392b"};
+// On a dark page: a clearly readable green for healthy, amber and red for
+// alarm states. These are brighter than the print-oriented equivalents would
+// be, because thin text on a dark background needs more contrast to read.
+const ALARM_COLOUR = {ok: "#3fb950", minor: "#d29922", major: "#f85149",
+                      critical: "#f85149"};
+const STALE_COLOUR = "#6e7681";
 
 async function refresh() {
   let state;
@@ -50,7 +54,7 @@ async function refresh() {
     let text, colour;
     if (!c.healthy || c.value === null) {
       // Grey and a dash. Never the last good number.
-      text = "—"; colour = "#8b95a6";
+      text = "—"; colour = STALE_COLOUR;
     } else {
       const m = Math.abs(c.value);
       text = (m >= 1000 ? c.value.toFixed(0)
@@ -58,9 +62,21 @@ async function refresh() {
                         : c.value.toFixed(2));
       colour = ALARM_COLOUR[c.alarm] || ALARM_COLOUR.ok;
     }
+    // Where there is no bubble the unit rides in the same string; where
+    // there is one it lives in its own smaller element underneath and never
+    // needs touching.
+    if (node.dataset.unitInline && node.dataset.unit && text !== "—") {
+      text = text + " " + node.dataset.unit;
+    }
     node.textContent = text;
     node.setAttribute("fill", colour);
     if (halo) halo.textContent = text;
+    // The unit under a bubble takes the SAME colour as its value. Left grey it
+    // is barely legible on the dark drawing, and it also reads as a separate,
+    // lesser thing — when it is part of the same reading and should go red
+    // with it when the channel alarms.
+    const unit = document.getElementById("u-" + c.name);
+    if (unit) unit.setAttribute("fill", colour);
   }
   // Channels with no data at all never appear in state.channels, so anything
   // still showing its placeholder is genuinely not being read.
@@ -68,9 +84,11 @@ async function refresh() {
   for (const node of document.querySelectorAll('[id^="v-"]')) {
     if (!seen.has(node.id.slice(2))) {
       node.textContent = "—";
-      node.setAttribute("fill", "#8b95a6");
+      node.setAttribute("fill", STALE_COLOUR);
       const halo = document.getElementById("h-" + node.id.slice(2));
       if (halo) halo.textContent = "—";
+      const unit = document.getElementById("u-" + node.id.slice(2));
+      if (unit) unit.setAttribute("fill", STALE_COLOUR);
     }
   }
 }
