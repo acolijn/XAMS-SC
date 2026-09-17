@@ -17,8 +17,8 @@ import threading
 import time
 from dataclasses import dataclass
 
-from ..bus import TOPIC_ALARM, TOPIC_MEAS, TOPIC_STATUS, Bus
-from ..model import Measurement, Quality, parse_iso, utcnow
+from ..bus import TOPIC_ALARM, TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, Bus
+from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -123,11 +123,40 @@ class SystemState:
             except ValueError:
                 pass
 
+    def _on_reload(self, topic: str, payload: str) -> None:
+        """Re-read the configuration without restarting.
+
+        The UI shows units, descriptions and channel names, all of which come
+        from channels.yaml. Holding the copy loaded at startup means an edit
+        plus `xams-ctl reload` changes the file, changes the alarm engine, and
+        leaves the page showing the old text — which looks like the reload did
+        not work at all.
+        """
+        from ..config import ConfigError
+        from ..config import load as load_config
+        try:
+            new_config = load_config()
+        except ConfigError as exc:
+            log.error("reload refused, configuration is invalid: %s", exc)
+            self.bus.publish_raw("xams/ack/webui/reload",
+                                 json.dumps({"service": "webui",
+                                             "applied": False,
+                                             "error": str(exc)}))
+            return
+        with self._lock:
+            self.config = new_config
+        log.info("configuration reloaded (config %s)", new_config.config_hash)
+        self.bus.publish_raw("xams/ack/webui/reload",
+                             json.dumps({"service": "webui", "applied": True,
+                                         "config": new_config.config_hash}))
+
     def start(self) -> None:
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)
         self.bus.subscribe(f"{TOPIC_ALARM}/#", self._on_alarm)
+        self.bus.subscribe(TOPIC_RELOAD, self._on_reload)
         self.bus.connect()
+        self.bus.publish_state("webui", ServiceState.RUNNING)
 
     # --------------------------------------------------------------- outputs
 

@@ -37,6 +37,10 @@ templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 
 def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
+    # The INITIAL configuration only. Handlers read `state.config`, which is
+    # replaced on `xams-ctl reload` — a description or a unit edited in
+    # channels.yaml must appear on the page without restarting anything, or
+    # the reload looks as though it did nothing.
     config = load()
     bus = Bus(client_id="webui", host=broker, port=port)
     state = SystemState(config, bus)
@@ -48,8 +52,10 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
 
     def page(request: Request, name: str, **context):
         status, css = state.overall()
+        # state.config, not the copy captured at startup: it is replaced on
+        # reload and the page must show the current one.
         return templates.TemplateResponse(request, name, {
-            "state": state, "config": config, "overall": status,
+            "state": state, "config": state.config, "overall": status,
             "overall_class": css, "alarms": state.active_alarms(),
             **context})
 
@@ -78,9 +84,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         """The CAEN supplies: what each channel reads, and what the board is
         configured to allow. The limits are DISPLAYED, never writable (§8.3)."""
         supplies = []
-        for spec in config.devices.get("caen", []) or []:
+        for spec in state.config.devices.get("caen", []) or []:
             channels = []
-            for ch in config.channels.values():
+            for ch in state.config.channels.values():
                 if ch.device != spec["id"] or ch.kind != "hv_vmon":
                     continue
                 index = int(ch.phys)
@@ -130,7 +136,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         status, _ = state.overall()
         return JSONResponse({
             "overall": status,
-            "config": config.config_hash,
+            "config": state.config.config_hash,
             "services": state.services(),
             "alarms": state.active_alarms(),
             "faults": state.known_faults(),

@@ -34,7 +34,8 @@ from ..config import CONFIG_DIR, ConfigError, load
 #
 #     python -m xams_sc.devices sim
 #
-SERVICES = ["sinks", "cdaq", "caen", "lakeshore", "ups", "derived", "alarms"]
+SERVICES = ["sinks", "cdaq", "caen", "lakeshore", "ups", "derived", "alarms",
+            "webui"]
 
 PID_DIR = Path("logs")
 
@@ -66,6 +67,8 @@ def _running(name: str) -> int | None:
 def _command_for(name: str) -> list[str]:
     if name in ("sinks", "alarms"):
         return [sys.executable, "-m", f"xams_sc.{name}"]
+    if name == "webui":
+        return [sys.executable, "-m", "xams_sc.api"]
     return [sys.executable, "-m", "xams_sc.devices", name]
 
 
