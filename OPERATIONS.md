@@ -376,6 +376,51 @@ hardware at all.
 
 ---
 
+## Importing LabVIEW history
+
+```powershell
+.\.venv\Scripts\python.exe tools\import_labview_csv.py --days 7 --dry-run
+.\.venv\Scripts\python.exe tools\import_labview_csv.py --days 7 --to-postgres
+```
+
+Safe to re-run: it removes previously imported rows for the same date range
+before writing, and only ever touches rows tagged `src='labview'`.
+
+A week is about 6.3 million readings and takes roughly two minutes.
+
+**The importer ignores the LabVIEW header files, deliberately.** They are not
+trustworthy: 304 of them contain 90 different layouts, and the current one
+describes 62 columns for data that has 47. Layouts are recognised by column
+count against a table confirmed against live readings, and **any file whose
+layout is not recognised is refused, not guessed at**. If you see
+
+```
+  3-4-2025      REFUSED - 46 columns - not a confirmed layout
+```
+
+that is the tool working. Confirm what those columns are against known values
+before adding the layout to `LAYOUTS` in the script.
+
+To check our readings against the imported record:
+
+```powershell
+.\.venv\Scripts\python.exe tools\compare_to_labview.py
+```
+
+### Stale retained topics
+
+```powershell
+.\.venv\Scripts\python.exe tools\clear_retained.py           # report
+.\.venv\Scripts\python.exe tools\clear_retained.py --apply   # clear
+```
+
+Run this after retiring a service or removing a channel. MQTT retained
+messages outlive the process that published them and are re-delivered to every
+new subscriber, so a channel nothing produces any more keeps reappearing in
+the database after you delete it. Clearing the broker is the only fix.
+
+---
+
 ## What each alarm means *(not yet — milestone 6)*
 
 This section is the reason `OPERATIONS.md` exists, and it is currently empty.

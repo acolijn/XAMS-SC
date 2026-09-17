@@ -24,3 +24,6 @@ __pycache__/
 # Downloaded installers staged by tools/setup_services.ps1 — 870 MB, and
 # always re-fetchable from the vendors. Never in git.
 tools/installers/
+
+# Scratch files from ad-hoc probing
+.scratch_*

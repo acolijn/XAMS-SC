@@ -871,6 +871,47 @@ Flush and `fsync` at least every 10 s so a power loss costs seconds, not hours.
 
 ---
 
+### 9.4a Provenance: every reading says where it came from
+
+Added 17 September 2026, after simulated values reached the production database
+and could not be told apart from measurements.
+
+`Measurement.src` travels **on the reading**, not on the writer:
+
+| `src` | Meaning |
+|---|---|
+| `xams` | read from an instrument by this system |
+| `sim` | **synthetic**, from simulation mode. Not a measurement. |
+| `labview` | imported from the LabVIEW history (§9.6) |
+
+It must be a field on the measurement rather than a property of the sink,
+because one writer serves every service and therefore cannot distinguish them.
+With provenance on the writer, running `sim` once put 62,000 synthetic rows
+into `meas` indistinguishable from real ones, and undoing it meant deleting
+rows by timestamp and channel name.
+
+**A value that is not a measurement must never be able to pass as one.**
+
+### 9.4b Storage is idempotent
+
+`meas` carries a unique index on `(t, channel, src)` and the writer uses
+`ON CONFLICT DO NOTHING`.
+
+This is not defensive coding against a bug; duplicates arrive by a route that
+is working as designed. **MQTT re-delivers retained messages to every new
+subscriber**, so each time a sink reconnects it receives the last value of
+every channel again, with its original timestamp, and would store it a second
+time. Deleting those rows does not help — the next reconnect writes them back.
+Only clearing the broker does, which is what `tools/clear_retained.py` is for.
+
+With the constraint in place a replay is harmless, and reprocessing an archive
+can never inflate the history.
+
+The same reasoning gives the sinks a single-instance lock (§6.1), which they
+originally lacked: on 17 September 2026 two sink processes ran at once and
+duplicated 46,418 rows. Two drivers fighting over an instrument fail loudly;
+two writers succeed quietly, and the only symptom is a row count.
+
 ### 9.5 MongoDB — temporary, during the transition
 
 The existing MongoDB writer can be reused as a third sink, so the Nikhef server keeps receiving data and the existing Python viewer keeps working while Grafana is being set up. Adding it touches no driver: it is another MQTT subscriber.
@@ -1178,6 +1219,7 @@ Everything marked **TBD** above, consolidated:
 | Item | Needed for | How to resolve |
 |---|---|---|
 | ~~Physical location of each `tt*` tag, and what the 1xx/2xx/3xx series denote~~ | — | **Resolved 17 September 2026.** Locations recorded in `channels.yaml`; series meanings in §3. |
+| **Empirical per-sensor verification** — warm each sensor, confirm which channel moves | milestone 3 | Readings were checked against LabVIEW on 17 Sep 2026 and agree, but that cannot catch a mislabelling inherited *from* LabVIEW, which is the failure §15 names. Independent corroboration so far: three inlet/outlet pairs all read the correct sign (§7.1). |
 | ~~`tt202` reads open-circuit — never installed, or failed?~~ | — | **Resolved 17 September 2026: the sensor has failed.** Now `enabled: false` — see the repair item below. |
 | **Replace the `tt202` sensor** (bottom of the detector vessel) | — | hardware repair. Then set `enabled: true` in `channels.yaml`; nothing else changes. |
 | Alarm thresholds and responses | milestone 6 | `Error and Alarm` tab screenshot |
@@ -1192,6 +1234,6 @@ Everything marked **TBD** above, consolidated:
 | Purpose of `anode_timing.vi` | milestone 8 | read the block diagram |
 | ~~Purpose of `DAISY_polarity_signs.vi`~~ | — | **Explained 17 September 2026**, near-certainly: the supplies report unsigned magnitudes with `POL` separate, so the sign must be applied in software (§7.2). Confirm against the block diagram when convenient. |
 | Heater shut-off and HV kill: hardware or software? | milestone 8 | decision |
-| How far back the CSV history goes, and whether the column count is constant throughout | milestone 4 | the check in §9.6 |
+| ~~How far back the CSV history goes, and whether the column count is constant throughout~~ | — | **Resolved 17 September 2026, and it is not constant.** 733 log files from 2023-02-21; **9 distinct column counts** whose date ranges interleave, and 304 header files containing **90 distinct layouts** (1 to 2269 columns). The current header describes 62 columns for data that has 47. `tools/import_labview_csv.py` therefore ignores the headers entirely and refuses any file whose layout it has not confirmed. |
 | Whether the P&ID of 17 May 2024 is still current | milestone 7 | ask the authors before the mimic is built on it |
 | Second maintainer | production | decision |
