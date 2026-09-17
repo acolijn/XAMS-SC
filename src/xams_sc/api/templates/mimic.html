@@ -7,24 +7,8 @@
 
 <div class="card">
   <h2>P&amp;I — live values</h2>
-  <div class="body" style="overflow:auto;max-height:82vh">
+  <div class="body mimic-body">
     {{ svg|safe }}
-  </div>
-  <div class="note">
-    Instrument tags carry the current reading. <strong>A stale channel goes
-    grey and shows a dash — never its last number.</strong> A mimic showing a
-    frozen value as though it were live is the classic failure of this kind of
-    display, and worse than showing nothing: it invites a decision based on a
-    reading that stopped being true an hour ago (§8.2).
-    <br><br>
-    <strong>Read-only. The valves are drawn, never clickable</strong> — they
-    are manual hardware in any case, and control belongs on a page where every
-    write is validated, confirmed and audited (§10).
-    <br><br>
-    Tags drawn without a value — the RGA, the gauges, the valves, the
-    compressor — are not instrumented. That is informative in itself: it shows
-    how much of the plant the slow control actually sees, and what a later
-    phase could add.
   </div>
 </div>
 

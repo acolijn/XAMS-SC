@@ -4,7 +4,18 @@
 {% for device, channels in by_device.items() %}
 <div class="card">
   <h2>{{ device }}</h2>
-  <table>
+  <table class="channels">
+    {# Identical in every table on the page, so the columns line up from one
+       instrument to the next rather than each block finding its own widths. #}
+    <colgroup>
+      <col style="width:16%">   <!-- Channel     — ups_runtime_min is the longest -->
+      <col style="width:9%">    <!-- Value       — right-aligned, tabular figures -->
+      <col style="width:7%">    <!-- Unit                                         -->
+      <col style="width:7%">    <!-- Age                                          -->
+      <col style="width:10%">   <!-- Quality     — 'unverified' is the longest    -->
+      <col style="width:13%">   <!-- Alarm       — state plus its threshold       -->
+      <col>                     <!-- Description — takes what is left             -->
+    </colgroup>
     <tr><th>Channel</th><th class="num">Value</th><th>Unit</th>
         <th class="num">Age</th><th>Quality</th><th>Alarm</th><th>Description</th></tr>
     {% for c in channels %}

@@ -2,12 +2,29 @@
 {% block title %}High voltage{% endblock %}
 {% block content %}
 
+{# Both supplies on one row: four channels each is a short table, and stacking
+   them meant scrolling to compare two boards that are read together. #}
+<div class="grid wide">
 {% for s in supplies %}
 <div class="card">
   <h2>{{ s.id }} — {{ s.model }} serial {{ s.serial }}
       <span class="dim" style="text-transform:none;letter-spacing:0">
         (firmware {{ s.firmware }})</span></h2>
-  <table>
+  <table class="channels">
+    {# Identical in both tables, so the columns line up across the two
+       supplies now that they sit next to each other. #}
+    <colgroup>
+      <col style="width:6%">    <!-- CH                                        -->
+      <col style="width:28%">   <!-- Channel — 'nai — external NaI detector'   -->
+      <col style="width:12%">   <!-- VMON                                      -->
+      <col style="width:12%">   <!-- IMON                                      -->
+      <col style="width:12%">   <!-- Status                                    -->
+      <col style="width:8%">    <!-- MAXV                                      -->
+      <col style="width:6%">    <!-- RUP                                       -->
+      <col style="width:6%">    <!-- RDW                                       -->
+      <col style="width:6%">    <!-- TRIP                                      -->
+      <col>                     <!-- POL                                       -->
+    </colgroup>
     <tr>
       <th>CH</th><th>Channel</th>
       <th class="num">VMON</th><th class="num">IMON</th>
@@ -45,6 +62,7 @@
   </table>
 </div>
 {% endfor %}
+</div>
 
 <div class="card">
   <h2>What these columns are, and what this page cannot do</h2>
