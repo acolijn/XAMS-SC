@@ -33,14 +33,12 @@ from .serial_id import IdentityError, resolve
 
 log = logging.getLogger(__name__)
 
-# Status word bits, DT1470ET. Bit 10 is the one seen in practice: every channel
-# read 1024 on 17 September 2026 with all outputs off.
-STAT_BITS = {
-    0: "ON", 1: "RAMP_UP", 2: "RAMP_DOWN", 3: "OVER_CURRENT",
-    4: "OVER_VOLTAGE", 5: "UNDER_VOLTAGE", 6: "MAX_V", 7: "TRIP",
-    8: "OVER_POWER", 9: "OVER_TEMP", 10: "DISABLED", 11: "KILL",
-    12: "INTERLOCK", 13: "UNCALIBRATED",
-}
+# The status word and its decoding live in hv_status.py: they are pure logic
+# and the web UI needs them, and this module imports `serial`. Re-exported
+# here because this is where anyone would look for them.
+from ..hv_status import (  # noqa: F401
+    BIT_DISABLED, BIT_ON, FAULT_BITS, STAT_BITS, describe_status, is_disabled,
+    is_enabled, status_faults)
 
 
 def _decode(response: str) -> str | None:
@@ -146,11 +144,6 @@ class CaenChannelReader:
             return int(value)
         except ValueError:
             return None
-
-
-def describe_status(word: int) -> str:
-    flags = [name for bit, name in STAT_BITS.items() if word & (1 << bit)]
-    return ",".join(flags) if flags else "OFF"
 
 
 class CaenService(BaseService):
@@ -278,6 +271,22 @@ class CaenService(BaseService):
                                        unit=ch.unit, quality=Quality.ERROR))
                 continue
             index = int(ch.phys)
+
+            if ch.kind == "hv_stat":
+                # The status word is a bitmask, not a measurement: stored as
+                # it comes off the wire so every flag survives, and decoded
+                # where it is displayed.
+                word = reader.status(index)
+                if word is None:
+                    out.append(Measurement(t=now, channel=ch.name, value=None,
+                                           unit=ch.unit, quality=Quality.ERROR))
+                    continue
+                alive[ch.device] = True
+                out.append(Measurement(t=now, channel=ch.name,
+                                       value=float(word), unit=ch.unit,
+                                       raw=float(word), quality=Quality.OK))
+                continue
+
             par = "VMON" if ch.kind == "hv_vmon" else "IMON"
             magnitude = reader.monitor(index, par)
 
@@ -324,6 +333,13 @@ class CaenService(BaseService):
         now = utcnow()
         out = []
         for ch in self._channels:
+            if ch.kind == "hv_stat":
+                # 1 = ON. A simulated supply is on, so the page shows the
+                # interesting case rather than a wall of DISABLED.
+                out.append(Measurement(t=now, channel=ch.name, value=1.0,
+                                       unit=ch.unit, raw=1.0,
+                                       quality=Quality.OK, src="sim"))
+                continue
             if ch.kind == "hv_vmon" and ch.limits:
                 span = ch.limits["max"] if ch.sign > 0 else ch.limits["min"]
                 magnitude = abs(span) * 0.8 + random.gauss(0, 1.0)

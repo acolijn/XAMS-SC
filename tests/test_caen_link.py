@@ -65,6 +65,11 @@ class FakeReader:
         # A dead link does not return a wrong number, it returns nothing.
         return None if not self.alive else (1000.0 if par == "VMON" else 0.5)
 
+    def status(self, channel):
+        # 1 = ON (§7.2). A dead link returns nothing here too — a status word
+        # is a read like any other and must fail the same way.
+        return None if not self.alive else 1
+
     def close(self):
         self.closed = True
 

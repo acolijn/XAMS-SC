@@ -622,6 +622,28 @@ Check in this order:
 3. Has a board been replaced? A new board has a new serial, and
    `devices.yaml` must be edited deliberately — that is the point.
 
+### What the HV Status column means
+
+Read from the board's own `STAT` word, **not** from the voltage:
+
+| shown | meaning |
+|---|---|
+| `ON` | output enabled and putting volts out |
+| `enabled` | output enabled, sitting at **zero volts** — still live |
+| `off` | output disabled (STAT bit 10) |
+| `TRIP`, `INTERLOCK`, … | a fault flag, shown in red in place of the state |
+| `no reading` | the status word could not be read |
+
+**`enabled` is not `off`.** The supplies have a physical enable per channel,
+and a channel can be switched on with its setpoint at zero — one turn from
+putting volts on an electrode. The page said "off" for exactly that case until
+17 September 2026, because it inferred the state from `VMON > 1` instead of
+asking the board. Treat `enabled` as live.
+
+The full bitmask is stored as `hv_*_stat`, so the history carries `TRIP`,
+`INTERLOCK`, `OVER_CURRENT` and `OVER_TEMP` too, whether or not anything
+alarms on them yet.
+
 ### Lake Shore serial settings
 
 **57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is the 335's factory
