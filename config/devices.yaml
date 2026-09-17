@@ -1,0 +1,68 @@
+# Device connection and identity. See DESIGN.md §4.1, §6.2.
+#
+# Device resolution NEVER uses a COM number. Candidates are narrowed by USB
+# hardware ID, then the instrument is asked who it is. For the CAEN units that
+# second step is the only identification — they expose no USB serial number.
+
+cdaq:
+  chassis: cDAQ1
+  serial: "020C5E1C"          # confirmed present on the lab PC, 17 Sep 2026
+  modules:
+    - {alias: "9207",   model: NI9207, slot: 1, serial: "020DFD57"}
+    - {alias: "9216_1", model: NI9216, slot: 2, serial: "020F64D1"}
+    - {alias: "9216_2", model: NI9216, slot: 3, serial: "020F64D0"}
+    - {alias: "9226",   model: NI9226, slot: 4, serial: "02159CBB"}
+
+caen:
+  # Verified on the lab PC, 17 September 2026. CAEN's own VID/PID, not FTDI;
+  # Windows enumerates both as a generic "USB Serial Device" (usbser.sys).
+  # Neither unit carries a USB serial number — the instance path
+  # (5&35CD27EE&0&5) is a hub socket and changes if the cable is moved.
+  # Identity therefore rests entirely on the BDSNUM query (§6.2).
+  - id: hv_1
+    match: {vid: "21E1", pid: "0003"}
+    board_address: 0
+    board_name: DT1470ET       # checked together with the serial (§6.2 rule 2)
+    board_serial: "19198"
+    firmware: "1.08"           # informational; logged, alarmed on change
+    baud: 9600
+    # PMT bottom / PMT top / top screen / bottom screen — all negative.
+    #
+    # `expect` is what these channels were found set to on 17 Sep 2026. The
+    # software READS these at startup and ALARMS on a mismatch; it never
+    # writes them (§8.3, §10 rule 2). Ramp rate, trip current and over-voltage
+    # limit are configured on the instrument and stay there — that is what
+    # keeps the software out of the protection path.
+    expect:
+      0: {pol: "-", maxv: 1100, rup: 1,  rdw: 20,  trip: 2.0,  iset: 20}
+      1: {pol: "-", maxv: 1100, rup: 20, rdw: 20,  trip: 10.0, iset: 20}
+      2: {pol: "-", maxv: 1710, rup: 50, rdw: 50,  trip: 10.0, iset: 5}
+      3: {pol: "-", maxv: 2000, rup: 50, rdw: 50,  trip: 10.0, iset: 5}
+    # TBD (§16): channel 0 ramps at 1 V/s and trips at 2.0 uA where every
+    # other channel is 20-50 and 10.0. Confirm this is intent, not history.
+  - id: hv_2
+    match: {vid: "21E1", pid: "0003"}
+    board_address: 0           # BOTH units are address 0: two separate USB
+    board_name: DT1470ET       # connections, not a daisy chain
+    board_serial: "79"
+    firmware: "1.04"
+    baud: 9600
+    # cathode / gate / anode / NaI — anode and NaI positive.
+    # Read and alarmed on mismatch, never written (§8.3).
+    expect:
+      0: {pol: "-", maxv: 2500, rup: 25, rdw: 50,  trip: 10.0, iset: 310}
+      1: {pol: "-", maxv: 3750, rup: 50, rdw: 100, trip: 10.0, iset: 10}
+      2: {pol: "+", maxv: 4500, rup: 50, rdw: 50,  trip: 10.0, iset: 10}
+      3: {pol: "+", maxv: 1000, rup: 50, rdw: 50,  trip: 10.0, iset: 150}
+
+lakeshore:
+  match: {vid: "1FB9", pid: "0300", serial: "335A12T"}
+  idn_contains: "MODEL335"
+  baud: 57600                  # TBD — confirm against the instrument front panel
+
+ups:
+  # APC, confirmed on the lab PC 17 Sep 2026. PowerChute Personal Edition 3.1.0
+  # is installed; this service reads the HID directly rather than through it.
+  model: "APC (USB HID)"
+  match: {vid: "051D", pid: "0002", serial: "3S2005X18782"}
+  connection: usb-hid

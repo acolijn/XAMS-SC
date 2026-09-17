@@ -1,0 +1,17 @@
+# Tells Grafana where the dashboard JSON lives. See DESIGN.md §12.
+#
+# Update the path to match where the repository is cloned on this machine.
+
+apiVersion: 1
+
+providers:
+  - name: XAMS
+    orgId: 1
+    folder: XAMS
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: C:/Users/localadmin/Documents/XAMS-SC/grafana/dashboards
+      foldersFromFilesStructure: false

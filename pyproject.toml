@@ -1,0 +1,39 @@
+[project]
+name = "xams-sc"
+version = "0.1.0"
+description = "XAMS slow control — acquisition, storage, alarming"
+requires-python = ">=3.11"
+dependencies = [
+    "paho-mqtt>=2.0",
+    "PyYAML>=6.0",
+    "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+# Hardware drivers. Not needed for milestone 1 (simulation only), and not
+# installable on a machine without the NI runtime — hence a separate extra.
+hardware = [
+    "nidaqmx>=1.0",
+    "pyserial>=3.5",
+    "lakeshore>=1.7",
+]
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+xams-ctl = "xams_sc.cli.xams_ctl:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

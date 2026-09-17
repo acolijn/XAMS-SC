@@ -1,0 +1,38 @@
+# Alarm thresholds and severity routing. See DESIGN.md §4.3, §11.
+#
+# Four thresholds per channel, EPICS-style: lolo, low, high, hihi.
+#
+# THRESHOLDS ARE LARGELY TBD (§16) pending the `Error and Alarm` tab of the
+# LabVIEW front panel. What is here is structure plus the staleness rules,
+# which are independent of any physics threshold and are wanted from day one.
+#
+# Changing a threshold silently alters what the system protects against, so
+# this file lives in git and is applied with `xams-ctl reload` — deliberately
+# unlike recipients.yaml, which is edited from the web UI (§4.4).
+
+defaults:
+  hysteresis: 0.02          # fraction of range, prevents chatter
+  min_repeat_minutes: 15    # re-notification interval while a condition persists
+  stale_after_seconds: 60
+
+# Staleness is an alarm at the same severity as a threshold breach: a dead
+# sensor must not read as healthy (§11).
+staleness:
+  severity: major
+  notify: [email]
+
+channels:
+  # pmain:
+  #   high: {value: 1.8, severity: minor}
+  #   hihi: {value: 2.0, severity: major, notify: [sms, email, sound]}
+  #   low:  {value: 0.9, severity: minor}
+  #
+  # Left commented deliberately. A guessed threshold is worse than none: it
+  # looks like protection and is not. Fill from the LabVIEW Error and Alarm
+  # tab before milestone 6.
+  {}
+
+routing:
+  sms:   {recipients: enabled}    # everyone enabled in recipients.yaml
+  email: {recipients: enabled}
+  sound: {}

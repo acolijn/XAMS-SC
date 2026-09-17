@@ -1,0 +1,227 @@
+# Channel definitions — the single source of truth. See DESIGN.md §3, §4.2.
+#
+# Names are the identity of a measurement: MQTT topic, JSONL record, database
+# row, UI label. THEY MUST BE STABLE FOREVER — renaming breaks history.
+#
+# Scaling is  value = (raw - offset) * multiplier  — the LabVIEW convention.
+# Do not change it, or historical comparisons break (§4.2).
+#
+# Unconnected inputs are listed with `enabled: false` rather than omitted, so
+# the map is complete and nobody has to wonder whether a gap is an oversight.
+
+channels:
+
+  # ------------------------------------------------------------------
+  # NI 9207 — voltage inputs ai0:7. Offsets/multipliers recovered from the
+  # LabVIEW front panel. Current inputs ai8:15 are NOT USED (§7.1) and are
+  # not listed: no task is created for them.
+  # ------------------------------------------------------------------
+  - name: p101
+    device: cdaq
+    phys: 9207/ai0
+    kind: voltage
+    offset: 1.0
+    multiplier: 25.0
+    unit: TBD                 # §16 — must not be guessed
+    legacy: P101
+    description: TBD — pressure, 1xx series
+
+  - name: p102
+    device: cdaq
+    phys: 9207/ai1
+    kind: voltage
+    unit: TBD
+    legacy: P102
+    description: TBD — pressure, 1xx series
+
+  - name: p103
+    device: cdaq
+    phys: 9207/ai2
+    kind: voltage
+    unit: TBD
+    legacy: P103
+    description: TBD — pressure, 1xx series
+
+  - name: p104
+    device: cdaq
+    phys: 9207/ai3
+    kind: voltage
+    unit: TBD
+    legacy: P104
+    description: TBD — pressure, 1xx series
+
+  - name: v4
+    device: cdaq
+    phys: 9207/ai4
+    kind: voltage
+    unit: V
+    enabled: false
+    legacy: v4
+    description: generic name in LabVIEW, offset 0 multiplier 1 — likely unused
+
+  - name: pmain
+    device: cdaq
+    phys: 9207/ai5
+    kind: voltage
+    offset: 0.0
+    multiplier: 0.714
+    unit: TBD                 # front panel shows "1.53" without a unit (§4.2)
+    legacy: Pmain
+    description: detector pressure
+    log_minmax: true
+
+  - name: v6
+    device: cdaq
+    phys: 9207/ai6
+    kind: voltage
+    unit: V
+    enabled: false
+    legacy: v6
+    description: generic name in LabVIEW, offset 0 multiplier 1 — likely unused
+
+  - name: fm101
+    device: cdaq
+    phys: 9207/ai7
+    kind: voltage
+    offset: 0.0
+    multiplier: 6.0
+    unit: g/min               # mass flow. NOT SLPM — the old label is wrong (§4.2)
+    legacy: FM101
+    description: flow meter — mass flow in grams per minute
+    log_minmax: true
+
+  # ------------------------------------------------------------------
+  # NI 9226 — PT1000, three-wire. tt201..tt207 on ai0:6; ai7 not connected.
+  # ------------------------------------------------------------------
+  - {name: tt201, device: cdaq, phys: 9226/ai0, kind: rtd, unit: C, legacy: TT201,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt202, device: cdaq, phys: 9226/ai1, kind: rtd, unit: C, legacy: TT202,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt203, device: cdaq, phys: 9226/ai2, kind: rtd, unit: C, legacy: TT203,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt204, device: cdaq, phys: 9226/ai3, kind: rtd, unit: C, legacy: TT204,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt205, device: cdaq, phys: 9226/ai4, kind: rtd, unit: C, legacy: TT205,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt206, device: cdaq, phys: 9226/ai5, kind: rtd, unit: C, legacy: TT206,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt207, device: cdaq, phys: 9226/ai6, kind: rtd, unit: C, legacy: TT207,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: spare_9226_ai7, device: cdaq, phys: 9226/ai7, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "not connected"}
+
+  # ------------------------------------------------------------------
+  # NI 9216_1 — PT100, three-wire. ai7 not connected.
+  # ------------------------------------------------------------------
+  - {name: tt301, device: cdaq, phys: 9216_1/ai0, kind: rtd, unit: C, legacy: TT301,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt302, device: cdaq, phys: 9216_1/ai1, kind: rtd, unit: C, legacy: TT302,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt103, device: cdaq, phys: 9216_1/ai2, kind: rtd, unit: C, legacy: TT103,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt104, device: cdaq, phys: 9216_1/ai3, kind: rtd, unit: C, legacy: TT104,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: ttamb, device: cdaq, phys: 9216_1/ai4, kind: rtd, unit: C, legacy: TTamb,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "ambient temperature"}
+  - {name: tt303, device: cdaq, phys: 9216_1/ai5, kind: rtd, unit: C, legacy: TT303,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: tt304, device: cdaq, phys: 9216_1/ai6, kind: rtd, unit: C, legacy: TT304,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+  - {name: spare_9216_1_ai7, device: cdaq, phys: 9216_1/ai7, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+
+  # ------------------------------------------------------------------
+  # NI 9216_2 — module entirely unconnected. Eight spare PT100 inputs already
+  # wired into the chassis: room to expand without buying hardware (§7.1).
+  # No DAQmx task is created for this module.
+  # ------------------------------------------------------------------
+  - {name: spare_9216_2_ai0, device: cdaq, phys: 9216_2/ai0, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai1, device: cdaq, phys: 9216_2/ai1, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai2, device: cdaq, phys: 9216_2/ai2, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai3, device: cdaq, phys: 9216_2/ai3, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai4, device: cdaq, phys: 9216_2/ai4, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai5, device: cdaq, phys: 9216_2/ai5, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai6, device: cdaq, phys: 9216_2/ai6, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+  - {name: spare_9216_2_ai7, device: cdaq, phys: 9216_2/ai7, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
+
+  # ------------------------------------------------------------------
+  # CAEN hv_1 — serial 19198. All four channels negative polarity.
+  #
+  # `limits` is the SOFTWARE write range (§8.1) — convenience, not protection.
+  # The board's own MAXV applies underneath regardless, and always wins.
+  # `sign` records the polarity the board reports. The supplies return unsigned
+  # magnitudes with POL separate, so the sign is applied in software and values
+  # are STORED SIGNED (§7.2). Changing that convention later inverts history.
+  # ------------------------------------------------------------------
+  - {name: hv_pmt_bot_vmon, device: hv_1, phys: 0, kind: hv_vmon, unit: V, sign: -1,
+     legacy: "PMT bot", limits: {min: -1100.0, max: 0.0}, description: "PMT bottom"}
+  - {name: hv_pmt_bot_imon, device: hv_1, phys: 0, kind: hv_imon, unit: uA,
+     description: "PMT bottom current"}
+  - {name: hv_pmt_top_vmon, device: hv_1, phys: 1, kind: hv_vmon, unit: V, sign: -1,
+     legacy: "PMT top", limits: {min: -1100.0, max: 0.0}, description: "PMT top"}
+  - {name: hv_pmt_top_imon, device: hv_1, phys: 1, kind: hv_imon, unit: uA,
+     description: "PMT top current"}
+  - {name: hv_ts_vmon, device: hv_1, phys: 2, kind: hv_vmon, unit: V, sign: -1,
+     legacy: "TS", limits: {min: -1710.0, max: 0.0}, description: "top screen"}
+  - {name: hv_ts_imon, device: hv_1, phys: 2, kind: hv_imon, unit: uA,
+     description: "top screen current"}
+  - {name: hv_bs_vmon, device: hv_1, phys: 3, kind: hv_vmon, unit: V, sign: -1,
+     legacy: "BS", limits: {min: -2000.0, max: 0.0}, description: "bottom screen"}
+  - {name: hv_bs_imon, device: hv_1, phys: 3, kind: hv_imon, unit: uA,
+     description: "bottom screen current"}
+
+  # ------------------------------------------------------------------
+  # CAEN hv_2 — serial 79. Cathode and gate negative; anode and NaI positive.
+  # ------------------------------------------------------------------
+  - {name: hv_cathode_vmon, device: hv_2, phys: 0, kind: hv_vmon, unit: V, sign: -1,
+     legacy: "Cathode", limits: {min: -2500.0, max: 0.0}, description: "TPC cathode"}
+  - {name: hv_cathode_imon, device: hv_2, phys: 0, kind: hv_imon, unit: uA,
+     description: "TPC cathode current"}
+  - {name: hv_gate_vmon, device: hv_2, phys: 1, kind: hv_vmon, unit: V, sign: -1,
+     legacy: "Gate", limits: {min: -3750.0, max: 0.0}, description: "TPC gate"}
+  - {name: hv_gate_imon, device: hv_2, phys: 1, kind: hv_imon, unit: uA,
+     description: "TPC gate current"}
+  - {name: hv_anode_vmon, device: hv_2, phys: 2, kind: hv_vmon, unit: V, sign: 1,
+     legacy: "Anode", limits: {min: 0.0, max: 4500.0}, description: "TPC anode"}
+  - {name: hv_anode_imon, device: hv_2, phys: 2, kind: hv_imon, unit: uA,
+     description: "TPC anode current"}
+  - {name: hv_nai_vmon, device: hv_2, phys: 3, kind: hv_vmon, unit: V, sign: 1,
+     legacy: "NaI", limits: {min: 0.0, max: 1000.0}, description: "external NaI detector"}
+  - {name: hv_nai_imon, device: hv_2, phys: 3, kind: hv_imon, unit: uA,
+     description: "external NaI detector current"}
+
+  # ------------------------------------------------------------------
+  # Lake Shore 335
+  # ------------------------------------------------------------------
+  - {name: ls_sensor_a, device: lakeshore, phys: A, kind: temperature, unit: K,
+     description: "Lake Shore input A"}
+  - {name: ls_sensor_b, device: lakeshore, phys: B, kind: temperature, unit: K,
+     description: "Lake Shore input B"}
+  - {name: ls_heater_1, device: lakeshore, phys: "1", kind: status, unit: percent,
+     description: "Lake Shore heater output 1"}
+  - {name: ls_heater_2, device: lakeshore, phys: "2", kind: status, unit: percent,
+     description: "Lake Shore heater output 2"}
+
+  # ------------------------------------------------------------------
+  # UPS — APC over USB HID
+  # ------------------------------------------------------------------
+  - {name: ups_on_battery, device: ups, phys: on_battery, kind: status, unit: bool,
+     description: "1 when running on battery, 0 on line power"}
+  - {name: ups_battery_pct, device: ups, phys: battery_pct, kind: status, unit: percent,
+     description: "battery charge"}
+  - {name: ups_runtime_min, device: ups, phys: runtime_min, kind: status, unit: min,
+     description: "estimated runtime remaining"}
+
+  # ------------------------------------------------------------------
+  # Derived (§7.5). Not read from hardware; computed by devices/derived.py.
+  # ------------------------------------------------------------------
+  - {name: fm101_total, device: derived, phys: "integrate:fm101", kind: voltage, unit: g,
+     description: "integrated mass through fm101 since the period start"}
