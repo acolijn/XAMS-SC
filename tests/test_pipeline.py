@@ -28,7 +28,11 @@ class RecordingBus:
         self.measurements: list[Measurement] = []
         self.states: list = []
         self.heartbeats: list[str] = []
-        self.handlers = {}
+        # A list, mirroring the real Bus. This stand-in originally used a dict
+        # keyed by topic — the same flaw the real Bus had — so the suite was
+        # structurally incapable of catching the fanout bug. A double that
+        # reproduces the defect under test proves nothing.
+        self.handlers: list = []
 
     def publish_measurement(self, m):
         self.measurements.append(m)
@@ -40,7 +44,7 @@ class RecordingBus:
         self.heartbeats.append(service)
 
     def subscribe(self, topic, handler):
-        self.handlers[topic] = handler
+        self.handlers.append((topic, handler))
 
     def connect(self):
         pass
@@ -201,3 +205,74 @@ class TestJsonlArchive:
         expected = {c.name for c in config.enabled_channels() if c.device != "derived"}
         assert {r["ch"] for r in records} == expected
         assert all(r["q"] == "ok" for r in records)
+
+
+class TestBusFanout:
+    """Several consumers subscribe to the same pattern. All must receive.
+
+    This is the whole premise of §2.1 — a consumer can be added without
+    touching anything else. An earlier version keyed handlers by topic in a
+    dict, so PgWriter.start() silently replaced JsonlWriter's handler and the
+    archive received nothing while the database filled normally. The durable
+    store failed silently while the disposable one worked.
+    """
+
+    def _make_bus(self):
+        from xams_sc.bus import Bus
+        return Bus(client_id="test-fanout")
+
+    def test_two_handlers_on_one_pattern_both_fire(self):
+        bus = self._make_bus()
+        seen_a, seen_b = [], []
+        bus.subscribe("xams/meas/#", lambda t, p: seen_a.append(t))
+        bus.subscribe("xams/meas/#", lambda t, p: seen_b.append(t))
+        assert bus.subscriber_count == 2
+
+        class Msg:
+            topic = "xams/meas/pmain"
+            payload = b'{"t":"2026-09-17T00:00:00.000Z","ch":"pmain","v":1.0,"u":"bar","q":"ok"}'
+
+        bus._on_message(None, None, Msg())
+        assert seen_a == ["xams/meas/pmain"]
+        assert seen_b == ["xams/meas/pmain"]
+
+    def test_a_raising_handler_does_not_starve_the_others(self):
+        bus = self._make_bus()
+        seen = []
+
+        def explodes(topic, payload):
+            raise RuntimeError("this subscriber is broken")
+
+        bus.subscribe("xams/meas/#", explodes)
+        bus.subscribe("xams/meas/#", lambda t, p: seen.append(t))
+
+        class Msg:
+            topic = "xams/meas/pmain"
+            payload = b"{}"
+
+        bus._on_message(None, None, Msg())
+        assert seen == ["xams/meas/pmain"]
+
+    def test_non_matching_pattern_is_not_called(self):
+        bus = self._make_bus()
+        meas, status = [], []
+        bus.subscribe("xams/meas/#", lambda t, p: meas.append(t))
+        bus.subscribe("xams/status/#", lambda t, p: status.append(t))
+
+        class Msg:
+            topic = "xams/meas/pmain"
+            payload = b"{}"
+
+        bus._on_message(None, None, Msg())
+        assert len(meas) == 1
+        assert status == []
+
+    def test_real_sinks_both_register(self, config, tmp_path):
+        """The actual failure, reproduced with the actual classes."""
+        from xams_sc.sinks.jsonl_writer import JsonlWriter
+        from xams_sc.sinks.pg_writer import PgWriter
+
+        bus = self._make_bus()
+        JsonlWriter(bus, config, directory=tmp_path).start()
+        PgWriter(bus, dsn="host=127.0.0.1 dbname=nowhere", label="test").start()
+        assert bus.subscriber_count == 2

@@ -48,6 +48,8 @@ xams-sc/
 │   ├── service.py              BaseService: lifecycle, reconnect, heartbeat
 │   ├── scaling.py              raw -> engineering units
 │   ├── devices/
+│   │   ├── __main__.py          entry point: python -m xams_sc.devices <name>
+│   │   ├── sim.py               synthetic data, no hardware (see note below)
 │   │   ├── cdaq.py
 │   │   ├── derived.py           flow integrator (§7.5)
 │   │   ├── caen.py
@@ -1052,6 +1054,20 @@ Python `logging` to rotating files, INFO by default, DEBUG selectable per servic
 ## 13. Testing
 
 **Simulation mode.** Every device class accepts `simulate=True` and returns plausible synthetic data without hardware. The whole stack — bus, writers, alarms, UI — must be runnable on a laptop with no instruments attached. This is what makes development possible without occupying the lab PC.
+
+**Deviation, milestone 1, 17 September 2026.** Simulation is *additionally*
+implemented as a standalone service, `devices/sim.py`, which publishes
+synthetic values for every enabled channel across all devices at once. The
+reason is ordering: milestone 1 is built before any device class exists, so
+there was nothing to pass `simulate=True` to, and the acceptance criterion
+requires a service that publishes so the sinks, the dashboards and the install
+can be exercised end to end.
+
+`simulate=True` on each real device class still stands and is built with that
+class, from milestone 2 onward. The two are complementary: `sim` exercises the
+*whole channel map* without hardware, while `simulate=True` exercises *one
+driver's* code path. Neither replaces the other, and `sim` is not a substitute
+for testing a driver.
 
 **Unit tests**, no hardware required:
 - `test_scaling.py` — `(raw - offset) * multiplier`, including the recovered values for `p101`, `pmain`, `fm101`
