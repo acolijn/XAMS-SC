@@ -12,9 +12,16 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Add `.[hardware]` for the device drivers (`nidaqmx`, `pyserial`, `lakeshore`)
-from milestone 2 onward. Those need the NI runtime and are not required for
-simulation.
+Add `.[hardware]` for the device drivers (`nidaqmx`, `pyserial`, `lakeshore`).
+`nidaqmx` is only a wrapper — it needs the NI-DAQmx driver from §2, and
+**installing the Python package does not install the driver**. The serial
+instruments need no vendor driver: the CAEN supplies and the Lake Shore
+enumerate through Windows' generic `usbser.sys`, and the UPS through HID.
+
+Everything except the cDAQ works without §2. The simulated service publishes
+every enabled channel, and the sinks, alarms, web UI and Grafana run on it
+unchanged — which is exactly why a missing NI-DAQmx is not noticed until
+`xams-ctl start` reaches the cDAQ service.
 
 Check that the configuration is valid — this starts nothing:
 
@@ -22,7 +29,103 @@ Check that the configuration is valid — this starts nothing:
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl check
 ```
 
-## 2. Mosquitto, PostgreSQL and Grafana
+## 2. NI-DAQmx, and the module aliases
+
+**This is the one step that is not scripted, and the one most likely to be
+missed.** The lab PC has had NI-DAQmx installed since before this project
+existed, because LabVIEW ran on it — so on that machine this section has never
+been performed by anyone. On a clean machine it must be.
+
+Two separate things, and only the second comes from pip:
+
+| | |
+|---|---|
+| **NI-DAQmx** | the driver: `nicaiu.dll`, NI-MAX, Windows services. A download from NI |
+| **`nidaqmx`** | the Python wrapper, installed by `.[hardware]` in §1 |
+
+### 2.1 The driver
+
+Free of charge but **not freely available**: closed source, and the download is
+behind an ni.com account. It cannot be scripted the way §3 scripts Mosquitto
+and Grafana, because there is a login in the way. Installed through NI Package
+Manager.
+
+!!! warning "Fill this in at the lab PC"
+
+    **TODO(lab PC):** the installed NI-DAQmx version, read from NI-MAX
+    (*Help → About*), and the NI Package Manager version alongside it.
+
+    Record it here rather than "the latest". The cDAQ-9174 is a
+    **discontinued chassis**: that current NI-DAQmx supports it is true today
+    and is not a promise. If the installed version turns out to be the last one
+    that works, that number is worth more than the installer.
+
+**Keep the offline installer.** Download it into `tools/installers/`, beside the
+~870 MB §3 already stages there. That directory is git-ignored and exists for
+exactly this. It means a rebuild does not depend on someone remembering an
+ni.com password, on the account still existing, or on the lab PC reaching the
+internet at all.
+
+**Do not run the hardware services under WSL2.** USB passthrough to WSL2 does
+not work with NI-DAQmx. Anything that touches an instrument runs natively on
+Windows; see [the decision document](OPTIONS.md).
+
+### 2.2 The aliases — do not skip this
+
+This system addresses cDAQ modules by **alias**, never by slot, so that a
+module moved between slots is harmless. Aliases are set in NI-MAX and stored in
+the **host's** configuration database — *not* on the chassis. A fresh Windows
+install therefore has none of them, however untouched the hardware is, and the
+cDAQ service refuses to start with:
+
+```
+FATAL: module alias '9207' not found in NI-MAX. Aliases are configured
+there and this service addresses modules by alias, never by slot.
+```
+
+Correct behaviour, and baffling if you do not know why. In NI-MAX, rename each
+module to the alias below. The serials are authoritative — they are what
+`config/devices.yaml` checks at every startup, and a mismatch is fatal by
+design:
+
+| Alias | Model | Slot | Serial |
+|---|---|---|---|
+| `9207` | NI 9207 | 1 | `020DFD57` |
+| `9216_1` | NI 9216 | 2 | `020F64D1` |
+| `9216_2` | NI 9216 | 3 | `020F64D0` |
+| `9226` | NI 9226 | 4 | `02159CBB` |
+
+The chassis itself must appear as `cDAQ1`, serial `020C5E1C`.
+
+If a module has genuinely been replaced, the new serial goes into
+`config/devices.yaml` as a deliberate, committed change. Never edit it to make
+an error go away.
+
+### 2.3 Check it
+
+The identity check runs at **service startup**, so the way to verify this
+section is to start the cDAQ service and read the first few log lines. There is
+no one-shot mode.
+
+That needs the broker, so it has to wait until §3 is done:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.devices cdaq
+```
+
+A good start logs the chassis serial and then all four module serials as
+confirmed, before any reading is published. Ctrl-C once you have seen them.
+Any `FATAL:` line names exactly what disagrees — a missing alias, or a serial
+that does not match `config/devices.yaml`.
+
+!!! warning "Fill this in at the lab PC"
+
+    **TODO(lab PC):** paste a known-good startup log here — the chassis line
+    and the four module lines. A recorded good output is what makes this
+    section checkable rather than merely readable, and it is the thing you
+    compare against at two in the morning.
+
+## 3. Mosquitto, PostgreSQL and Grafana
 
 One script does all three, in an **elevated** PowerShell:
 
@@ -53,7 +156,7 @@ Windows services. Auto-start stays off while LabVIEW is the fallback, because
 every device admits only one process and a service starting at boot would lock
 LabVIEW out (§12).
 
-## 3. Grafana first login
+## 4. Grafana first login
 
 <http://127.0.0.1:3000>, `admin` / `admin`, and change the password when asked.
 
@@ -63,13 +166,13 @@ and the file is authoritative: edit a dashboard in the UI to get it right, then
 export the JSON and commit it. A dashboard that exists only in Grafana's own
 database is lost when that database is.
 
-## 4. Windows services
+## 5. Windows services
 
 The steps above leave the services running as plain processes, which **would
 not survive a reboot**. Installing them properly is the first entry in
 [what still needs doing](status.md).
 
-## 5. The manual
+## 6. The manual
 
 This documentation is served by the web UI itself, at
 <http://127.0.0.1:8000/manual>, so it is present on the lab PC whether or not
