@@ -1126,6 +1126,10 @@ If the VM is unreachable only that one writer fails; it buffers and catches up, 
 
 `sql/schema.sql` and the provisioned Grafana dashboards exist regardless of whether a VM is ever set up, because they make the **local** install reproducible. Grafana stores dashboards in its own internal database: without provisioning they are lost when that database is lost or Grafana is reinstalled, taking hours of work with them. With the schema and the dashboards in git, installation is a procedure rather than something that was once assembled by hand and can no longer be repeated. This is the same argument as for `channels.yaml`: configuration is data, not an action living in someone's memory.
 
+**Dashboards are archived, not provisioned.** Provisioning refuses every save from the Grafana UI, and `allowUiUpdates` is read only when the service starts — which needs admin on this machine. Fighting that cost an afternoon, so Grafana owns the live dashboard and `grafana/dashboards-archive/` is the copy git tracks, with `tools/save_dashboard.py` moving one into the other (`--save`, `--check`, `--load`). The requirement above is that a dashboard survives losing Grafana’s database, and an archive plus a load command satisfies that as well as provisioning did.
+
+What it does *not* satisfy on its own is that somebody remembers to run it. Drift is silent, and on 17 September 2026 both copies were edited at once — a panel setting into the archive file, a layout rearranged in the UI — so `--load` would have reverted the layout without a word. The system therefore reports it: `xams-ctl status` and the web UI overview both show whether the dashboards still match git, read through a **read-only (Viewer) service account** whose token sits in `secrets.yaml`. The check only ever looks; saving and loading still take the admin password, because those write. Grafana being down or unconfigured reports `unknown`, never `ok` and never drift — a check that cannot see is not a check that passed.
+
 Installing anywhere — lab PC or VM — is then:
 
 ```bash

@@ -280,37 +280,130 @@ the frontend never asked, which rules out the database, the SQL, the time range
 and the credentials in one step — and points at the datasource or the dashboard
 document instead.
 
-### Editing a dashboard, and getting it into git
+### Editing a dashboard, the right way round
 
-Dashboards are **not** provisioned from a file, so the Grafana UI edits and
-saves them normally. Provisioning would refuse every save with "cannot be
+**Grafana owns the dashboard. `grafana/dashboards-archive/` is the copy git
+tracks.** Edit in one place — the Grafana UI — and copy it to the other. The
+loop:
+
+```powershell
+# 1. edit in the Grafana UI, and save there as normal
+# 2. pull it into git
+.\.venv\Scripts\python.exe tools\save_dashboard.py --save --password <pw>
+# 3. commit
+git add grafana/dashboards-archive
+git commit -m "grafana: <what changed>"
+```
+
+Step 2 is the one that matters: **a dashboard that exists only in Grafana's
+own database is lost when that database is.** Nothing runs it for you.
+
+| command | direction | when |
+|---|---|---|
+| `--save` *(the default)* | Grafana → git | after **every** editing session |
+| `--check` | compare only | before `--load`, before a reinstall, before a `git pull` |
+| `--load` | git → Grafana | **only** to restore: fresh install, or Grafana's database lost |
+
+**Never edit a file in `dashboards-archive/` by hand.** That is how both
+copies end up changed at once, and `--load` then silently reverts whatever was
+done in the UI. This happened on 17 September 2026: a panel setting was edited
+into the archive file while the panel layout had been rearranged in the UI, and
+`--load` would have thrown the layout away. If a change is easier to express as
+JSON than by clicking, run `--save` first, apply it to the file, and `--load`
+it straight back — so the two are only ever out of step for a moment.
+
+Dashboards are deliberately **not** provisioned from a file, which is why the
+UI can save them at all. Provisioning refuses every UI save with *"cannot be
 saved from the Grafana UI because it has been provisioned from another
-source", and the setting that permits it is only read when the service starts.
+source"*, and the setting that permits it is only read when the service starts.
 
-**After editing in the UI**, put it in git:
+### Noticing drift before it costs you
 
-```powershell
-.\.venv\Scripts\python.exe tools\save_dashboard.py --password <grafana password>
-git add grafana/dashboards-archive && git commit -m "grafana: update dashboards"
+Forgetting step 2 is silent, so the system says so instead. Both
+`xams-ctl status` and the web UI overview show it:
+
+```
+  grafana   dashboards saved to git (1)
 ```
 
-**A dashboard that exists only in Grafana's own database is lost when that
-database is.** That command is the one step that makes §12 true, and nothing
-runs it for you.
+and when they have diverged:
 
-**On a fresh install**, put them back:
-
-```powershell
-.\.venv\Scripts\python.exe tools\save_dashboard.py --load --password <pw>
+```
+  grafana   NOT SAVED TO GIT — XAMS Overview (differs)
+            a dashboard only in Grafana is lost with Grafana:
+            tools\save_dashboard.py --save --password <pw>
 ```
 
-**To check whether Grafana and git have drifted:**
+This reads Grafana through a **read-only service account** (`xams-drift-check`,
+role Viewer), whose token lives in `config/secrets.yaml` — which is gitignored.
+It can look at dashboards and nothing else: it cannot edit a panel, delete
+anything or touch a datasource. Saving and loading still take the admin
+password, deliberately, because those write.
+
+If Grafana is stopped, uninstalled or unreachable the check reports
+**unknown**, never "fine" and never "drift". A check that cries wolf about its
+own plumbing trains people to ignore it, and one that reports green because it
+could not reach anything is worse still.
+
+To re-issue the token — after rotating the admin password, say:
 
 ```powershell
-.\.venv\Scripts\python.exe tools\save_dashboard.py --check --password <pw>
+# In Grafana: Administration > Users and access > Service accounts
+#   xams-drift-check > Add service account token
+# then put it in config/secrets.yaml under:
+#   grafana:
+#     url: http://127.0.0.1:3000
+#     token: <the new token>
 ```
 
-Worth running before a reinstall, and after anyone has been editing.
+Deleting the `grafana:` section turns the check off; it then reports nothing
+rather than complaining, on the grounds that a check nobody configured is not
+a fault.
+
+### How often a point appears in a plot
+
+Three different rates are easy to confuse, and only the last one is usually
+the problem:
+
+| | rate | set where |
+|---|---|---|
+| sensors are **read** | 1 s | `interval_s` in `service.py` |
+| values are **stored** | 10 s | `log_interval_s` in `service.py` |
+| points are **plotted** | *depends on the panel* | Grafana, per panel |
+
+Each row in `meas` is the **mean of the ten 1 Hz samples** in its window, with
+`vmin` and `vmax` alongside it — so a spike between two stored points is still
+recorded, it is just not the thing plotted by default.
+
+**Storage is already 10 s.** If plots look coarser than that, nothing is wrong
+with PostgreSQL or with the write frequency — it is Grafana bucketing, which
+it does with `$__timeGroupAlias(t, $__interval)`:
+
+```
+$__interval = max(timeRange / maxDataPoints, minInterval)
+```
+
+With both unset, `maxDataPoints` defaults to the panel's width in pixels
+(~700), so a 12-hour range gives `43200 / 700` ≈ **one point per minute**,
+regardless of how much detail is in the database.
+
+Every time-series panel therefore sets, under **Query options**:
+
+- **Min interval** `10s` — the floor. It matches how often a value is actually
+  stored, so a finer bucket could only invent empty ones.
+- **Max data points** `3000` — the ceiling, and so what decides how far out
+  10 s survives: `3000 × 10 s` = **8.3 hours**. Past that Grafana widens the
+  bucket on its own rather than pulling tens of thousands of points per series
+  into the browser.
+
+To hold 10 s over a longer range, raise **Max data points** — a 24-hour range
+at 10 s needs 8640. It is worth doing deliberately: that is 8640 points *per
+series*, and the gas-temperature panel draws nine of them.
+
+The measurements land almost exactly on 10 s boundaries, so these buckets come
+out dense — a check over a 30-minute window found all 180 buckets present and
+all nine channels in every one of them. `spanNulls: 45000` stays in place for
+the occasional missed window.
 
 ### Grafana: a panel mixing channels from two services shows nothing
 

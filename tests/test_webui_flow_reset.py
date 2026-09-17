@@ -70,9 +70,22 @@ def bus():
     return FakeBus()
 
 
+class StubDrift:
+    """The dashboard-drift check, stubbed out.
+
+    Without this the web UI tests reach across to Grafana over HTTP, which
+    makes them fail on any machine where Grafana is merely stopped — and the
+    thing they are testing has nothing to do with dashboards.
+    """
+
+    def get(self):
+        return {"state": "ok", "dashboards": [], "detail": "stubbed"}
+
+
 @pytest.fixture
 def client(bus, monkeypatch):
     monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
+    monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     return TestClient(app_module.create_app())
 
 
@@ -128,6 +141,7 @@ class TestTheAnswerIsReportedHonestly:
         """
         silent = FakeBus(acknowledge=False)
         monkeypatch.setattr(app_module, "Bus", lambda **kw: silent)
+        monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
         app = app_module.create_app()
         # The real timeout is 8 s; the point here is the answer, not the wait.
         monkeypatch.setattr(app.state.system, "reset_flow",

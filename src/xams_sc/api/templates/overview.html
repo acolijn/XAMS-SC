@@ -76,6 +76,32 @@
   </div>
 
   <div class="card">
+    <h2>Dashboards</h2>
+    <div class="body">
+      {% if drift.state == 'ok' %}
+        <span class="good">saved to git</span>
+        <div class="dim" style="margin-top:.35rem">{{ drift.detail }}</div>
+      {% elif drift.state == 'drift' %}
+        <span class="bad">not saved to git</span>
+        <div class="dim" style="margin-top:.35rem">
+          {{ drift.detail }}<br>
+          A dashboard that exists only in Grafana is lost when Grafana's
+          database is.
+        </div>
+      {% else %}
+        <span class="dim">unknown</span>
+        <div class="dim" style="margin-top:.35rem">{{ drift.detail }}</div>
+      {% endif %}
+    </div>
+    {% if drift.state == 'drift' %}
+    <div class="note">
+      Pull the edits into git, then commit (§12):<br>
+      <code>tools\save_dashboard.py --save --password &lt;pw&gt;</code>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>Integrated flow</h2>
     <div class="body">
       {% set f = flow.view %}

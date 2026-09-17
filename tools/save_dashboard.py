@@ -46,8 +46,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # afternoon, so dashboards are no longer provisioned from a file at all.
 #
 # Instead: Grafana owns the live dashboard and the UI can edit it freely, and
-# this directory is the ARCHIVE that git tracks. `--save` copies Grafana into
-# it, `--load` puts it back into a fresh Grafana. The §12 requirement is that
+# this directory is the ARCHIVE that git tracks. `--save` (the default) copies
+# Grafana into it, `--load` puts it back into a fresh Grafana. The §12
+# requirement is that
 # a dashboard survives losing Grafana's database, and an archive plus a load
 # command satisfies that just as well as provisioning did.
 DASHBOARD_DIR = ROOT / "grafana" / "dashboards-archive"
@@ -130,11 +131,21 @@ def main(argv=None) -> int:
     p.add_argument("--url", default="http://127.0.0.1:3000")
     p.add_argument("--user", default=os.environ.get("GRAFANA_USER", "admin"))
     p.add_argument("--password", default=os.environ.get("GRAFANA_PASSWORD"))
+    # --save is the default and needs no flag, but it exists so that all three
+    # directions can be written out explicitly. A command whose most common
+    # action is the one you cannot name is a command people get wrong.
+    p.add_argument("--save", action="store_true",
+                   help="pull Grafana INTO the files (the default)")
     p.add_argument("--check", action="store_true",
                    help="report drift between Grafana and the files; write nothing")
     p.add_argument("--load", action="store_true",
                    help="push the archived files INTO Grafana (use on a fresh install)")
     args = p.parse_args(argv)
+
+    if args.load and (args.save or args.check):
+        print("--load goes the other way from --save/--check; pick one.",
+              file=sys.stderr)
+        return 2
 
     if args.load:
         return load_into_grafana(args)
