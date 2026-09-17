@@ -58,6 +58,15 @@ class Channel:
     enabled: bool = True
     description: str = ""
     log_minmax: bool = False
+    on_pid: bool = True
+    """Whether this channel appears on the P&ID (§8.2).
+
+    Default true for anything that measures a point in the plant. Set false
+    for a reading that legitimately has no place on a piping drawing — the
+    ambient temperature of the room, for instance. Without this the mimic
+    drift check reports it as missing forever, and a warning that is always
+    on is one nobody reads.
+    """
 
     def in_limits(self, value: float) -> bool:
         """Software write range (§8.1). Convenience, NOT protection.
@@ -227,6 +236,7 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
             enabled=bool(e.get("enabled", True)),
             description=str(e.get("description", "")),
             log_minmax=bool(e.get("log_minmax", False)),
+            on_pid=bool(e.get("on_pid", True)),
         )
 
     return channels

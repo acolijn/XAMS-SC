@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Mimic{% endblock %}
+{# No meta refresh: the values are updated in place by fetch, so the drawing
+   never flickers and your zoom and scroll position survive. #}
+{% block refresh %}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h2>P&amp;ID — live values</h2>
+  <div class="body" style="background:#fff;overflow:auto;max-height:80vh">
+    {{ svg|safe }}
+  </div>
+  <div class="note">
+    Instrument tags carry the current reading. <strong>A stale channel goes
+    grey and shows a dash — never its last number.</strong> A mimic showing a
+    frozen value as though it were live is the classic failure of this kind of
+    display, and worse than showing nothing: it invites a decision based on a
+    reading that stopped being true an hour ago (§8.2).
+    <br><br>
+    <strong>Read-only. The valves are drawn, never clickable</strong> — they
+    are manual hardware in any case, and control belongs on a page where every
+    write is validated, confirmed and audited (§10).
+    <br><br>
+    Tags drawn without a value — the RGA, the gauges, the valves, the
+    compressor — are not instrumented. That is informative in itself: it shows
+    how much of the plant the slow control actually sees, and what a later
+    phase could add.
+  </div>
+</div>
+
+<script>
+// About thirty lines of fetch and getElementById, as §8.2 asks for. No
+// framework, no build step: in three years a student must be able to change
+// this without installing a toolchain.
+const ALARM_COLOUR = {ok: "#117733", minor: "#b8860b", major: "#c0392b",
+                      critical: "#c0392b"};
+
+async function refresh() {
+  let state;
+  try {
+    state = await (await fetch("/api/state", {cache: "no-store"})).json();
+  } catch (e) {
+    return;                       // broker or server hiccup; keep what is drawn
+  }
+  for (const c of state.channels) {
+    const node = document.getElementById("v-" + c.name);
+    if (!node) continue;
+    // The halo underneath carries the same text, or it shows through.
+    const halo = document.getElementById("h-" + c.name);
+    let text, colour;
+    if (!c.healthy || c.value === null) {
+      // Grey and a dash. Never the last good number.
+      text = "—"; colour = "#8b95a6";
+    } else {
+      const m = Math.abs(c.value);
+      text = (m >= 1000 ? c.value.toFixed(0)
+            : m >= 10   ? c.value.toFixed(1)
+                        : c.value.toFixed(2));
+      colour = ALARM_COLOUR[c.alarm] || ALARM_COLOUR.ok;
+    }
+    node.textContent = text;
+    node.setAttribute("fill", colour);
+    if (halo) halo.textContent = text;
+  }
+  // Channels with no data at all never appear in state.channels, so anything
+  // still showing its placeholder is genuinely not being read.
+  const seen = new Set(state.channels.map(c => c.name));
+  for (const node of document.querySelectorAll('[id^="v-"]')) {
+    if (!seen.has(node.id.slice(2))) {
+      node.textContent = "—";
+      node.setAttribute("fill", "#8b95a6");
+      const halo = document.getElementById("h-" + node.id.slice(2));
+      if (halo) halo.textContent = "—";
+    }
+  }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+{% endblock %}
