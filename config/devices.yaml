@@ -12,6 +12,12 @@ cdaq:
     - {alias: "9216_1", model: NI9216, slot: 2, serial: "020F64D1"}
     - {alias: "9216_2", model: NI9216, slot: 3, serial: "020F64D0"}
     - {alias: "9226",   model: NI9226, slot: 4, serial: "02159CBB"}
+  # RTD excitation current, measured from the hardware 17 Sep 2026. Each module
+  # accepts EXACTLY ONE value and neither is the DAQmx default of 2.5 mA, so
+  # both must be set explicitly or the task refuses to configure. Kept here for
+  # the record; the driver holds the same values in EXCITATION_A.
+  #   NI9226 (PT1000): 100 uA only   — 1 mA and 2.5 mA both refused
+  #   NI9216 (PT100):  1 mA only     — 100 uA and 2.5 mA both refused
 
 caen:
   # Verified on the lab PC, 17 September 2026. CAEN's own VID/PID, not FTDI;

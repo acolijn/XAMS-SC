@@ -1,0 +1,303 @@
+"""NI cDAQ-9174 service. See DESIGN.md §7.1.
+
+Read-only. The chassis has no output module, so this service has no control
+path and never writes anything to hardware.
+
+All four modules are low-rate delta-sigma with differing aggregate rates and
+cannot share one hardware-timed task. Slow control reads at 1 Hz, so this uses
+**on-demand (software-timed) reads**, one task per module, polled in sequence.
+The CompactDAQ timing-engine constraint then does not apply.
+
+Tasks actually created:
+
+    9207     ai0:7 voltage   (ai8:15 current are NOT used — §7.1)
+    9226     ai0:6 PT1000    (ai7 not connected)
+    9216_1   ai0:6 PT100     (ai7 not connected)
+    9216_2   none — module entirely unconnected, no task created
+
+Modules are addressed by **alias** (`9207/ai0`), not `cDAQ1Mod1/ai0`. Aliases
+are configured in NI-MAX and survive re-slotting.
+"""
+
+from __future__ import annotations
+
+import logging
+import random
+from dataclasses import dataclass
+
+from ..config import Channel, Config
+from ..model import Measurement, Quality, utcnow
+from ..scaling import apply
+from ..service import BaseService
+
+log = logging.getLogger(__name__)
+
+# Excitation current, per module model. MEASURED FROM THE HARDWARE, 17 Sep 2026.
+#
+# Each module accepts EXACTLY ONE value, and neither is the DAQmx default of
+# 2.5 mA — so both must be set explicitly or the task fails to configure:
+#
+#     NI 9226 (PT1000): 100 uA only. 1 mA and 2.5 mA are both refused.
+#     NI 9216 (PT100):  1 mA only.   100 uA and 2.5 mA are both refused.
+#
+# The physics agrees: 1000 ohm at 1 mA would dissipate a milliwatt in the
+# sensor and self-heat it, which is why the PT1000 module runs at a tenth of
+# the current. Do not "simplify" this by dropping the argument and letting
+# DAQmx choose — §7.1's example code does exactly that, and it does not work.
+EXCITATION_A = {
+    "NI9226": 100e-6,
+    "NI9216": 1e-3,
+}
+
+RTD_TYPES = {"PT3851": "PT_3851", "PT3750": "PT_3750"}
+
+# Platinum RTDs to IEC 60751 are defined from -200 to +850 C. A reading outside
+# that is not a cold or hot sensor — it is an open circuit, a short, or a
+# missing sensor, and the module is reporting the rail rather than a
+# temperature.
+#
+# This is not a threshold and does not belong in alarms.yaml: it is the
+# difference between a measurement and the absence of one. Publishing +1326 C
+# as quality=ok would be the frozen-plausible-value failure principle 4 exists
+# to forbid — and it is how an unconnected input looks on this hardware, which
+# is exactly how tt202 was found on 17 September 2026.
+RTD_VALID_C = (-200.0, 850.0)
+
+WIRING = {2: "TWO_WIRE", 3: "THREE_WIRE", 4: "FOUR_WIRE"}
+
+
+@dataclass
+class ModuleTask:
+    """One DAQmx task: a module, and the channels read from it in order."""
+
+    alias: str
+    model: str
+    channels: list[Channel]
+    task: object | None = None
+
+
+class CdaqService(BaseService):
+    name = "cdaq"
+
+    def __init__(self, config: Config, bus, simulate: bool = False, **kw):
+        super().__init__(config, bus, simulate=simulate, **kw)
+        self._modules: list[ModuleTask] = []
+        self._device_serials: dict[str, str] = {}
+        # Log an out-of-range RTD once, not every second.
+        self._reported_open: set[str] = set()
+        self._build_tasks()
+
+    # ------------------------------------------------------------------ setup
+
+    def _build_tasks(self) -> None:
+        """Group the enabled cdaq channels by module alias.
+
+        A module with no enabled channels gets no task — which is how 9216_2,
+        entirely unconnected, ends up costing nothing.
+        """
+        cfg = self.config.devices.get("cdaq", {})
+        models = {m["alias"]: m["model"] for m in cfg.get("modules", [])}
+        self._device_serials = {m["alias"]: m.get("serial", "")
+                                for m in cfg.get("modules", [])}
+
+        by_alias: dict[str, list[Channel]] = {}
+        for ch in self.config.channels_for("cdaq"):
+            alias = ch.phys.split("/")[0]
+            by_alias.setdefault(alias, []).append(ch)
+
+        for alias, channels in sorted(by_alias.items()):
+            channels.sort(key=lambda c: int(c.phys.split("/ai")[1]))
+            self._modules.append(
+                ModuleTask(alias=alias, model=models.get(alias, ""), channels=channels)
+            )
+            log.info("module %s (%s): %d enabled channels",
+                     alias, models.get(alias, "?"), len(channels))
+
+        skipped = [a for a in models if a not in by_alias]
+        if skipped:
+            log.info("no task for %s — no enabled channels", ", ".join(sorted(skipped)))
+
+    # -------------------------------------------------------------- identity
+
+    def verify_identity(self) -> bool:
+        """Confirm the chassis and every module are the ones in devices.yaml.
+
+        A module swapped between slots is harmless — aliases follow the module.
+        A module *replaced* is not, and that is what this catches.
+        """
+        if self.simulate:
+            log.info("simulate=True: skipping hardware identity check")
+            return True
+
+        from nidaqmx.system import System
+
+        cfg = self.config.devices.get("cdaq", {})
+        expected_chassis = str(cfg.get("serial", "")).upper().lstrip("0")
+
+        try:
+            devices = {d.name: d for d in System.local().devices}
+        except Exception as exc:
+            log.critical("FATAL: cannot reach NI-DAQmx: %s", exc)
+            return False
+
+        chassis_name = cfg.get("chassis", "cDAQ1")
+        if chassis_name not in devices:
+            log.critical("FATAL: chassis %s not present. Is it powered and connected?",
+                         chassis_name)
+            return False
+
+        found = f"{devices[chassis_name].serial_num:08X}".upper().lstrip("0")
+        if expected_chassis and found != expected_chassis:
+            log.critical(
+                "FATAL: chassis serial mismatch — devices.yaml says %s, hardware "
+                "reports %s. Refusing to start; do not guess.",
+                cfg.get("serial"), found)
+            return False
+        log.info("chassis %s serial %s confirmed", chassis_name, found)
+
+        for mod in self._modules:
+            expected = str(self._device_serials.get(mod.alias, "")).upper().lstrip("0")
+            if mod.alias not in devices:
+                log.critical("FATAL: module alias %r not found in NI-MAX. Aliases are "
+                             "configured there and this service addresses modules by "
+                             "alias, never by slot.", mod.alias)
+                return False
+            actual = f"{devices[mod.alias].serial_num:08X}".upper().lstrip("0")
+            if expected and actual != expected:
+                log.critical(
+                    "FATAL: module %s serial mismatch — devices.yaml says %s, "
+                    "hardware reports %s. A replaced module needs a deliberate "
+                    "config change, not a silent acceptance.",
+                    mod.alias, self._device_serials[mod.alias], actual)
+                return False
+            log.info("module %s serial %s confirmed", mod.alias, actual)
+
+        return self._open_tasks()
+
+    def _open_tasks(self) -> bool:
+        """Create one on-demand task per module. Returns False on a clean failure."""
+        import nidaqmx
+        from nidaqmx.constants import (ExcitationSource, ResistanceConfiguration,
+                                       RTDType, TemperatureUnits)
+
+        for mod in self._modules:
+            try:
+                task = nidaqmx.Task(new_task_name=f"xams_{mod.alias}")
+                for ch in mod.channels:
+                    if ch.kind == "rtd":
+                        rtd = ch.rtd or {}
+                        excit = EXCITATION_A.get(mod.model)
+                        if excit is None:
+                            log.critical("FATAL: no excitation current known for "
+                                         "module model %r (%s)", mod.model, mod.alias)
+                            return False
+                        task.ai_channels.add_ai_rtd_chan(
+                            ch.phys,
+                            rtd_type=getattr(RTDType, RTD_TYPES[rtd["type"]]),
+                            resistance_config=getattr(
+                                ResistanceConfiguration, WIRING[int(rtd.get("wiring", 3))]),
+                            current_excit_source=ExcitationSource.INTERNAL,
+                            current_excit_val=excit,
+                            r_0=float(rtd["r0"]),
+                            units=TemperatureUnits.DEG_C,
+                        )
+                    elif ch.kind == "voltage":
+                        task.ai_channels.add_ai_voltage_chan(ch.phys)
+                    else:
+                        log.critical("FATAL: channel %s has kind %r, which this "
+                                     "service cannot read", ch.name, ch.kind)
+                        return False
+                # No timing configured: on-demand, software-timed reads (§7.1).
+                task.start()
+                mod.task = task
+                log.info("task for %s ready (%d channels)", mod.alias, len(mod.channels))
+            except Exception as exc:
+                self._close_tasks()
+                if "-200022" in str(exc) or "already been reserved" in str(exc):
+                    log.critical(
+                        "FATAL: %s in use by another process (LabVIEW running?). "
+                        "Refusing to start. Stop the LabVIEW slow-control VI and "
+                        "try again — every device admits only one process.",
+                        self.config.devices.get("cdaq", {}).get("chassis", "cDAQ1"))
+                else:
+                    log.critical("FATAL: could not configure %s: %s", mod.alias, exc)
+                return False
+        return True
+
+    def _close_tasks(self) -> None:
+        for mod in self._modules:
+            if mod.task is not None:
+                try:
+                    mod.task.close()
+                except Exception:
+                    pass
+                mod.task = None
+
+    def close(self) -> None:
+        """Release the chassis so LabVIEW can have it back."""
+        self._close_tasks()
+        log.info("cDAQ released")
+
+    # ------------------------------------------------------------------- read
+
+    def read(self) -> list[Measurement]:
+        if self.simulate:
+            return self._read_simulated()
+
+        now = utcnow()
+        out: list[Measurement] = []
+        for mod in self._modules:
+            if mod.task is None:
+                continue
+            values = mod.task.read()
+            # A single-channel task returns a scalar, not a list.
+            if not isinstance(values, list):
+                values = [values]
+            if len(values) != len(mod.channels):
+                raise RuntimeError(
+                    f"{mod.alias}: read returned {len(values)} values for "
+                    f"{len(mod.channels)} channels")
+            for ch, raw in zip(mod.channels, values):
+                # RTD channels come back in degrees C from DAQmx; their offset
+                # and multiplier default to 0 and 1, so this is a no-op for
+                # them and the real scaling for the voltage channels (§4.2).
+                quality = Quality.OK
+                if ch.kind == "rtd" and not (RTD_VALID_C[0] <= raw <= RTD_VALID_C[1]):
+                    # Report the absence of a measurement, not a number.
+                    quality = Quality.ERROR
+                    if ch.name not in self._reported_open:
+                        log.error(
+                            "%s (%s) reads %.1f C, outside the RTD range %s..%s — "
+                            "open circuit, short, or no sensor. Publishing "
+                            "quality=error, not a temperature.",
+                            ch.name, ch.phys, raw, *RTD_VALID_C)
+                        self._reported_open.add(ch.name)
+                elif ch.kind == "rtd":
+                    self._reported_open.discard(ch.name)
+
+                out.append(Measurement(
+                    t=now, channel=ch.name,
+                    value=apply(raw, ch.offset, ch.multiplier) if quality is Quality.OK
+                          else None,
+                    unit=ch.unit, raw=raw, quality=quality,
+                ))
+        return out
+
+    def _read_simulated(self) -> list[Measurement]:
+        """Synthetic values for this driver's own channels (§13).
+
+        Complements devices/sim.py: that one covers the whole channel map,
+        this one exercises this driver's code path without the chassis.
+        """
+        now = utcnow()
+        out = []
+        for mod in self._modules:
+            for ch in mod.channels:
+                raw = (random.gauss(-60.0, 0.5) if ch.kind == "rtd"
+                       else random.gauss(1.5, 0.01))
+                out.append(Measurement(
+                    t=now, channel=ch.name,
+                    value=apply(raw, ch.offset, ch.multiplier),
+                    unit=ch.unit, raw=raw, quality=Quality.OK,
+                ))
+        return out

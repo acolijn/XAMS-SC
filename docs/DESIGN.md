@@ -135,7 +135,17 @@ ups_*                           UPS status
 
 The `legacy:` key in `channels.yaml` records the original casing (`TT201`, `Pmain`) so historical CSV data can still be matched.
 
-The numbering appears to group by subsystem — `p101`–`p104` and `tt103`–`tt104` share the 1xx series, `tt201`–`tt207` the 2xx, `tt301`–`tt304` the 3xx. **TBD**: confirm what each series denotes, and record it in the `description` field of every channel. A tag without a location is only half an identity.
+**The numbering groups by subsystem**, established 17 September 2026 from the physical locations recorded in `channels.yaml`:
+
+| Series | Subsystem | Channels |
+|---|---|---|
+| 1xx | **xenon circulation** — the gas loop through the pump | `p101`–`p104`, `fm101`, `tt103` (pump inlet xenon), `tt104` (pump outlet xenon) |
+| 2xx | **detector vessel and bucket** — the cold volume | `tt201` (suction tube), `tt202` (bottom of the detector vessel), `tt203`–`tt205` (top of the bucket), `tt206`–`tt207` (bottom of the bucket) |
+| 3xx | **cooling and heat exchange** | `tt301`/`tt302` (pump inlet/outlet water), `tt303`/`tt304` (heat exchanger inlet/outlet) |
+
+`pmain` and `ttamb` sit outside the numbering: the detector pressure and the ambient temperature belong to no single subsystem.
+
+Every channel now carries its physical location in `description`. A tag without a location is only half an identity.
 
 **MQTT topics.**
 
@@ -504,6 +514,16 @@ That leaves the 9207 carrying **6 connected voltage channels of 16**, and the ch
 | `9216_1` | PT100 | `ai7` | — | not connected |
 | `9216_2` | PT100 | `ai0` … `ai7` | — | **module entirely unconnected** |
 
+**An out-of-range RTD reading is not a measurement.** Platinum RTDs to IEC 60751 are defined from −200 to +850 °C. Outside that the module is reporting an open circuit, a short or a missing sensor, and the driver publishes `quality=error` with no value rather than a number.
+
+This is deliberately **not** an alarm threshold and does not belong in `alarms.yaml`: it is the difference between a measurement and the absence of one, and it must not be configurable per installation. Note also that the bound is the *sensor standard*, not an expectation about the experiment — the cryostat sensors legitimately read −90 °C, and narrowing the range to something "reasonable" would discard real data.
+
+**`tt202` (`9226/ai1`) — the sensor has failed.** Found by the open-circuit check on 17 September 2026 and confirmed in the lab the same day. It reads identically to the known-unconnected `9226/ai7`: both swing between roughly −245 and +1327 °C across consecutive reads, where every working sensor is stable to better than 0.5 °C. Its location is the bottom of the detector vessel.
+
+It is marked `enabled: false` rather than left running. The reasoning is worth stating, because the opposite choice is defensible: left enabled it would publish `quality=error` every cycle and, from milestone 6, hold a permanently active alarm — and **an alarm that is always on is one nobody reads.** The failure is tracked as an open item in §16 instead, which is where it stays visible without training anyone to ignore a red indicator. When the sensor is replaced, `enabled: true` is the only change needed.
+
+So **thirteen RTDs are live, not fourteen**, and the cDAQ carries **19 channels, not 20**.
+
 **Fourteen RTDs are in use, not twenty-four.** The whole of `9216_2` is free, which means eight spare PT100 inputs are already wired into the chassis — room for expansion without buying hardware. Do not create a DAQmx task for it; list its channels in `channels.yaml` with `enabled: false` so the map stays complete.
 
 **RTD configuration** (confirmed from the LabVIEW front panel):
@@ -515,12 +535,22 @@ That leaves the 9207 carrying **6 connected voltage channels of 16**, and the ch
 
 No custom Callendar–Van Dusen coefficients are in use. Let DAQmx return °C directly; do not hand-roll the conversion.
 
+**Excitation current must be set explicitly — correction, 17 September 2026.** Each module accepts exactly one value, and neither is the DAQmx default of 2.5 mA, so a task that omits `current_excit_val` **fails to configure**:
+
+| Module | Sensor | Accepted | Refused |
+|---|---|---|---|
+| NI 9226 | PT1000 | **100 µA** | 1 mA, 2.5 mA |
+| NI 9216 | PT100 | **1 mA** | 100 µA, 2.5 mA |
+
+The physics agrees: 1000 Ω at 1 mA would dissipate a milliwatt in the sensor and self-heat it, which is why the PT1000 module runs at a tenth of the current. The example below is corrected accordingly; an earlier draft omitted the argument and would not have run.
+
 ```python
 task.ai_channels.add_ai_rtd_chan(
-    "9216_1/ai0:7",
+    "9216_1/ai0:6",
     rtd_type=RTDType.PT_3851,
     resistance_config=ResistanceConfiguration.THREE_WIRE,
     current_excit_source=ExcitationSource.INTERNAL,
+    current_excit_val=1e-3,          # REQUIRED: 100 uA for the 9226 (PT1000)
     r_0=100.0,
     units=TemperatureUnits.DEG_C,
 )
@@ -1147,7 +1177,9 @@ Everything marked **TBD** above, consolidated:
 
 | Item | Needed for | How to resolve |
 |---|---|---|
-| Physical location of each `tt*` tag, and what the 1xx/2xx/3xx series denote | milestone 3 | the P&ID gives the position on the drawing; confirm against hardware and record in `description` |
+| ~~Physical location of each `tt*` tag, and what the 1xx/2xx/3xx series denote~~ | — | **Resolved 17 September 2026.** Locations recorded in `channels.yaml`; series meanings in §3. |
+| ~~`tt202` reads open-circuit — never installed, or failed?~~ | — | **Resolved 17 September 2026: the sensor has failed.** Now `enabled: false` — see the repair item below. |
+| **Replace the `tt202` sensor** (bottom of the detector vessel) | — | hardware repair. Then set `enabled: true` in `channels.yaml`; nothing else changes. |
 | Alarm thresholds and responses | milestone 6 | `Error and Alarm` tab screenshot |
 | ~~HV channel → supply/index mapping, and which board is `hv_1` vs `hv_2`~~ | — | **Resolved 17 September 2026.** Full map in §7.2, cross-checked against the polarity reported by each channel. |
 | HV setpoints, ramp rates, trip limits | milestone 8 | **Read from the boards, §7.2.** What remains is confirming they are intended rather than inherited — in particular the `RUP` of 1 V/s and `TRIP` of 2.0 µA on `hv_pmt_bot`. |

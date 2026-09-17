@@ -25,7 +25,16 @@ from ..config import CONFIG_DIR, ConfigError, load
 
 # Started in this order; stopped in reverse, so sinks outlive the producers
 # and the last measurements are archived rather than dropped.
-SERVICES = ["sinks", "sim"]
+#
+# `sim` is deliberately NOT here. It publishes every enabled channel, including
+# the ones the cdaq service owns, so running both means two producers writing
+# the same channel names and the archive recording whichever arrived last. Run
+# it by hand for development on a machine with no hardware:
+#
+#     python -m xams_sc.devices sim
+#
+# Real drivers join this list as milestones 5 and 6 are built.
+SERVICES = ["sinks", "cdaq"]
 
 PID_DIR = Path("logs")
 
