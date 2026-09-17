@@ -94,19 +94,31 @@ channels:
   # NI 9226 — PT1000, three-wire. tt201..tt207 on ai0:6; ai7 not connected.
   # ------------------------------------------------------------------
   - {name: tt201, device: cdaq, phys: 9226/ai0, kind: rtd, unit: C, legacy: TT201,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "suction tube"}
+  # SENSOR FAILED, 17 September 2026. Reads open-circuit: swings between roughly
+  # -245 and +1327 C, identically to the unconnected 9226/ai7, where a working
+  # sensor is stable to better than 0.5 C.
+  #
+  # Disabled rather than left enabled, deliberately. Enabled it would publish
+  # quality=error every cycle and, from milestone 6, hold a permanent alarm —
+  # and an alarm that is always on is one nobody reads. The failure is tracked
+  # in DESIGN.md §16 instead, which is where it stays visible.
+  #
+  # WHEN THE SENSOR IS REPLACED: set enabled: true. Nothing else changes.
   - {name: tt202, device: cdaq, phys: 9226/ai1, kind: rtd, unit: C, legacy: TT202,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     enabled: false,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3},
+     description: "bottom of the detector vessel - SENSOR FAILED 2026-09-17, awaiting replacement"}
   - {name: tt203, device: cdaq, phys: 9226/ai2, kind: rtd, unit: C, legacy: TT203,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
   - {name: tt204, device: cdaq, phys: 9226/ai3, kind: rtd, unit: C, legacy: TT204,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
   - {name: tt205, device: cdaq, phys: 9226/ai4, kind: rtd, unit: C, legacy: TT205,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
   - {name: tt206, device: cdaq, phys: 9226/ai5, kind: rtd, unit: C, legacy: TT206,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "bottom of the bucket"}
   - {name: tt207, device: cdaq, phys: 9226/ai6, kind: rtd, unit: C, legacy: TT207,
-     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "bottom of the bucket"}
   - {name: spare_9226_ai7, device: cdaq, phys: 9226/ai7, kind: rtd, unit: C, enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "not connected"}
 
@@ -114,19 +126,19 @@ channels:
   # NI 9216_1 — PT100, three-wire. ai7 not connected.
   # ------------------------------------------------------------------
   - {name: tt301, device: cdaq, phys: 9216_1/ai0, kind: rtd, unit: C, legacy: TT301,
-     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "pump inlet water"}
   - {name: tt302, device: cdaq, phys: 9216_1/ai1, kind: rtd, unit: C, legacy: TT302,
-     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "pump outlet water"}
   - {name: tt103, device: cdaq, phys: 9216_1/ai2, kind: rtd, unit: C, legacy: TT103,
-     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "pump inlet xenon"}
   - {name: tt104, device: cdaq, phys: 9216_1/ai3, kind: rtd, unit: C, legacy: TT104,
-     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "pump outlet xenon"}
   - {name: ttamb, device: cdaq, phys: 9216_1/ai4, kind: rtd, unit: C, legacy: TTamb,
      rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "ambient temperature"}
   - {name: tt303, device: cdaq, phys: 9216_1/ai5, kind: rtd, unit: C, legacy: TT303,
-     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "inlet heat exchanger"}
   - {name: tt304, device: cdaq, phys: 9216_1/ai6, kind: rtd, unit: C, legacy: TT304,
-     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "TBD — physical location"}
+     rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "outlet heat exchanger"}
   - {name: spare_9216_1_ai7, device: cdaq, phys: 9216_1/ai7, kind: rtd, unit: C, enabled: false,
      rtd: {type: PT3851, r0: 100.0, wiring: 3}, description: "not connected"}
 

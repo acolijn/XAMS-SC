@@ -15,8 +15,8 @@ from ..service import setup_logging
 
 SERVICES = {
     "sim": ("xams_sc.devices.sim", "SimService"),
-    # Real drivers land here as milestones 2 and 5 are built:
-    # "cdaq": ("xams_sc.devices.cdaq", "CdaqService"),
+    "cdaq": ("xams_sc.devices.cdaq", "CdaqService"),
+    # Real drivers land here as milestone 5 is built:
     # "caen": ("xams_sc.devices.caen", "CaenService"),
     # "lakeshore": ("xams_sc.devices.lakeshore", "LakeShoreService"),
     # "ups": ("xams_sc.devices.ups", "UpsService"),
@@ -31,6 +31,8 @@ def main(argv=None) -> int:
     p.add_argument("--interval", type=float, default=1.0, help="hardware read interval (s)")
     p.add_argument("--log-interval", type=float, default=10.0, help="publish interval (s)")
     p.add_argument("--log-level", default="INFO")
+    p.add_argument("--simulate", action="store_true",
+                   help="synthetic data; do not touch hardware (§13)")
     args = p.parse_args(argv)
 
     setup_logging(args.service, args.log_level)
@@ -47,7 +49,10 @@ def main(argv=None) -> int:
 
     bus = Bus(client_id=args.service, host=args.broker, port=args.port,
               publish_interval_s=args.interval)
-    service = cls(config, bus, interval_s=args.interval, log_interval_s=args.log_interval)
+    kwargs = {"interval_s": args.interval, "log_interval_s": args.log_interval}
+    if args.simulate and args.service != "sim":
+        kwargs["simulate"] = True
+    service = cls(config, bus, **kwargs)
     return service.run()
 
 

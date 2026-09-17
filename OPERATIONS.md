@@ -277,7 +277,8 @@ Check the archive and the database **separately** — they are independent
 consumers, and one can fail silently while the other works:
 
 ```powershell
-Get-Content dataaw\<today>.jsonl -Tail 3
+Get-Content data
+aw\<today>.jsonl -Tail 3
 ```
 ```sql
 SELECT count(*), max(t) FROM meas;
@@ -287,11 +288,91 @@ If the database is filling and the JSONL archive is not, the archive is the one
 that matters: the files are the truth and the database is only an index over
 them (§9.3).
 
+### A retired service still shows a heartbeat
+
+MQTT retained messages outlive the process that published them. A service that
+has been stopped for good — `sim`, once the real drivers exist — keeps its last
+`xams/status/<service>/heartbeat` on the broker forever, and the staleness
+monitor will eventually alarm on something that was retired deliberately.
+
+Clear the retained topics once:
+
+```powershell
+& "$env:ProgramFiles\mosquitto\mosquitto_pub.exe" -h 127.0.0.1 -t "xams/status/<service>/heartbeat" -r -n
+& "$env:ProgramFiles\mosquitto\mosquitto_pub.exe" -h 127.0.0.1 -t "xams/status/<service>/state" -r -n
+```
+
+`-r -n` publishes an empty retained payload, which is how MQTT deletes one.
+
+The same applies to a channel removed from `channels.yaml`: its last value
+stays retained under `xams/meas/<channel>`. Clear it the same way, or the
+status page and the mimic will keep showing a measurement that no longer
+exists.
+
 ### The whole PC was rebooted
 
 The three infrastructure services (mosquitto, PostgreSQL, Grafana) start
 automatically. **The XAMS services do not** — that is deliberate while
 LabVIEW is the fallback. Start them by hand with `xams-ctl start`.
+
+---
+
+## The cDAQ
+
+`xams-ctl start` brings up the `cdaq` service alongside the sinks. It is
+**read-only** — the chassis has no output module, so there is no control path.
+
+20 channels are connected of 40 available: 6 voltage on the 9207, 7 PT1000 on
+the 9226, 7 PT100 on the first 9216. The second 9216 is entirely free and gets
+no DAQmx task at all.
+
+### "cDAQ1 in use by another process (LabVIEW running?)"
+
+The service refuses to start. **Stop the LabVIEW slow-control VI.** Every
+device admits exactly one process, and DAQmx reports this as error `-200022`,
+"Resource requested by this task has already been reserved by a different
+task". This is a clean refusal, not a crash — nothing was changed on the
+hardware.
+
+The reverse applies too: run `xams-ctl stop` before starting LabVIEW.
+
+### A temperature channel reports quality=error
+
+The driver publishes `quality=error` with **no value** when an RTD reads
+outside −200…+850 °C, the IEC 60751 range for platinum RTDs. Outside that the
+module is reporting an open circuit, a short or a missing sensor — not a
+temperature.
+
+The log names the channel once, not every second:
+
+```
+tt202 (9226/ai1) reads -245.0 C, outside the RTD range -200.0..850.0 —
+open circuit, short, or no sensor. Publishing quality=error, not a temperature.
+```
+
+**`tt202` is how this was first found.** Its sensor has failed — it reads
+open-circuit, identically to the unconnected `9226/ai7`. It is now
+`enabled: false` pending replacement, so it no longer reports at all; a
+permanently erroring channel would become a permanently active alarm, and an
+alarm that is always on is one nobody reads.
+
+**When the sensor is replaced:** set `enabled: true` for `tt202` in
+`channels.yaml`, then `xams-ctl reload`. Nothing else changes.
+
+**A genuinely cold sensor is not a fault.** The cryostat RTDs read around
+−90 °C and are perfectly valid. The range is the sensor standard, not an
+expectation about the experiment — do not narrow it.
+
+### Checking a channel against the hardware
+
+To read the chassis directly, without the service running:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.devices cdaq --interval 1 --log-interval 5
+```
+
+Ctrl-C releases the chassis. Add `--simulate` to exercise the driver with no
+hardware at all.
 
 ---
 

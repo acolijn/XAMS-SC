@@ -12,9 +12,10 @@ and a UPS. Storage, plotting, alarming and a small web UI.
 | Why it is built this way, and what to build next | [docs/DESIGN.md](docs/DESIGN.md) |
 | What was decided and why | [docs/OPTIONS.md](docs/OPTIONS.md) |
 
-**Current state: milestone 1 complete** — the full stack runs in simulation on
-the lab PC. No hardware drivers yet; LabVIEW is untouched and still the system
-of record. See [Milestones](#milestones).
+**Current state: milestone 3 complete** — the cDAQ is read and logged for real
+on the lab PC, 19 channels at 1 Hz, every tag verified against its sensor. The CAEN supplies, the Lake Shore and the
+UPS are still to come, and LabVIEW remains installed as the fallback. See
+[Milestones](#milestones).
 
 ---
 
@@ -109,8 +110,19 @@ database is lost when that database is.
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl status
 ```
 
-`start` brings up the sinks and the simulated device service. **`stop` releases
-all hardware for LabVIEW.**
+`start` brings up the sinks and the cDAQ service. **`stop` releases all
+hardware for LabVIEW** — do that before starting LabVIEW, and stop LabVIEW
+before starting these, because every device admits only one process.
+
+For development with no hardware attached, the simulated service publishes
+every enabled channel instead:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.devices sim
+```
+
+Do not run `sim` and `cdaq` together: they publish the same channel names and
+would overwrite each other.
 
 Then open <http://127.0.0.1:3000> → **XAMS Overview**.
 
@@ -156,7 +168,7 @@ Three conventions that must not be changed:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-53 tests, no hardware and no broker required: the scaling conventions,
+83 tests, no hardware and no broker required: the scaling conventions,
 configuration validation, bus fan-out, and the chain from a simulated read to a
 record on disk.
 
@@ -172,9 +184,9 @@ subscribing to one MQTT topic.
 | # | Milestone | State |
 |---|---|---|
 | 1 | Skeleton: config, bus, sinks, simulation, install | **done** |
-| 2 | cDAQ read-only | next |
-| 3 | Channel verification against physical sensors | |
-| 4 | Scaling and history import | |
+| 2 | cDAQ read-only | **done** |
+| 3 | Channel verification against physical sensors | **done** |
+| 4 | Scaling and history import | next |
 | 5 | Lake Shore + CAEN monitoring | |
 | 6 | UPS, alarms, flow integrator | |
 | 7 | Web UI and P&ID mimic | |
@@ -189,6 +201,20 @@ not start the next before the current one passes.
 publishes, both sinks store independently, Grafana plots from the provisioned
 dashboard, and the install is scripted and reproducible.
 
+**Milestone 2 acceptance, met 17 September 2026:** all 20 connected channels
+(6 voltage + 14 RTD) read and logged with LabVIEW stopped, values plausible
+(`ttamb` 24.2 °C, cryostat −90 °C, `pmain` 1.495 against LabVIEW's 1.53), and
+readings continuous across a service restart to better than 0.7%.
+
+**Milestone 3 acceptance, met 17 September 2026:** every `tt*` tag verified
+against its channel and its physical location recorded in `channels.yaml`. The
+1xx / 2xx / 3xx series are now known to mean xenon circulation, detector vessel
+and bucket, and cooling and heat exchange respectively (DESIGN.md §3).
+
+The verification found one fault: **the `tt202` sensor has failed** (bottom of
+the detector vessel). It is `enabled: false` pending replacement, so the cDAQ
+carries **19 live channels, not 20**.
+
 ---
 
 ## Hardware, as found on the lab PC
@@ -198,6 +224,7 @@ Verified 17 September 2026.
 | Device | Identity |
 |---|---|
 | cDAQ-9174 | serial `20C5E1C`, modules 9207 / 9216 / 9216 / 9226 |
+| | 19 live channels: 6 voltage, 13 RTD (`tt202` failed, awaiting replacement) |
 | CAEN DT1470ET | serial **19198**, firmware 1.08 — PMT bottom, PMT top, top screen, bottom screen |
 | CAEN DT1470ET | serial **79**, firmware 1.04 — cathode, gate, anode, NaI |
 | Lake Shore 335 | `335A12T` on COM6 |
