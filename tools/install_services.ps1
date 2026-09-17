@@ -181,6 +181,25 @@ foreach ($name in $Services.Keys) {
 
 Good "$($Services.Count) services installed"
 
+# ----------------------------------------------------------------- manual
+
+# The manual is served by the API at /manual, from src/xams_sc/api/site. That
+# directory is generated and not in git, so it must be built here or the link
+# in the web UI leads nowhere. Never fatal: a missing manual is a nuisance,
+# and refusing to install the monitoring over it would not be.
+
+Step "Building the manual"
+
+& $Python (Join-Path $RepoRoot "tools\build_docs.py")
+if ($LASTEXITCODE -eq 0) {
+    Good "manual built; it is served at http://127.0.0.1:8000/manual"
+} else {
+    Fail "the manual did not build - /manual will return 404"
+    Say  "Install the documentation tools and try again:"
+    Say  "    .\.venv\Scripts\python.exe -m pip install -e `".[docs]`""
+    Say  "    .\.venv\Scripts\python.exe tools\build_docs.py"
+}
+
 # ---------------------------------------------------------------- start
 
 Step "Starting"

@@ -26,6 +26,7 @@ from pathlib import Path
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                RedirectResponse)
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..bus import Bus
@@ -266,5 +267,27 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
     def healthz():
         status, _ = state.overall()
         return status
+
+    # ------------------------------------------------------------- manual
+
+    # The documentation, mounted rather than served from a second process.
+    # The point is that it is present whenever the UI is: the lab PC cannot be
+    # assumed to reach the internet, and a manual you can only read when the
+    # network is healthy is missing exactly when it is wanted.
+    #
+    # HERE, not the working directory: this runs as a service, whose working
+    # directory is not the repository.
+    #
+    # /manual, not /docs, although docs_url=None leaves /docs free — "docs" in
+    # a FastAPI application means Swagger to anyone who has seen one before.
+    manual = HERE / "site"
+    if manual.is_dir():
+        app.mount("/manual", StaticFiles(directory=str(manual), html=True),
+                  name="manual")
+    else:
+        # Not fatal. A missing manual is a nuisance; refusing to start the
+        # monitoring because of it would be a fault.
+        log.warning("the manual has not been built — run "
+                    "`python tools/build_docs.py`; /manual will return 404")
 
     return app

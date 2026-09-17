@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Minimal Markdown -> styled HTML for the XAMS design dossier.
+Sources live in ../docs/; run through ./render.sh rather than directly.
 Handles: headings, paragraphs, ul/ol, tables, fenced code, hr,
 inline code/bold/italic. Deliberately small; we control the input."""
 import html, re, sys, pathlib

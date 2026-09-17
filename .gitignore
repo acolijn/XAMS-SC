@@ -1,10 +1,14 @@
 # Exported material from the LabVIEW PC — reference only, not part of the project
-docs/labviewPC/
+notes/labviewPC/
 
-# Generated from the .md sources by md2pdf.py — regenerate with docs/render.sh
-docs/options.html
-docs/design.html
-docs/epics.html
+# Generated from the docs/ sources by md2pdf.py — regenerate with notes/render.sh
+notes/options.html
+notes/design.html
+notes/epics.html
+
+# The built documentation site. Produced by `python tools/build_docs.py` and
+# served by the web UI at /manual; never committed.
+src/xams_sc/api/site/
 
 # macOS
 .DS_Store

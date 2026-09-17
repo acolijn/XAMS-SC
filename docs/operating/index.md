@@ -1,8 +1,8 @@
 # XAMS Slow Control — Operations
 
 **How to run the system, and what to do when it misbehaves.** Not architecture
-— that is [docs/DESIGN.md](docs/DESIGN.md). Not installation from scratch —
-that is [README.md](README.md).
+— that is [the design specification](../DESIGN.md). Not installation from scratch —
+that is [Installation](../install.md).
 
 This document **grows with each milestone** (§14). It is deliberately written
 during construction rather than afterwards: written at the end it would record

@@ -35,6 +35,19 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",       # fastapi.testclient, for the web UI tests
 ]
+# Documentation site (mkdocs.yml). Pure Python, no Node and no compiler, so it
+# installs identically on the lab PC and on a laptop. pyserial and fastapi are
+# here because mkdocstrings imports each module to read its docstrings, and
+# caen.py, lakeshore.py and api/app.py import them at module level; nidaqmx and
+# pywinusb are NOT needed, because those imports are inside functions.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-gen-files>=0.5",
+    "pyserial>=3.5",
+    "fastapi>=0.110",
+]
 
 [project.scripts]
 xams-ctl = "xams_sc.cli.xams_ctl:main"
