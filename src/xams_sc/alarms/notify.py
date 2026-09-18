@@ -89,7 +89,8 @@ class Notifier:
 
     # ----------------------------------------------------------------- email
 
-    def send_email(self, address: str, subject: str, body: str) -> bool:
+    def send_email(self, address: str, subject: str, body: str,
+                   html: str | None = None) -> bool:
         config = self.secrets.get("email") or {}
         host = config.get("smtp_host")
         if not host:
@@ -102,7 +103,14 @@ class Notifier:
         message["From"] = config.get("from_address", "xams-sc@localhost")
         message["To"] = address
         message["Subject"] = subject
+
+        # multipart/alternative: the plain text first, the HTML second, and the
+        # client picks. The text part is not a formality - some people read
+        # mail as text, and a message with no text part scores worse with spam
+        # filters, which is a poor way to lose an alarm.
         message.set_content(body)
+        if html:
+            message.add_alternative(html, subtype="html")
 
         try:
             with smtplib.SMTP(host, int(config.get("smtp_port", 587)), timeout=20) as smtp:
@@ -118,7 +126,8 @@ class Notifier:
 
     # ------------------------------------------------------------- dispatch
 
-    def send(self, text: str, channels: list[str]) -> dict[str, int]:
+    def send(self, text: str, channels: list[str],
+             rich: tuple | None = None) -> dict[str, int]:
         """Send one alarm message over the requested channels.
 
         Returns a count of successful deliveries per channel, so a caller can
@@ -135,8 +144,10 @@ class Notifier:
             if "sms" in channels and person.get("phone"):
                 sent["sms"] += bool(self.send_sms(person["phone"], text))
             if "email" in channels and person.get("email"):
+                subject, html, body = (rich if rich
+                                       else ("XAMS slow control alarm", None, text))
                 sent["email"] += bool(self.send_email(
-                    person["email"], "XAMS slow control alarm", text))
+                    person["email"], subject, body, html=html))
         if "sound" in channels:
             sent["sound"] += bool(play_sound())
         return sent

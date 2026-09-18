@@ -42,8 +42,13 @@ class RecordingNotifier:
     def __init__(self):
         self.sent = []
 
-    def send(self, text, channels):
+    def send(self, text, channels, rich=None):
+        # `rich` is (subject, html, text) for the email, built by the engine so
+        # an alarm mail carries the plant around it. SMS keeps the short text.
+        # Accepted here because the real Notifier accepts it: a double that
+        # lags the interface passes tests the real object would fail.
         self.sent.append((text, tuple(channels)))
+        self.rich = rich
         return {"email": 1}
 
 

@@ -41,6 +41,30 @@ LOW_THRESHOLDS = {"lolo", "low"}
 
 
 @dataclass
+class _ViewLike:
+    """The few attributes mail.py asks of a reading.
+
+    The engine does not hold ChannelView objects - those belong to the web UI
+    and are built from retained MQTT. Rather than couple the two, the engine
+    hands the renderer something with the same shape.
+    """
+
+    name: str
+    value: float | None
+    unit: str
+    healthy: bool
+    quality: str = "stale"
+
+    def formatted(self) -> str:
+        if self.value is None:
+            return "--"
+        magnitude = abs(self.value)
+        if magnitude >= 1000:
+            return f"{self.value:.0f}"
+        return f"{self.value:.2f}" if magnitude >= 10 else f"{self.value:.3f}"
+
+
+@dataclass
 class ChannelState:
     """What the engine remembers about one channel."""
 
@@ -213,11 +237,59 @@ class AlarmEngine:
         text = (f"XAMS {state.state.upper()}: {state.channel} "
                 f"{state.threshold or ''} value={value}")
         channels = self._routes_for(state)
+
+        # SMS stays terse - it is charged per message and read on a lock
+        # screen. Email carries the context, because the reader of an email at
+        # three in the morning is not going to open the web UI to find out
+        # what else was happening (section 11).
+        rich = None
         try:
-            self.notifier.send(text, channels)
+            rich = self._email_for(state, value)
+        except Exception:
+            log.exception("could not build the alarm email for %s; "
+                          "falling back to plain text", state.channel)
+
+        try:
+            self.notifier.send(text, channels, rich=rich)
         except Exception:
             # A failing gateway must not stop the engine evaluating.
             log.exception("notification failed for %s", state.channel)
+
+    def _email_for(self, state: ChannelState, value):
+        """Subject, HTML and text for this alarm, with the plant around it."""
+        from . import mail
+        from ..model import utcnow
+
+        description = ""
+        channel = self.config.channels.get(state.channel)
+        if channel is not None:
+            description = channel.description
+
+        # Everything else the engine currently believes, which is what makes
+        # the mail worth reading on its own.
+        others = [
+            {"channel": s.channel, "state": s.state, "threshold": s.threshold,
+             "value": s.last_value, "acknowledged": s.acknowledged,
+             "description": (self.config.channels[s.channel].description
+                             if s.channel in self.config.channels else "")}
+            for s in self._states.values()
+            if s.state != "ok" and s.channel != state.channel]
+
+        readings = []
+        for name in ("pmain", "tt401", "tt402", "tt104", "tt302", "fm101"):
+            other = self._states.get(name)
+            if other is None:
+                continue
+            readings.append((name, _ViewLike(
+                name, other.last_value,
+                (self.config.channels[name].unit
+                 if name in self.config.channels else ""),
+                other.state == "ok" and not other.stale)))
+
+        context = {"alarms": others, "readings": readings,
+                   "services": [], "config_hash": self.config.config_hash}
+        return mail.alarm(state.channel, state.state, state.threshold, value,
+                          description, context, utcnow())
 
     def _routes_for(self, state: ChannelState) -> list[str]:
         limits = self.thresholds.get(state.channel) or {}
