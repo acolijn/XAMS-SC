@@ -34,6 +34,10 @@ notify = [
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",       # fastapi.testclient, for the web UI tests
+    # Undefined-name checking. A module that imports is not a module whose
+    # functions can run, and a NameError in an unexercised branch is invisible
+    # until somebody in the lab runs the command. See tests/test_no_undefined_names.py.
+    "pyflakes>=3.2",
 ]
 # Documentation site (mkdocs.yml). Pure Python, no Node and no compiler, so it
 # installs identically on the lab PC and on a laptop. pyserial and fastapi are
