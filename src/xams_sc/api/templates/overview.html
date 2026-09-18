@@ -106,13 +106,28 @@
           Backup: {{ backup.detail }}</span> — until it runs, the measurement
         archive exists only on this machine.
       {% endif %}
+      {# Two different faults with two different remedies: a dashboard the
+         archive has not caught up with needs --save, one that was exported
+         but never committed needs a commit and nothing else. #}
       {% if drift.state == 'drift' %}
-        <br><span class="bad">{{ drift.detail }}</span> — a dashboard that
-        exists only in Grafana is lost with Grafana:
-        <code>.\.venv\Scripts\python.exe tools\save_dashboard.py --save</code>
-        <br>Run it with the venv Python: <code>.\tools\save_dashboard.py</code>
-        goes through the Windows <code>py</code> launcher, which hides the
-        script's errors, so a failed run looks like a successful one.
+        {% set unexported = drift.dashboards
+             | rejectattr('state', 'equalto', 'ok')
+             | rejectattr('state', 'equalto', 'uncommitted') | list %}
+        {% set uncommitted = drift.dashboards
+             | selectattr('state', 'equalto', 'uncommitted') | list %}
+        <br><span class="bad">{{ drift.detail }}</span>
+        {% if unexported %}
+          — a dashboard that exists only in Grafana is lost with Grafana:
+          <code>.\.venv\Scripts\python.exe tools\save_dashboard.py --save</code>
+          <br>Run it with the venv Python: <code>.\tools\save_dashboard.py</code>
+          goes through the Windows <code>py</code> launcher, which hides the
+          script's errors, so a failed run looks like a successful one.
+        {% endif %}
+        {% if uncommitted %}
+          <br>Exported but never committed, so it still exists on this disk
+          alone — <code>--save</code> has nothing left to do:
+          <code>git add grafana\dashboards-archive &amp;&amp; git commit</code>
+        {% endif %}
       {% endif %}
     </div>
   </div>

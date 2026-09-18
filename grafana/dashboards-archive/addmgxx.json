@@ -15,6 +15,7 @@
       }
     ]
   },
+  "description": "Overview of the variables relevant to the temperature control of the cold head",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -273,6 +274,9 @@
   "preload": false,
   "refresh": "",
   "schemaVersion": 42,
+  "tags": [
+    "xams"
+  ],
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -292,7 +296,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "XAMS heaters",
+  "title": "XAMS Heaters",
   "uid": "addmgxx",
   "id": null
 }

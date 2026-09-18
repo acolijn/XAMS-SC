@@ -328,13 +328,22 @@ def _print_dashboard_drift() -> None:
         if "no Grafana token" not in result["detail"]:
             print(f"\n  grafana   drift unknown — {result['detail']}")
         return
+    states = {d["state"] for d in result["dashboards"]}
     print(f"\n  grafana   NOT SAVED TO GIT — {result['detail']}")
-    print("            a dashboard only in Grafana is lost with Grafana:")
-    # Full command, with the venv interpreter: .\\tools\\save_dashboard.py goes
-    # through the Windows py launcher, which swallows the script errors.
-    # No --password: --save reads, and uses the read-only token.
-    print("            .\\\\.venv\\\\Scripts\\\\python.exe "
-          "tools\\\\save_dashboard.py --save")
+    if states - {"ok", "uncommitted"}:
+        print("            a dashboard only in Grafana is lost with Grafana:")
+        # Full command, with the venv interpreter: .\\tools\\save_dashboard.py
+        # goes through the Windows py launcher, which swallows the script
+        # errors. No --password: --save reads, via the read-only token.
+        # One backslash each in the printed line: it is meant to be pasted.
+        print("            .\\.venv\\Scripts\\python.exe "
+              "tools\\save_dashboard.py --save")
+    if "uncommitted" in states:
+        # Exported but never committed: the file already matches Grafana, so
+        # --save has nothing left to do and the advice above is the wrong
+        # advice. What is missing is the commit.
+        print("            exported but NOT COMMITTED — on this disk only:")
+        print("            git add grafana\\dashboards-archive && git commit")
 
 def _print_backup_status(args) -> None:
     """The nightly backup's last result, from its retained topic.

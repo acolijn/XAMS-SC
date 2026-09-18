@@ -32,6 +32,10 @@ def wired(monkeypatch, tmp_path, dashboard):
     monkeypatch.setattr(grafana, "_secrets",
                         lambda: {"grafana": {"token": "t",
                                              "url": "http://grafana"}})
+    # The temporary archive is not in any checkout, so git has nothing to say
+    # about it. Stubbed rather than left to chance: whether these tests pass
+    # must not depend on git being installed on the machine running them.
+    monkeypatch.setattr(grafana, "_uncommitted", set)
 
     def write_archive(data):
         (tmp_path / "overview.json").write_text(json.dumps(data),
@@ -97,6 +101,70 @@ class TestDisagreement:
         result = grafana.check()
         assert result["state"] == "drift"
         assert result["dashboards"][0]["state"] == "missing"
+
+
+class TestCommitted:
+    """`--save` writes a file; only a commit puts a dashboard in git.
+
+    Between the two the file matches Grafana perfectly, so the comparison
+    against the archive says everything is fine — while the dashboard still
+    exists on one disk, which is the failure §12 is about.
+    """
+
+    def test_exported_but_not_committed_is_drift(self, wired, monkeypatch,
+                                                 dashboard):
+        write_archive, serve = wired
+        write_archive(dashboard)
+        serve([dashboard])
+        monkeypatch.setattr(grafana, "_uncommitted", lambda: {"overview.json"})
+
+        result = grafana.check()
+
+        assert result["state"] == "drift"
+        assert result["dashboards"][0]["state"] == "uncommitted"
+        assert "XAMS Overview" in result["detail"]
+
+    def test_committed_and_matching_is_ok(self, wired, dashboard):
+        write_archive, serve = wired
+        write_archive(dashboard)
+        serve([dashboard])
+
+        assert grafana.check()["state"] == "ok"
+
+    def test_an_edit_outranks_the_missing_commit(self, wired, monkeypatch,
+                                                 dashboard):
+        """A file that disagrees with Grafana needs --save, not a commit, and
+        the reported verdict is what picks the advice shown."""
+        write_archive, serve = wired
+        write_archive(dashboard)
+        edited = json.loads(json.dumps(dashboard))
+        edited["panels"][0]["title"] = "Pressures (bar)"
+        serve([edited])
+        monkeypatch.setattr(grafana, "_uncommitted", lambda: {"overview.json"})
+
+        assert grafana.check()["dashboards"][0]["state"] == "differs"
+
+    def test_git_that_cannot_be_asked_is_not_drift(self, monkeypatch):
+        """No checkout, or no git: that is plumbing, not a dashboard fault."""
+        def explode(*args, **kwargs):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(grafana.subprocess, "run", explode)
+
+        assert grafana._uncommitted() == set()
+
+    def test_staged_still_counts_as_uncommitted(self, monkeypatch):
+        """`git add` is not a backup either."""
+        class Done:
+            returncode = 0
+            stdout = "M  grafana/dashboards-archive/overview.json\n" \
+                     "?? grafana/dashboards-archive/heaters.json\n"
+            stderr = ""
+
+        monkeypatch.setattr(grafana.subprocess, "run",
+                            lambda *a, **k: Done())
+
+        assert grafana._uncommitted() == {"overview.json", "heaters.json"}
 
 
 class TestFailingSoftly:
