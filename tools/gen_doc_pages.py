@@ -29,16 +29,44 @@ by_device: dict[str, list[dict]] = {}
 for channel in channels.get("channels", []):
     by_device.setdefault(channel.get("device", "?"), []).append(channel)
 
+def _scaling(channel: dict) -> str:
+    """`(raw - 1.0) * 25.0`, or nothing at all.
+
+    Three channels of seventy-six are scaled. As two always-present columns
+    that was a wall of `0.0` and `1.0` with the three that matter hidden in
+    it — so the default says nothing and the exception stands out.
+    """
+    offset = channel.get("offset", 0.0)
+    multiplier = channel.get("multiplier", 1.0)
+    if not offset and multiplier == 1.0:
+        return ""
+    return f"`(raw - {offset}) * {multiplier}`"
+
+
+# Material's tables are laid out for prose, and these are not prose: 76 rows
+# of short fields set at reading size is a page you scroll rather than scan.
+# Scoped to this page by being written into it.
+COMPACT = (
+    "<style>\n"
+    ".md-typeset table:not([class]) { font-size: .68rem; }\n"
+    ".md-typeset table:not([class]) th,\n"
+    ".md-typeset table:not([class]) td { padding: .3em .6em; }\n"
+    ".md-typeset table:not([class]) code { white-space: nowrap; }\n"
+    "</style>\n\n"
+)
+
 with mkdocs_gen_files.open("reference/channels.md", "w") as page:
     page.write("# Channels\n\n")
+    page.write(COMPACT)
     page.write(
         "Generated from `config/channels.yaml` at build time. That file is the "
         "single source of truth: channel names are the identity of a "
         "measurement — MQTT topic, JSONL record, database row, UI label — and "
         "**renaming one breaks history**.\n\n"
         "Scaling is `value = (raw - offset) * multiplier`, the LabVIEW "
-        "convention. Disabled channels are listed rather than omitted, so the "
-        "map is complete and a gap is never left ambiguous.\n\n"
+        "convention; the column is blank where a reading is used as it comes. "
+        "Disabled channels are listed rather than omitted, so the map is "
+        "complete and a gap is never left ambiguous.\n\n"
     )
     total = sum(len(v) for v in by_device.values())
     enabled = sum(1 for v in by_device.values() for c in v
@@ -48,9 +76,9 @@ with mkdocs_gen_files.open("reference/channels.md", "w") as page:
 
     for device in sorted(by_device):
         page.write(f"## {device}\n\n")
-        page.write("| Channel | Physical | Kind | Unit | Offset | Multiplier "
-                   "| LabVIEW | Description |\n")
-        page.write("|---|---|---|---|---|---|---|---|\n")
+        page.write("| Channel | Physical | Kind | Unit | Scaling "
+                   "| Description |\n")
+        page.write("|---|---|---|---|---|---|\n")
         for c in by_device[device]:
             name = f"`{c['name']}`"
             if not c.get("enabled", True):
@@ -60,9 +88,7 @@ with mkdocs_gen_files.open("reference/channels.md", "w") as page:
                 f"| `{c.get('phys', '')}` "
                 f"| {c.get('kind', '')} "
                 f"| {c.get('unit', '')} "
-                f"| {c.get('offset', 0.0)} "
-                f"| {c.get('multiplier', 1.0)} "
-                f"| {c.get('legacy', '')} "
+                f"| {_scaling(c)} "
                 f"| {c.get('description', '')} |\n"
             )
         page.write("\n")
