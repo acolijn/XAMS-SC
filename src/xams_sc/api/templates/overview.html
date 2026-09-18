@@ -89,7 +89,10 @@
       {% if drift.state == 'drift' %}
         <br><span class="bad">{{ drift.detail }}</span> — a dashboard that
         exists only in Grafana is lost with Grafana:
-        <code>save_dashboard.py --save</code>
+        <code>.\.venv\Scripts\python.exe tools\save_dashboard.py --save</code>
+        <br>Run it with the venv Python: <code>.\tools\save_dashboard.py</code>
+        goes through the Windows <code>py</code> launcher, which hides the
+        script's errors, so a failed run looks like a successful one.
       {% endif %}
     </div>
   </div>
