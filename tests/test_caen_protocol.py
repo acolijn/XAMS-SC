@@ -116,18 +116,63 @@ class TestSignConvention:
         assert cathode < 0 < anode
 
 
-class TestMonitorCommandsAreReadOnly:
-    """Milestone 5 is read-only. There must be no way to write a setpoint."""
+class TestOnlyVsetIsEverWritten:
+    """This class used to assert that `CMD:SET` appeared nowhere at all.
 
-    def test_no_set_command_in_the_module(self):
+    That was correct while the driver was read-only, and stopped being correct
+    on 18 September 2026 when §10a's write path was added. It is narrowed
+    rather than deleted, because the part worth keeping was never "no writes"
+    — it was **which** writes, and the answer is still almost none.
+    """
+
+    # Exactly three parameters may be written, and the list is short on
+    # purpose. Widening it is a decision, and this test is where that decision
+    # has to be made explicitly rather than arrived at.
+    WRITABLE = ("PAR:VSET", "PAR:{par}")   # {par} is the ON/OFF formatter
+
+    def test_only_the_allowed_parameters_are_written(self):
         import inspect
 
         from xams_sc.devices import caen
-        source = inspect.getsource(caen)
-        # A SET would appear as CMD:SET in a formatted command string.
-        assert "CMD:SET" not in source, (
-            "caen.py contains a SET command. The control path is milestone 8 "
-            "and needs §10's open decision resolved first.")
+        written = [line.strip() for line in inspect.getsource(caen).splitlines()
+                   if "CMD:SET" in line]
+
+        assert written, "no write path found; §10a should have one"
+        for line in written:
+            assert any(p in line for p in self.WRITABLE), (
+                "caen.py writes a parameter outside the allowed set: %s\n"
+                "MAXV, RUP, RDW, TRIP and ISET are protection settings and "
+                "live on the instrument (§10 rule 2)." % line)
+
+    def test_protection_settings_are_never_written(self):
+        """§10 rule 2. These stay configured on the instrument, and that is
+        what keeps this software out of the protection path."""
+        import inspect
+
+        from xams_sc.devices import caen
+        for line in inspect.getsource(caen).splitlines():
+            if "CMD:SET" not in line:
+                continue
+            for forbidden in ("MAXV", "RUP", "RDW", "TRIP", "ISET", "BDCTR"):
+                assert forbidden not in line, (
+                    "caen.py writes %s: %s" % (forbidden, line.strip()))
+
+    def test_the_enable_switch_stays_out_of_reach(self):
+        """`ON`/`OFF` energise a channel that is already enabled. Nothing here
+        can clear the `DISABLED` bit — that is the front-panel switch, and it
+        is the last gate between a bug and an electrode (§10a).
+
+        There is no CAEN command that clears `DISABLED`, so this asserts the
+        distinction is still *described* correctly: if somebody ever wires the
+        enable to a command, the docstring will have to change first.
+        """
+        import inspect
+
+        from xams_sc.devices import caen
+        doc = inspect.getdoc(caen) or ""
+
+        assert "enable switch" in doc.lower()
+        assert "hand operation" in doc.lower()
 
     def test_command_builder_only_emits_mon(self):
         from xams_sc.devices.caen import CaenChannelReader

@@ -1,15 +1,23 @@
 """How /hv reports a channel's state. See DESIGN.md §7.2, §8.1.
 
 The decoding itself is covered in `test_hv_status.py`; what is pinned here is
-what a person actually reads on the page, because that is where the original
-mistake was. The page inferred on/off from `VMON > 1` and so showed "off" for
-a channel that was switched on at zero volts.
+what a person actually reads on the page, because that is where two mistakes
+in a row were made.
 
-Three distinct states, and the difference between the first two matters:
+**First:** the page inferred on/off from `VMON > 1`, so a channel energised at
+zero volts read as "off".
 
-    ON       putting volts out
-    enabled  switched on, sitting at zero  — LIVE, not off
-    off      output disabled
+**Second:** the fix used STAT bit 0 as "enabled" — but bit 0 is the OUTPUT.
+The front-panel enable switch is bit 10. A channel whose switch had been
+flipped on but which was not energised matched nothing and fell through to
+"off" again, telling the operator their switch had not worked.
+
+Four states, and the middle two are the ones worth care:
+
+    disabled   bit 10          the front-panel switch is off
+    enabled    neither bit     switch on, output NOT energised
+    ON 0 V     bit 0, VMON~0   energised, sitting at zero volts
+    ON         bit 0, VMON!=0  energised with volts out
 """
 
 import pytest
@@ -69,47 +77,87 @@ def page(monkeypatch):
 
 
 def status_cells(html):
-    """The rendered Status column, one entry per channel row."""
+    """The rendered Status column, one entry per channel row.
+
+    The column is located by its HEADER, not by index. An earlier version
+    hardcoded `tds[4]`, and adding a VSET column silently moved Status to
+    position 5 - so eight tests failed on a page that was perfectly correct.
+    A test coupled to column order breaks every time the table grows, and
+    teaches people that a red suite is normal.
+    """
     import html as htmlmod
     import re
 
     cells = []
     for table in re.findall(r'<table class="channels">(.*?)</table>', html,
                             re.S):
+        headers = [" ".join(re.sub(r"<[^>]+>", " ", h).split())
+                   for h in re.findall(r"<th[^>]*>(.*?)</th>", table, re.S)]
+        assert "Status" in headers, "the table has no Status column"
+        index = headers.index("Status")
+
         for row in re.findall(r"<tr>(.*?)</tr>", table, re.S):
             tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
-            if len(tds) < 5:
+            if len(tds) <= index:
                 continue                      # the header row
-            text = re.sub(r"<[^>]+>", " ", tds[4])
+            text = re.sub(r"<[^>]+>", " ", tds[index])
             cells.append(" ".join(htmlmod.unescape(text).split()))
     assert cells, "no channel rows rendered"
     return cells
 
 
-class TestTheThreeStates:
-    def test_enabled_and_at_voltage_is_on(self, page):
+class TestTheFourStates:
+    """The vocabulary changed on 18 September 2026, and the reason matters.
+
+    This used to test three states, built on the belief that STAT bit 0 meant
+    "enabled". **It does not.** Bit 0 is the OUTPUT being energised; the
+    front-panel enable switch is bit 10. The two are different things, and a
+    channel can be permitted without being energised.
+
+    That gap had no label, so it fell through to "off" - and a channel whose
+    switch had just been flipped on displayed as though it were still switched
+    off. Which is exactly what was seen in the lab.
+
+        disabled   bit 10          the front-panel switch is off
+        enabled    neither bit     switch on, output NOT energised
+        ON 0 V     bit 0, VMON~0   energised, sitting at zero volts
+        ON         bit 0, VMON!=0  energised with volts out
+    """
+
+    def test_energised_with_volts_out_is_on(self, page):
         assert page(stat_word=1, vmon=-99.8) == ["ON"] * 8
 
-    def test_enabled_and_at_zero_says_enabled_not_off(self, page):
-        """The case the original page got wrong.
+    def test_energised_at_zero_says_so(self, page):
+        """Live, and nothing on it yet. Not "off": it is one setpoint away
+        from volts on an electrode."""
+        assert page(stat_word=1, vmon=0.0) == ["ON 0 V"] * 8
 
-        It must not say "off": the output is switched on and one setpoint
-        away from putting volts on an electrode.
+    def test_the_switch_on_but_not_energised_reads_enabled(self, page):
+        """THE CASE THAT WAS WRONG. Neither bit set: the operator has flipped
+        the enable, and the channel is doing nothing until it is energised.
+
+        Showing "off" here told them their switch had not worked.
         """
-        assert page(stat_word=1, vmon=0.0) == ["enabled"] * 8
+        assert page(stat_word=0, vmon=0.0) == ["enabled"] * 8
 
-    def test_enabled_and_at_zero_does_not_say_on(self, page):
-        """"enabled" is the word asked for. "ON" would overstate it — there
-        are no volts on the output."""
-        assert "ON" not in page(stat_word=1, vmon=0.0)
+    def test_the_switch_off_reads_disabled(self, page):
+        """Bit 10. Named for what it is - the switch - rather than "off",
+        which is what the output does."""
+        assert page(stat_word=1024, vmon=0.0) == ["disabled"] * 8
 
-    def test_disabled_is_off(self, page):
-        assert page(stat_word=1024, vmon=0.0) == ["off"] * 8
+    def test_disabled_wins_over_a_decaying_voltage(self, page):
+        """Bit 10 is the board's own word about the switch. The page does not
+        second-guess it from a monitor still reading volts on the way down."""
+        assert page(stat_word=1024, vmon=-500.0) == ["disabled"] * 8
 
-    def test_disabled_at_voltage_is_still_off(self, page):
-        """Bit 10 wins over any voltage still on the monitor as it decays.
-        The word comes from the board; the page does not second-guess it."""
-        assert page(stat_word=1024, vmon=-500.0) == ["off"] * 8
+    def test_enabled_is_not_reported_as_off(self, page):
+        """The regression, stated as such: these are different states and
+        must not share a word."""
+        enabled = page(stat_word=0, vmon=0.0)
+        disabled = page(stat_word=1024, vmon=0.0)
+
+        assert enabled != disabled
+        assert "off" not in enabled
 
 
 class TestFaultsAndGaps:

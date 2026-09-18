@@ -59,6 +59,20 @@ TOPIC_AUDIT = "xams/audit"
 # the lab PC (section 2.1).
 TOPIC_BACKUP = "xams/backup/status"
 
+# The CAEN setpoint path (section 10a). VSET only: nothing writes MAXV, RUP,
+# RDW, TRIP or ISET, and there is no command to enable or disable a channel -
+# that stays a hand operation at the supply, which is the last thing standing
+# between a bug and an electrode.
+TOPIC_HV_VSET = "xams/cmd/caen/vset"
+ACK_HV_VSET = "xams/ack/caen/vset"
+
+# Energise or de-energise one channel: the "turn ON HV" of section 10a. This
+# is NOT the enable switch - that clears the DISABLED bit and stays a hand
+# operation at the front panel. A channel must already be enabled before this
+# can do anything.
+TOPIC_HV_OUTPUT = "xams/cmd/caen/output"
+ACK_HV_OUTPUT = "xams/ack/caen/output"
+
 
 class Bus:
     """A thin wrapper over paho-mqtt with an outage buffer.

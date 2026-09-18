@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = Path(os.environ.get("XAMS_CONFIG_DIR", ROOT / "config"))
 
 VALID_KINDS = {
-    "voltage", "current", "rtd", "hv_vmon", "hv_imon", "hv_stat",
+    "voltage", "current", "rtd", "hv_vmon", "hv_imon", "hv_stat", "hv_vset",
     "temperature", "status", "power", "setpoint",
 }
 

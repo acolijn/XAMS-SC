@@ -7,6 +7,16 @@
 <div class="grid wide">
 {% for s in supplies %}
 <div class="card">
+  {% if s.armed %}
+  <div class="flash bad" style="margin:.9rem">
+    <strong>{{ s.armed|length }} disabled channel{{ '' if s.armed|length == 1 else 's' }}
+    with a setpoint above zero.</strong>
+    Flipping the enable by hand would ramp straight to it:
+    {% for c in s.armed %}<code>{{ c.label }} {{ c.vset.formatted() }} V</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+    Until those setpoints are zeroed the enable switch is not a safe thing to
+    touch (§10a).
+  </div>
+  {% endif %}
   <h2>{{ s.id }} — {{ s.model }} serial {{ s.serial }}
       <span class="dim" style="text-transform:none;letter-spacing:0">
         (firmware {{ s.firmware }})</span></h2>
@@ -14,12 +24,13 @@
     {# Identical in both tables, so the columns line up across the two
        supplies now that they sit next to each other. #}
     <colgroup>
-      <col style="width:6%">    <!-- CH                                        -->
-      <col style="width:28%">   <!-- Channel — 'nai — external NaI detector'   -->
-      <col style="width:12%">   <!-- VMON                                      -->
-      <col style="width:12%">   <!-- IMON                                      -->
+      <col style="width:5%">    <!-- CH                                        -->
+      <col style="width:23%">   <!-- Channel — 'nai — external NaI detector'   -->
+      <col style="width:11%">   <!-- VSET  — what it was told to hold          -->
+      <col style="width:11%">   <!-- VMON  — what it is doing                  -->
+      <col style="width:10%">   <!-- IMON                                      -->
       <col style="width:12%">   <!-- Status                                    -->
-      <col style="width:8%">    <!-- MAXV                                      -->
+      <col style="width:7%">    <!-- MAXV                                      -->
       <col style="width:6%">    <!-- RUP                                       -->
       <col style="width:6%">    <!-- RDW                                       -->
       <col style="width:6%">    <!-- TRIP                                      -->
@@ -27,6 +38,7 @@
     </colgroup>
     <tr>
       <th>CH</th><th>Channel</th>
+      <th class="num">VSET</th>
       <th class="num">VMON</th><th class="num">IMON</th>
       <th>Status</th>
       <th class="num">MAXV</th><th class="num">RUP</th><th class="num">RDW</th>
@@ -36,34 +48,51 @@
     <tr>
       <td class="dim">{{ c.index }}</td>
       <td>{{ c.label }}<span class="dim"> — {{ c.description }}</span></td>
+      {# The setpoint beside the monitor: "what it was told" next to "what it
+         is doing". A non-zero setpoint on a DISABLED channel is exactly what
+         §10a exists to stop, so it is marked here rather than left to be
+         discovered by flipping the switch. #}
+      <td class="num {{ 'dim' if not (c.vset and c.vset.healthy) }}">
+        {% if c.armed %}<span class="bad"
+          title="disabled, but its setpoint is not zero: flipping the enable would ramp straight to this voltage"
+          >{{ c.vset.formatted() }}</span>
+        {% else %}{{ c.vset.formatted() if c.vset else '—' }}{% endif %}
+        <span class="unit">V</span></td>
       <td class="num {{ 'dim' if not (c.vmon and c.vmon.healthy) }}">
         {{ c.vmon.formatted() if c.vmon else '—' }}
         <span class="unit">V</span></td>
       <td class="num {{ 'dim' if not (c.imon and c.imon.healthy) }}">
         {{ c.imon.formatted() if c.imon else '—' }}
         <span class="unit">µA</span></td>
-      {# From the board's own STAT word, never from VMON: a channel can be
-         enabled and sitting at zero volts, and calling that "off" understates
-         what is live (§7.2). #}
+      {# FOUR STATES, from the board's own STAT word (§7.2, §10a):
+
+           disabled   bit 10 - the front-panel switch is off
+           enabled    switch on, output NOT energised. Permitted, inert.
+           ON 0 V     energised at zero volts: live, and nothing on it yet
+           ON         energised with volts out
+
+         The middle two are the point. "enabled" is what a channel reads after
+         its switch is flipped, and it does nothing until it is energised -
+         which is a command, not the switch. #}
       <td>
         {% if c.faults %}
           <span class="dot bad"></span><span class="bad">{{ c.faults|join(', ') }}</span>
-        {% elif c.enabled is none %}
+        {% elif c.energised is none %}
           <span class="dot bad"></span><span class="bad">no reading</span>
-        {% elif c.enabled %}
-          {# Both states are live and both are green. ON means it is putting
-             volts out; enabled means the output is switched on and sitting at
-             zero — still live, still one setpoint away from volts on an
-             electrode, which is why it is not called "off". #}
+        {% elif c.energised %}
           {% if c.vmon and c.vmon.healthy and c.vmon.value is not none
                 and c.vmon.value|abs > 1 %}
             <span class="dot good"></span><span class="good">ON</span>
           {% else %}
             <span class="dot good"></span><span class="good"
-              title="output switched on, sitting at zero volts">enabled</span>
+              title="energised and sitting at zero volts">ON 0 V</span>
           {% endif %}
+        {% elif c.switched_off %}
+          <span class="dot off"></span><span class="dim"
+            title="the front-panel enable switch is off">disabled</span>
         {% else %}
-          <span class="dot off"></span><span class="dim">off</span>
+          <span class="dot warn"></span><span class="warn"
+            title="the enable switch is on, but the output is not energised. It will do nothing until it is switched on.">enabled</span>
         {% endif %}
       </td>
       <td class="num dim">{{ c.expect.get('maxv', '—') }}</td>
@@ -82,11 +111,24 @@
   <h2>What these columns are, and what this page cannot do</h2>
   <div class="note">
     <p><strong>Status</strong> comes from the board's own <code>STAT</code>
-    word, never from the voltage. <strong>ON</strong> is putting volts out;
-    <strong>enabled</strong> is switched on and sitting at zero — still live,
-    and one setpoint away from volts on an electrode, which is why it is not
-    shown as off. <strong>off</strong> is the output disabled. A trip,
-    interlock or over-current replaces all of them and is shown in red (§7.2).</p>
+    word, never from the voltage. There are <strong>four</strong> states, and
+    three separate things decide them:</p>
+
+    <ul style="margin:.4rem 0 .6rem 1.1rem;padding:0">
+      <li><strong>disabled</strong> — the front-panel enable switch is off.
+        Nothing in this software can change that, by design (§10a).</li>
+      <li><strong>enabled</strong> — the switch is on, but the output is
+        <em>not energised</em>. Permitted and inert: it will do nothing until
+        it is switched on, which is a command, not the switch.</li>
+      <li><strong>ON 0 V</strong> — energised and sitting at zero. Live, with
+        nothing on it yet.</li>
+      <li><strong>ON</strong> — energised with volts out.</li>
+    </ul>
+
+    <p>A trip, interlock or over-current replaces all four and is shown in
+    red. The distinction between <em>disabled</em> and <em>enabled</em> is the
+    one that matters: flipping the switch does not energise anything, and for
+    a while this page wrongly showed both as "off".</p>
 
     <p><strong>VMON and IMON</strong> are what the supply is measuring now.
     Voltages are stored <strong>signed</strong>: the supplies report unsigned
@@ -101,10 +143,20 @@
     rate, trip current and over-voltage limit live on the instrument, and
     that is what keeps this software out of the protection path (§10).</p>
 
-    <p><strong>Nothing here can set a voltage.</strong> The control surface is
-    milestone 8, and only after §10's open decision about the LabVIEW heater
-    shut-off and KILL VOLTAGE behaviours is resolved. Until then the supplies
-    are operated from their own front panels.</p>
+    <p><strong>VSET is what the channel was told to hold; VMON is what it is
+    doing.</strong> Both are read, neither is written from here.</p>
+
+    <p><strong>A VSET in red is a disabled channel whose setpoint is not
+    zero.</strong> The enable switch is a hand operation and the board ramps to
+    VSET the moment it is flipped, so a red value is the voltage you would get
+    by touching that switch - with no confirmation and no warning. §10a turns
+    "a disabled channel has VSET 0" into an invariant precisely so that the
+    switch becomes safe to flip; until the setpoints are zeroed it is not.</p>
+
+    <p><strong>Nothing here can set a voltage yet.</strong> §10's open decision
+    was resolved on 18 September 2026, so the control path is no longer
+    blocked - but the HV part of it is designed (§10a) and not built. The
+    supplies are still operated from their own front panels.</p>
 
     <p>The two units are told apart by asking each board for its own serial
     number over the wire, never by COM port. Swapping the USB cables is
