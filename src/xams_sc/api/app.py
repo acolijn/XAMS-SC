@@ -38,10 +38,11 @@ from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_LS_RANGE,
-                   TOPIC_LS_SETPOINT, Bus)
+from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
+                   ACK_LS_SETPOINT, TOPIC_HV_OUTPUT, TOPIC_HV_VSET,
+                   TOPIC_LS_RANGE, TOPIC_LS_SETPOINT, Bus)
 from ..config import load
-from ..hv_status import (describe_status, is_disabled, is_enabled,
+from ..hv_status import (describe_status, is_disabled, is_energised,
                          status_faults)
 from ..grafana import DriftWatcher
 from .state import SystemState
@@ -134,6 +135,25 @@ def _remember(response, name: str):
         response.set_cookie(OPERATOR_COOKIE, name, max_age=365 * 24 * 3600,
                             samesite="lax", path="/")
     return response
+
+
+async def _form(request: Request):
+    """The submitted form as a plain dict."""
+    return dict(await request.form())
+
+
+def _short(channel: str) -> str:
+    """`hv_cathode_vset` reads as `cathode` in a message to a person."""
+    return channel.replace("hv_", "").replace("_vset", "")
+
+
+def _redirect_hv(error: str | None, ok: str | None = None):
+    """Back to /hv, carrying what happened. POST then redirect: that page
+    reloads itself, and a refresh must not repeat a write to an instrument."""
+    from urllib.parse import quote
+    if error:
+        return RedirectResponse("/hv?hv_error=" + quote(error), status_code=303)
+    return RedirectResponse("/hv?hv_ok=" + quote(ok or "done"), status_code=303)
 
 
 def _redirect_ls(error: str | None, ok: str | None = None):
@@ -241,6 +261,73 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         response.delete_cookie(OPERATOR_COOKIE, path="/")
         return response
 
+    @app.post("/hv/apply")
+    def hv_apply(request: Request):
+        """Write the setpoints the operator has filled in (§10a).
+
+        **Every non-empty box is applied, as one action.** Empty boxes are
+        left alone, so a page full of channels can be moved one at a time or
+        all together without a different button for each case.
+
+        The service does the validating - range, polarity, whether the channel
+        is enabled, and the read-back. Duplicating those rules here would mean
+        two copies, and the copy that matters is the one next to the hardware.
+        """
+        import asyncio
+        form = asyncio.run(_form(request))
+        who = operator_of(request, form.get("by", ""))
+
+        results, failures = [], 0
+        for name, raw in form.items():
+            if not name.startswith("hv_") or not name.endswith("_vset"):
+                continue
+            text = (raw or "").strip()
+            if not text:
+                continue
+            try:
+                value = float(text)
+            except ValueError:
+                results.append(f"{name}: {text!r} is not a number")
+                failures += 1
+                continue
+            answer = state.command(TOPIC_HV_VSET, ACK_HV_VSET,
+                                   {"channel": name, "value": value,
+                                    "by": who})
+            if answer.get("ok"):
+                results.append(f"{_short(name)} now {answer['new']:+.1f} V")
+                log.warning("HV setpoint %s -> %+.1f by %s", name, value, who)
+            else:
+                results.append(f"{_short(name)}: {answer.get('reason')}")
+                failures += 1
+
+        if not results:
+            return _redirect_hv(None, "nothing to apply - every box was empty")
+        joined = "; ".join(results)
+        return _redirect_hv(joined if failures else None,
+                            None if failures else joined)
+
+    @app.post("/hv/output")
+    def hv_output(request: Request, channel: str = Form(""),
+                  on: str = Form(""), by: str = Form("")):
+        """Energise or de-energise one channel (§10a step 4).
+
+        NOT the enable switch: that is a hand operation at the supply and
+        nothing here can change it. This energises a channel that is already
+        enabled, and it ramps to whatever setpoint is loaded - which is why
+        the answer says which voltage that is.
+        """
+        who = operator_of(request, by)
+        wanted = on.strip().lower() in ("1", "true", "on", "yes")
+        answer = state.command(TOPIC_HV_OUTPUT, ACK_HV_OUTPUT,
+                               {"channel": channel.strip(), "on": wanted,
+                                "by": who})
+        if answer.get("ok"):
+            detail = answer.get("detail") or ("on" if wanted else "off")
+            log.warning("HV output %s -> %s by %s", channel,
+                        "on" if wanted else "off", who)
+            return _redirect_hv(None, f"{_short(channel)}: {detail}")
+        return _redirect_hv(f"{_short(channel)}: {answer.get('reason')}")
+
     @app.post("/lakeshore/setpoint")
     def lakeshore_setpoint(request: Request, value: str = Form(""),
                            by: str = Form("")):
@@ -327,7 +414,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 imon_name = ch.name.replace("_vmon", "_imon")
                 expect = (spec.get("expect") or {}).get(index, {})
                 stat_view = state.channel(ch.name.replace("_vmon", "_stat"))
-                vset_view = state.channel(ch.name.replace("_vmon", "_vset"))
+                vset_name = ch.name.replace("_vmon", "_vset")
+                vset_view = state.channel(vset_name)
+                default_channel = state.config.channels.get(vset_name)
 
                 # The board's own STAT word decides on/off, NEVER whether
                 # VMON is above zero: a channel can be enabled and sitting at
@@ -344,11 +433,18 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 # flipped. Where that is not true, flipping the switch is a
                 # step into an unannounced voltage - so the page says so
                 # rather than leaving it to be discovered at the supply.
+                # is_disabled - THE SWITCH - not is_energised, the output.
+                #
+                # This asked whether the channel was putting out volts, so a
+                # channel whose switch was on but which was not energised
+                # counted as "disabled with a setpoint" and produced the
+                # warning "flipping the enable would ramp straight to it"
+                # about a channel already enabled. The fourth bug of this
+                # shape in one afternoon, which is what prompted the rename.
                 armed = None
                 if (vset_view is not None and vset_view.healthy
-                        and vset_view.value is not None):
-                    enabled = (word is not None and is_enabled(word))
-                    armed = (not enabled) and abs(vset_view.value) > 1.0
+                        and vset_view.value is not None and word is not None):
+                    armed = is_disabled(word) and abs(vset_view.value) > 1.0
 
                 # FOUR STATES, and the distinction between the middle two
                 # is the whole of section 10a:
@@ -371,9 +467,12 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     "vmon": state.channel(ch.name),
                     "imon": state.channel(imon_name),
                     "vset": vset_view,
+                    "vset_channel": vset_name,
+                    "default": default_channel.default_setpoint
+                               if default_channel else None,
                     "armed": armed,
                     "stat": stat_view,
-                    "energised": None if word is None else is_enabled(word),
+                    "energised": None if word is None else is_energised(word),
                     "switched_off": None if word is None else is_disabled(word),
                     "faults": [] if word is None else status_faults(word),
                     "flags": "" if word is None else describe_status(word),
@@ -388,7 +487,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 "firmware": spec.get("firmware"),
                 "channels": sorted(channels, key=lambda c: c["index"]),
             })
-        return page(request, "hv.html", supplies=supplies)
+        return page(request, "hv.html", supplies=supplies,
+                    hv_ok=request.query_params.get("hv_ok"),
+                    hv_error=request.query_params.get("hv_error"))
 
     @app.get("/mimic", response_class=HTMLResponse)
     def mimic(request: Request):

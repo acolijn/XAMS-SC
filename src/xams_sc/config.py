@@ -54,6 +54,17 @@ class Channel:
     an offset and a multiplier — the Lake Shore heater wattage, which goes as
     the square of the percentage.
     """
+    default_setpoint: float | None = None
+    """The setpoint "load defaults" offers for this channel (section 10a).
+
+    Configuration, not state: it is what the channel is normally run at, kept
+    in git and reviewable, so that bringing the detector up does not depend on
+    somebody remembering a number or on whatever was last left in the board.
+
+    Offered, never applied. Loading a default fills a box on a page; a person
+    still reads it, may change it, and presses the button. Nothing here writes
+    to an instrument, and nothing applies a default on startup.
+    """
     legacy: str | None = None
     enabled: bool = True
     description: str = ""
@@ -200,6 +211,18 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
                     f"channel {name!r}: unknown transform "
                     f"{derive['transform']!r}; known: {sorted(TRANSFORMS)}")
 
+        default = e.get("default_setpoint")
+        if default is not None:
+            limits = e.get("limits")
+            if not limits:
+                raise ConfigError(
+                    f"channel {name!r}: default_setpoint needs `limits` too, "
+                    f"or the default could never be applied")
+            if not (limits["min"] <= float(default) <= limits["max"]):
+                raise ConfigError(
+                    f"channel {name!r}: default_setpoint {default} is outside "
+                    f"its own limits {limits['min']}..{limits['max']}")
+
         limits = e.get("limits")
         if limits is not None:
             if not {"min", "max"} <= set(limits):
@@ -233,6 +256,8 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
             rtd=e.get("rtd"),
             limits=limits,
             derive=derive,
+            default_setpoint=(None if e.get("default_setpoint") is None
+                              else float(e["default_setpoint"])),
             legacy=e.get("legacy"),
             enabled=bool(e.get("enabled", True)),
             description=str(e.get("description", "")),

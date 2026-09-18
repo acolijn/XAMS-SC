@@ -17,9 +17,9 @@ import threading
 import time
 from dataclasses import dataclass
 
-from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_ALARM, TOPIC_BACKUP,
-                   TOPIC_FLOW_RESET, TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS,
-                   Bus)
+from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE, ACK_LS_SETPOINT,
+                   TOPIC_ALARM, TOPIC_BACKUP, TOPIC_FLOW_RESET, TOPIC_MEAS,
+                   TOPIC_RELOAD, TOPIC_STATUS, Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -261,8 +261,15 @@ class SystemState:
     def start(self) -> None:
         self.bus.subscribe(TOPIC_BACKUP, self._on_backup)
         self.bus.subscribe("xams/ack/derived/flow_reset", self._on_flow_ack)
+        # EVERY ack topic a command may use. `command()` waits for the reply
+        # on one of these, so an unsubscribed topic makes every write time out
+        # after ten seconds and report "the service did not answer" - about a
+        # write that in fact succeeded. Adding a command means adding its ack
+        # here, and forgetting is silent until somebody presses the button.
         self.bus.subscribe(ACK_LS_SETPOINT, self._on_ack)
         self.bus.subscribe(ACK_LS_RANGE, self._on_ack)
+        self.bus.subscribe(ACK_HV_VSET, self._on_ack)
+        self.bus.subscribe(ACK_HV_OUTPUT, self._on_ack)
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)
         self.bus.subscribe(f"{TOPIC_ALARM}/#", self._on_alarm)

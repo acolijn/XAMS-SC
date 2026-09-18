@@ -293,3 +293,31 @@ class TestTheReturnPathCannotLeaveTheSite:
                         follow_redirects=False)
 
         assert r.headers["location"] == "/status"
+
+
+class TestEveryCommandCanHearItsAnswer:
+    """A command whose ack topic is not subscribed times out after ten
+    seconds and reports "the service did not answer" - about a write that in
+    fact SUCCEEDED. The instrument moved; the page said it had not.
+
+    This happened on 18 September 2026: the HV setpoint route was added, the
+    service handled it correctly, and `SystemState` had never been told to
+    listen for `xams/ack/caen/vset`. Nothing failed until somebody pressed the
+    button, and then it lied in the worst direction.
+    """
+
+    def test_every_ack_topic_in_the_bus_is_subscribed(self, client, bus):
+        import xams_sc.bus as bus_module
+
+        acks = {name: getattr(bus_module, name) for name in dir(bus_module)
+                if name.startswith("ACK_")}
+        assert acks, "no ACK_ topics found; has the naming changed?"
+
+        # PROVE THE TEST BITES: drop one and it must fail.
+        subscribed = {topic for topic, _ in bus.handlers}
+        missing = sorted(n for n, t in acks.items() if t not in subscribed)
+
+        assert not missing, (
+            "SystemState does not subscribe to %s, so any command using it "
+            "will time out and report failure for a write that worked"
+            % ", ".join(missing))

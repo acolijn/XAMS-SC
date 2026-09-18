@@ -17,7 +17,7 @@ inference from creeping back.
 import pytest
 
 from xams_sc.hv_status import (FAULT_BITS, STAT_BITS, describe_status,
-                               is_disabled, is_enabled, status_faults)
+                               is_disabled, is_energised, status_faults)
 
 # Recorded from the two units, 17 September 2026.
 ENABLED_AT_ZERO = 1       # hv_1 ch1
@@ -27,11 +27,11 @@ DISABLED = 1024           # every other channel
 class TestTheRecordedWords:
     def test_enabled_at_zero_volts_reads_as_on(self):
         """The whole point. VMON was 0.0 when this word was read."""
-        assert is_enabled(ENABLED_AT_ZERO) is True
+        assert is_energised(ENABLED_AT_ZERO) is True
         assert describe_status(ENABLED_AT_ZERO) == "ON"
 
     def test_disabled_reads_as_not_on(self):
-        assert is_enabled(DISABLED) is False
+        assert is_energised(DISABLED) is False
         assert is_disabled(DISABLED) is True
         assert describe_status(DISABLED) == "DISABLED"
 
@@ -48,13 +48,13 @@ class TestOnIsBitZeroNotAVoltage:
     def test_enabled_and_disabled_are_separate_questions(self):
         """Not simply each other's negation: the board reports them as two
         bits, and a word can carry neither."""
-        assert is_enabled(0) is False
+        assert is_energised(0) is False
         assert is_disabled(0) is False
 
     @pytest.mark.parametrize("word", [1, 3, 5, 129, 0b1000000000001])
     def test_on_survives_other_bits_being_set(self, word):
         """Ramping, tripped, interlocked — still ON, and still dangerous."""
-        assert is_enabled(word) is True
+        assert is_energised(word) is True
 
 
 class TestFaults:
@@ -74,7 +74,7 @@ class TestFaults:
 
     def test_an_enabled_channel_that_trips_reports_both(self):
         word = (1 << 0) | (1 << 7)
-        assert is_enabled(word) is True
+        assert is_energised(word) is True
         assert status_faults(word) == ["TRIP"]
         assert describe_status(word) == "ON,TRIP"
 

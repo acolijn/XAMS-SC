@@ -53,15 +53,32 @@ def status_faults(word: int) -> list[str]:
             if word & (1 << bit)]
 
 
-def is_enabled(word: int) -> bool:
-    """Is this channel's output switched ON? Bit 0, never the voltage."""
+def is_energised(word: int) -> bool:
+    """Is the OUTPUT energised? Bit 0.
+
+    **This is not "is the channel enabled".** It was called `is_enabled` until
+    18 September 2026, and that name caused four separate bugs in one
+    afternoon, because in this system's own vocabulary "enabled" means the
+    front-panel switch - which is bit 10, and a different question:
+
+      * `is_disabled(word)`  - the switch is OFF (bit 10)
+      * `is_energised(word)` - the output is ON (bit 0)
+      * neither              - switch on, output off. Permitted and inert.
+
+    Every one of the four bugs was the same shape: code that meant "has the
+    operator flipped the switch" and asked "is it putting out volts". It
+    displayed a live channel as off, refused a setpoint to a channel that was
+    ready for one, and warned that an enabled channel was dangerous to enable.
+
+    The name is the fix. Anything that wants the switch asks `is_disabled`.
+    """
     return bool(word & (1 << BIT_ON))
 
 
 def is_disabled(word: int) -> bool:
     """Is it explicitly DISABLED? Bit 10.
 
-    Not simply `not is_enabled(...)`: a word could have neither bit set, and
+    Not simply `not is_energised(...)`: a word could have neither bit set, and
     the two questions are reported separately by the board.
     """
     return bool(word & (1 << BIT_DISABLED))

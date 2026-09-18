@@ -147,6 +147,28 @@ pre { margin:0; padding:.9rem; overflow-x:auto; font-size:.8rem; line-height:1.4
   border-radius:3px; cursor:pointer; }
 .reset-form button:hover { border-color:var(--warn); color:var(--warn); }
 
+/* The HV controls. Small, because they sit inside a dense table, and
+   deliberately unlike each other: turning a channel ON is not the same kind
+   of act as clearing a box. */
+.vset-box {
+  display:block; width:100%; margin-top:.25rem; padding:.15rem .3rem;
+  font:inherit; font-size:.8rem; text-align:right;
+  font-family:Consolas,monospace; color:var(--text); background:var(--bg);
+  border:1px solid var(--line); border-radius:3px; }
+.vset-box:focus { outline:none; border-color:var(--dim); }
+/* A box that cannot be used should look like it, not merely refuse later. */
+.vset-box:disabled { color:var(--dim); background:transparent;
+  border-style:dashed; cursor:not-allowed; }
+.hv-btn {
+  padding:.2rem .55rem; font:inherit; font-size:.78rem; font-weight:600;
+  color:var(--dim); background:var(--panel); border:1px solid var(--line);
+  border-radius:3px; cursor:pointer; margin-right:.35rem; }
+.hv-btn:hover { color:var(--text); border-color:var(--dim); }
+.hv-btn.on:hover { color:var(--good); border-color:var(--good); }
+.hv-btn.off:hover { color:var(--warn); border-color:var(--warn); }
+.hv-btn.apply { color:var(--text); border-color:var(--dim); }
+.hv-btn.apply:hover { color:var(--good); border-color:var(--good); }
+
 .flash { margin-top:.8rem; padding:.45rem .6rem; border-radius:3px;
          font-size:.82rem; line-height:1.45; }
 .flash.good { background:rgba(63,185,80,.12); color:var(--good); }
