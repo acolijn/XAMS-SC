@@ -130,16 +130,18 @@
       <strong>Refused — nothing was changed.</strong> {{ ls_error }}</div>{% endif %}
 
     <div class="body" style="border-top:1px solid var(--line)">
-      {# The control path (§10). Output 1 only: output 2 is not used on this
-         cryostat, so it is shown above and is not writable. #}
+      {# The control path (§10), output 1 only.
+
+         No name on the commands: it is set once in the header and kept in a
+         cookie. Retyping it before every setpoint is the friction that gets
+         worked around by leaving it blank, which costs the audit trail the
+         one thing it is for. #}
       <form method="post" action="/lakeshore/setpoint" class="reset-form"
             onsubmit="return confirm('Change the Lake Shore setpoint on output 1 to ' + this.value.value + ' °C?');">
         <label class="dim" style="align-self:center;min-width:4.2rem">setpoint</label>
         <input type="text" name="value" inputmode="decimal"
                placeholder="°C" aria-label="new setpoint in Celsius"
                style="max-width:6rem">
-        <input type="text" name="by" maxlength="40" placeholder="your name"
-               aria-label="who is making this change">
         <button type="submit">Set</button>
       </form>
 
@@ -150,10 +152,9 @@
           <option value="high">high</option>
           <option value="off">off</option>
         </select>
-        <input type="text" name="by" maxlength="40" placeholder="your name"
-               aria-label="who is making this change">
         <button type="submit">Apply</button>
       </form>
+
     </div>
 
   </div>
@@ -201,8 +202,6 @@
          trust, exactly as `xams-ctl flow-reset --by` does. #}
       <form method="post" action="/flow/reset" class="reset-form"
             onsubmit="return confirm('Close the current flow period and start a new one?\n\nNothing is erased — the period is kept in flow_periods.');">
-        <input type="text" name="by" maxlength="40" placeholder="your name"
-               aria-label="who is resetting the integrator">
         <button type="submit">Reset</button>
       </form>
     </div>
