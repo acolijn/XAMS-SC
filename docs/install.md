@@ -50,21 +50,48 @@ behind an ni.com account. It cannot be scripted the way §3 scripts Mosquitto
 and Grafana, because there is a login in the way. Installed through NI Package
 Manager.
 
-!!! warning "Fill this in at the lab PC"
+!!! danger "NI-DAQmx **24.5.0** — install this version, not “the latest”"
 
-    **TODO(lab PC):** the installed NI-DAQmx version, read from NI-MAX
-    (*Help → About*), and the NI Package Manager version alongside it.
+    Read from the lab PC on 18 September 2026. This is the version that was
+    demonstrably driving the cDAQ-9174, including
+    `ni-daqmx-cdaq-firmware 24.5.0`.
 
-    Record it here rather than "the latest". The cDAQ-9174 is a
-    **discontinued chassis**: that current NI-DAQmx supports it is true today
-    and is not a promise. If the installed version turns out to be the last one
-    that works, that number is worth more than the installer.
+    Record the number rather than "the latest", for the ordinary reason: it is
+    the version this system has been run and verified against, and a driver
+    upgrade is a change worth making deliberately rather than by accident.
 
-**Keep the offline installer.** Download it into `tools/installers/`, beside the
-~870 MB §3 already stages there. That directory is git-ignored and exists for
-exactly this. It means a rebuild does not depend on someone remembering an
-ni.com password, on the account still existing, or on the lab PC reaching the
-internet at all.
+    On 18 September 2026 NI’s download page offered **26.5.0**, not 24.5.0.
+    26.5.0 has not been tried against this hardware, so upgrading is a thing to
+    do on purpose, with the cDAQ service watched afterwards — not a thing to do
+    while rebuilding a dead machine.
+
+    !!! note "Correction, 18 September 2026"
+
+        An earlier version of this page called the cDAQ-9174 a **discontinued
+        chassis**. **That was wrong.** NI lists it as *Active* and sells it
+        (about €1,680). The claim went unchecked into this page and then into
+        [Backup and restore](operating/backup.md), where it was used to argue
+        that the driver might become unobtainable. It might not. The archived
+        copy is still worth having — see there for the honest reason.
+
+**The driver is archived on the cluster**, at
+`/data/xenon/xams_slow_control/software/` (see
+[Backup and restore](operating/backup.md)):
+
+| | |
+|---|---|
+| `nipm-package-cache-2026-09-18.tar` | the whole NI Package Manager cache from the lab PC, ~6.8 GB, **containing NI-DAQmx 24.5.0** |
+| `ni-daqmx_26.5.0_offline.iso` | NI’s current offline installer, 3.2 GB, version **not** verified against the 9174 |
+
+A rebuild therefore does not depend on someone remembering an ni.com password,
+on the account still existing, on NI still publishing 24.5.0, or on the lab PC
+reaching the internet at all.
+
+Two honest caveats, both recorded in the README beside those files: the cache
+needs **NI Package Manager itself**, which is not archived because it was not
+present on the lab PC as a standalone installer; and **nobody has yet installed
+24.5.0 from that cache onto a clean machine.** It is very likely to work, and
+that is not the same as knowing.
 
 **Do not run the hardware services under WSL2.** USB passthrough to WSL2 does
 not work with NI-DAQmx. Anything that touches an instrument runs natively on
