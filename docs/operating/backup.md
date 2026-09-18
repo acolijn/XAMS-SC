@@ -9,11 +9,15 @@ reinstalling — a disk failure, a theft, a flood. The distinction matters,
 because [Installation](../install.md) covers the second case and is useless for
 the first.
 
-!!! warning "Not yet implemented"
+!!! info "Partly implemented, 18 September 2026"
 
-    Nothing here runs today. This page states what is irreplaceable and what
-    the copy should look like; the destination and the schedule are still open
-    — see [What is still to decide](#what-is-still-to-decide).
+    **Done:** the destination is settled and the vendor software is archived —
+    `/data/xenon/xams_slow_control/` on the Nikhef cluster, reached with an SSH
+    key from the lab PC. See [The NI driver](#the-ni-driver-the-part-with-a-clock-on-it).
+
+    **Not done:** the nightly copy of the measurement archive, and the restore
+    rehearsal. Until the schedule exists, **the archive on the lab PC is still
+    the only copy.**
 
 ## What is irreplaceable
 
@@ -22,7 +26,7 @@ the first.
 | The measurement archive | `data/raw/<UTC date>.jsonl` | **gone forever** |
 | Flight-recorder dumps | `data/events/*.jsonl` | gone — the ten minutes before each alarm |
 | Flow integrator state | `data/fm101_total.json` | gone — the running total since the last reset |
-| Alarm history, flow periods, audit trail | PostgreSQL only | gone — **see below** |
+| Alarm history, flow periods, audit trail | PostgreSQL only | gone — **accepted, see below** |
 | Credentials | `config/secrets.yaml` | gone; recoverable, painfully |
 | Channel and alarm definitions | git | safe |
 | Grafana dashboards | git | safe |
@@ -57,8 +61,21 @@ Two ways to close that, neither done:
 - **Include a PostgreSQL dump in the copy.** Cheaper to write, and it
   contradicts the architecture in a small way each time it runs.
 
-Until one of them exists, **treat a PostgreSQL loss as data loss**, whatever
-the design document says.
+**Decided 18 September 2026: this is accepted, not fixed.** Alarm history is
+not worth a schedule for a lab instrument, and the measurements are what
+matter. So neither option was taken: PostgreSQL is not backed up, and a
+PostgreSQL loss costs the alarm history, the flow periods and the audit trail.
+
+The consequence to keep in view is that **`audit` is not alarm history.** Since
+the Lake Shore control path was built it records who changed the cryostat —
+setpoint and heater writes, with old and new values. That is traceability, not
+history, and it now lives in exactly one place. If that ever becomes
+uncomfortable, the cheap fix is one extra topic subscription in `jsonl_writer`
+so those records land in the archive the backup already copies; no schedule and
+no `pg_dump` required.
+
+The upside of accepting it is real: the backup is a **pure file copy**, it
+never contradicts the architecture, and PostgreSQL stays genuinely disposable.
 
 ## What not to copy
 
@@ -138,6 +155,50 @@ lab. Restrict it: a dedicated key, used nowhere else, and an `authorized_keys`
 entry limited to writing into the backup directory — a forced command, or a
 write-only destination. Not your ordinary login key.
 
+## The NI driver: the part with a clock on it
+
+The measurement archive can wait for a schedule. This could not, and it is done.
+
+The cryostat is read through a **cDAQ-9174** and NI-DAQmx **24.5.0**.
+
+!!! warning "This was first justified with a false claim"
+
+    The original argument here was that the 9174 is a *discontinued* chassis,
+    so NI would eventually drop it and the hardware would become unreadable.
+    **The 9174 is not discontinued** — NI lists it as Active and sells it. The
+    claim was inherited from [Installation](../install.md), repeated without
+    checking, and it overstated the risk considerably.
+
+The copy is still worth the 11 GB, for smaller and more ordinary reasons:
+
+- A rebuild does not need an ni.com account, a password somebody has forgotten,
+  or internet access from the lab PC.
+- It pins the **exact version this system has been verified against**, so a
+  rebuild does not silently become a driver upgrade at the worst moment.
+- 24.5.0 is no longer on NI’s download page; 26.5.0 is. Getting 24.5.0 back
+  would mean going through NI support rather than clicking a link.
+
+That is insurance against inconvenience, not against catastrophe. Worth having,
+not worth alarm.
+
+Archived to `/data/xenon/xams_slow_control/software/` on 18 September 2026:
+
+| File | |
+|---|---|
+| `nipm-package-cache-2026-09-18.tar` | 6.8 GB — the whole NI Package Manager cache from the lab PC, **containing NI-DAQmx 24.5.0**, the version demonstrably driving the 9174 |
+| `ni-daqmx_26.5.0_offline.iso` | 3.2 GB — NI’s current offline installer |
+| `README.md` | what each artefact is, and what has not been verified |
+
+**The risk was already real when we looked.** The lab PC runs 24.5.0; NI no
+longer offers it for download. The current offline installer is 26.5.0, and
+whether 26.5.0 still supports the 9174 was **not established** — so the
+trustworthy artefact is the package cache, not the ISO.
+
+Two things are archived but unproven, and the README says so plainly: the cache
+needs **NI Package Manager**, which was not on the lab PC as a standalone
+installer and so is not archived; and **nobody has installed 24.5.0 from that
+cache onto a clean machine.**
+
 ## Restoring
 
 The order matters, and only the first step is urgent.
@@ -162,18 +223,38 @@ The order matters, and only the first step is urgent.
 
 ## What is still to decide
 
-!!! warning "Fill this in"
+**Settled 18 September 2026:**
 
-    **TODO:** the destination. Nikhef project or group storage, SURFdrive, or
-    a Nikhef VM. Home directories on login nodes will not take it — roughly
-    20 GB a year before compression, so **check the quota before committing**.
+| | |
+|---|---|
+| Destination | `/data/xenon/xams_slow_control/` — group `xenon`, setgid, z37 can write. **Backed up by Nikhef**, so this is genuine off-site redundancy rather than a second copy in one failure domain. |
+| Unattended SSH | **Permitted and working.** Key auth from the lab PC, no 2FA in the way, via `login.nikhef.nl` as a jump host to `stbc-i2`. The alias is `nikhef-backup`. |
+| Vendor binaries on that storage | Acceptable at Nikhef. |
+| PostgreSQL | Not backed up — [accepted](#the-database-is-not-entirely-an-index). |
 
-    **TODO:** whether unattended SSH key authentication to that destination is
-    permitted at all. If two-factor authentication is in the way, an unattended
-    push is dead and the answer is SURFdrive's client or a VM inside the
-    firewall. **Establish this before writing any script.**
+!!! warning "Watch the free space"
 
-    **TODO:** whether the Nikhef VM of [the watchdog
-    item](../status.md) is the same machine. If it is, the two jobs justify it
-    together far better than either does alone: one box that notices the system
-    has gone quiet *and* holds the copy of what it recorded.
+    `/data/xenon` was **95% full** when this was set up — 1.3 TB free of 25 TB.
+    Against ~20 GB a year that is decades, but it is **shared xenon-group
+    storage** and somebody else’s dataset can eat it. A backup that stops
+    silently because the volume filled is the classic version of this story, so
+    the nightly job should check free space and complain rather than simply
+    write.
+
+!!! warning "Still to do"
+
+    **The nightly copy itself.** Until it exists the measurement archive has
+    one copy, on the lab PC.
+
+    **The restore rehearsal.** Pull one day back and replay it into a scratch
+    database. The replay path is claimed by the architecture and has never been
+    exercised.
+
+    **Install NI Package Manager + DAQmx 24.5.0 from the archived cache onto a
+    clean VM**, once, to turn "very likely to work" into "known to work". This
+    is the one that would hurt most to get wrong, because you find out during a
+    rebuild.
+
+    **The Nikhef VM** of [the watchdog item](../status.md) — whether it is the
+    same machine. If it is, the two jobs justify it together far better than
+    either does alone.

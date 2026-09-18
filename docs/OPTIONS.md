@@ -269,7 +269,7 @@ The system stays on Windows, on the existing control PC. This reverses the earli
 
 | Consideration | Effect |
 |---|---|
-| **NI-DAQmx and the cDAQ-9174** | {+}Decisive. Windows is NI's primary platform, so the compatibility risk around this discontinued chassis disappears entirely. On Linux it was the one item that could not be assumed. |
+| **NI-DAQmx and the cDAQ-9174** | {+}Decisive. Windows is NI's primary platform, so the compatibility question disappears entirely. On Linux it was the one item that could not be assumed. (An earlier draft called the 9174 discontinued; it is not.) |
 | **LabVIEW remains installed** | {+}The old system stays startable within minutes as a rollback path. On a reinstalled Linux machine it would not. |
 | **No new hardware, no reinstall** | {+}The existing PC is more than adequate. Nothing needs procuring. |
 | **`nidaqmx`, `pyserial`, `lakeshore`, Grafana, Mosquitto, FastAPI** | {+}All run natively on Windows. |
@@ -419,7 +419,7 @@ The migration is therefore a short, planned cut-over per device, with LabVIEW le
 - Whether the `9207` current channels `ai8:15` are genuinely unused
 - What `anode_timing.vi` and `DAISY_polarity_signs.vi` do, and whether that behaviour must be reproduced
 - Whether heater shut-off and HV kill move into hardware or stay in software
-- A spare or successor path for the cDAQ-9174, which is a discontinued model — modules carry over unchanged to a cDAQ-9179 or 9189
+- A spare or successor path for the cDAQ-9174 — modules carry over unchanged to a cDAQ-9179 or 9189. (An earlier draft called the 9174 discontinued; it is not, NI still sells it. A spare is still worth thinking about for a single point of failure, but there is no clock on it.)
 - Who, besides the primary author, will be able to maintain the system
 
 Prepared for the XAMS slow-control replacement decision. Configuration in §3 is extracted from the NI-MAX report of 16 September 2026 and the LabVIEW documentation export of `Slow_Control_2_17_User.vi` revision 393.
