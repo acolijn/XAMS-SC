@@ -57,7 +57,7 @@ channels:
     unit: V
     enabled: false
     legacy: v4
-    description: generic name in LabVIEW, offset 0 multiplier 1 — likely unused
+    description: not connected
 
   - name: pmain
     device: cdaq
@@ -84,7 +84,7 @@ channels:
     unit: V
     enabled: false
     legacy: v6
-    description: generic name in LabVIEW, offset 0 multiplier 1 — likely unused
+    description: not connected
 
   - name: fm101
     device: cdaq
