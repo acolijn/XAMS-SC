@@ -41,6 +41,19 @@ TOPIC_RELOAD = "xams/cmd/all/reload"
 TOPIC_FLOW_RESET = "xams/cmd/derived/flow_reset"
 TOPIC_FLOW_PERIOD = "xams/flow/period"
 
+# The Lake Shore control path (§10). These are the first topics in the system
+# that cause an instrument to do something, as against reporting what it has
+# done, which is why every one of them has an acknowledgement beside it.
+TOPIC_LS_SETPOINT = "xams/cmd/lakeshore/setpoint"
+TOPIC_LS_RANGE = "xams/cmd/lakeshore/range"
+ACK_LS_SETPOINT = "xams/ack/lakeshore/setpoint"
+ACK_LS_RANGE = "xams/ack/lakeshore/range"
+
+# Every write, published for a sink to store (§2.1, §10 rule 5). Publishing it
+# rather than writing it here means an audit record survives the database
+# being down: it is in the JSONL archive either way.
+TOPIC_AUDIT = "xams/audit"
+
 
 class Bus:
     """A thin wrapper over paho-mqtt with an outage buffer.

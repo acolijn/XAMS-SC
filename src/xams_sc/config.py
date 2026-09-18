@@ -25,7 +25,7 @@ CONFIG_DIR = Path(os.environ.get("XAMS_CONFIG_DIR", ROOT / "config"))
 
 VALID_KINDS = {
     "voltage", "current", "rtd", "hv_vmon", "hv_imon", "hv_stat",
-    "temperature", "status", "power",
+    "temperature", "status", "power", "setpoint",
 }
 
 
@@ -212,7 +212,8 @@ def _parse_channels(raw: dict, devices: dict) -> dict[str, Channel]:
         # A derived channel shares the physical input it is computed from,
         # exactly as hv_vmon and hv_imon share a channel index.
         phys_key = (device, str(e["phys"]))
-        shares_legitimately = kind.startswith("hv_") or derive is not None
+        shares_legitimately = (kind.startswith("hv_") or derive is not None
+                               or kind == "setpoint")
         if phys_key in seen_phys and not shares_legitimately:
             raise ConfigError(
                 f"channel {name!r}: physical input {phys_key[1]!r} on {device!r} "

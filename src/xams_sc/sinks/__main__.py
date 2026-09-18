@@ -23,6 +23,7 @@ from ..config import CONFIG_DIR, ConfigError, load
 from ..model import ServiceState, utcnow
 from ..service import SingleInstance, setup_logging
 from .alarm_writer import AlarmWriter
+from .audit_writer import AuditWriter
 from .flow_writer import FlowPeriodWriter
 from .jsonl_writer import JsonlWriter
 from .pg_writer import PgWriter
@@ -125,6 +126,12 @@ def main(argv=None) -> int:
         flow_writer.start()
         flow_writer.ensure_open_period("fm101_total", utcnow())
         log.info("flow-period writer started")
+        # Every write to an instrument, successful or refused (section 10
+        # rule 5). The first writes in this system are the Lake Shore setpoint
+        # and heater range.
+        audit_writer = AuditWriter(bus, dsn)
+        audit_writer.start()
+        log.info("audit writer started")
     else:
         # Not an error. Milestone 1 is expected to run before the database
         # exists, and the archive is what matters.

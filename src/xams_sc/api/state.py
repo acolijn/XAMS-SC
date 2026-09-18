@@ -17,8 +17,9 @@ import threading
 import time
 from dataclasses import dataclass
 
-from ..bus import (TOPIC_ALARM, TOPIC_FLOW_RESET, TOPIC_MEAS, TOPIC_RELOAD,
-                   TOPIC_STATUS, Bus)
+from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_ALARM,
+                   TOPIC_FLOW_RESET, TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS,
+                   Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class SystemState:
         self._alarms: dict[str, dict] = {}
         self._flow_gaps: float = 0.0
         self._flow_ack: dict | None = None
+        self._acks: dict[str, dict] = {}
         self.started = utcnow()
 
     # ---------------------------------------------------------------- inputs
@@ -173,6 +175,39 @@ class SystemState:
             time.sleep(0.15)
         return None
 
+    def command(self, topic: str, ack_topic: str, payload: dict,
+                timeout_s: float = 10.0) -> dict:
+        """Send a command and wait for the service to acknowledge it (§10).
+
+        The UI never touches an instrument. It asks, over the bus, and reports
+        what came back — so validation, the read-back and the audit record all
+        happen in the one place that owns the hardware, whether the request
+        arrived from this page or from the CLI.
+
+        A timeout is reported as failure, NOT as success. If the service is
+        down the write did not happen, and saying otherwise would leave
+        somebody believing a setpoint had moved.
+        """
+        with self._lock:
+            self._acks.pop(ack_topic, None)
+        self.bus.publish_raw(topic, json.dumps(payload))
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self._lock:
+                if ack_topic in self._acks:
+                    return self._acks.pop(ack_topic)
+            time.sleep(0.1)
+        return {"ok": False, "reason": "the %s service did not answer within "
+                                       "%.0f s; nothing was changed"
+                                       % (topic.split("/")[2], timeout_s)}
+
+    def _on_ack(self, topic: str, payload: str) -> None:
+        try:
+            with self._lock:
+                self._acks[topic] = json.loads(payload)
+        except ValueError:
+            pass
+
     def _on_flow_ack(self, topic: str, payload: str) -> None:
         try:
             self._flow_ack = json.loads(payload)
@@ -181,6 +216,8 @@ class SystemState:
 
     def start(self) -> None:
         self.bus.subscribe("xams/ack/derived/flow_reset", self._on_flow_ack)
+        self.bus.subscribe(ACK_LS_SETPOINT, self._on_ack)
+        self.bus.subscribe(ACK_LS_RANGE, self._on_ack)
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)
         self.bus.subscribe(f"{TOPIC_ALARM}/#", self._on_alarm)

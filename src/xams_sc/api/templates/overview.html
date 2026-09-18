@@ -55,7 +55,7 @@
   </div>
 
   <div class="card">
-    <h2>UPS</h2>
+    <h2>UPS &amp; dashboards</h2>
     <table>
       {% for c in ups %}
       <tr>
@@ -68,37 +68,103 @@
         </td>
       </tr>
       {% endfor %}
+      {# Dashboard drift rides along here rather than taking a card of its own:
+         it is a one-line housekeeping fact, and a whole panel overstated it. #}
+      <tr>
+        <td>Grafana dashboards</td>
+        <td class="num">
+          {% if drift.state == 'ok' %}
+            <span class="dot good"></span><span class="good">saved to git</span>
+          {% elif drift.state == 'drift' %}
+            <span class="dot bad"></span><span class="bad">not saved to git</span>
+          {% else %}
+            <span class="dot off"></span><span class="dim">unknown</span>
+          {% endif %}
+        </td>
+      </tr>
     </table>
     <div class="note">
       A power event is one of the few things that can end a run, which is why
       the smallest service in the system earns its place (§7.4).
+      {% if drift.state == 'drift' %}
+        <br><span class="bad">{{ drift.detail }}</span> — a dashboard that
+        exists only in Grafana is lost with Grafana:
+        <code>save_dashboard.py --save</code>
+      {% endif %}
     </div>
   </div>
 
   <div class="card">
-    <h2>Dashboards</h2>
-    <div class="body">
-      {% if drift.state == 'ok' %}
-        <span class="good">saved to git</span>
-        <div class="dim" style="margin-top:.35rem">{{ drift.detail }}</div>
-      {% elif drift.state == 'drift' %}
-        <span class="bad">not saved to git</span>
-        <div class="dim" style="margin-top:.35rem">
-          {{ drift.detail }}<br>
-          A dashboard that exists only in Grafana is lost when Grafana's
-          database is.
-        </div>
-      {% else %}
-        <span class="dim">unknown</span>
-        <div class="dim" style="margin-top:.35rem">{{ drift.detail }}</div>
-      {% endif %}
+    <h2>Lake Shore 335 — temperature control</h2>
+    <table>
+      {% for c in lakeshore.sensors %}
+      <tr>
+        <td>{{ c.name if c else '—' }}
+            <span class="dim">{{ ('— ' + c.description) if c and c.description }}</span></td>
+        <td class="num {{ 'dim' if not (c and c.healthy) }}">
+          {{ c.formatted() if c else '—' }} <span class="unit">°C</span></td>
+      </tr>
+      {% endfor %}
+      {% for o in lakeshore.outputs %}
+      <tr>
+        <td>output {{ o.n }} <span class="dim">— setpoint / heater</span></td>
+        <td class="num">
+          <span class="{{ '' if o.setpoint and o.setpoint.healthy else 'dim' }}">
+            {{ o.setpoint.formatted() if o.setpoint else '—' }}</span>
+          <span class="unit">°C</span>
+          <span class="dim"> · </span>
+          <span class="{{ '' if o.percent and o.percent.healthy else 'dim' }}">
+            {{ o.percent.formatted() if o.percent else '—' }}</span>
+          <span class="unit">%</span>
+          <span class="dim">({{ o.watts.formatted() if o.watts else '—' }} W)</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    {% if ls_ok %}<div class="flash good" style="margin:.9rem">{{ ls_ok }}</div>{% endif %}
+    {% if ls_error %}<div class="flash bad" style="margin:.9rem">
+      <strong>Refused — nothing was changed.</strong> {{ ls_error }}</div>{% endif %}
+
+    <div class="body" style="border-top:1px solid var(--line)">
+      {# The control path (§10). Output 1 only: output 2 is not used on this
+         cryostat, so it is shown above and is not writable. #}
+      <form method="post" action="/lakeshore/setpoint" class="reset-form"
+            onsubmit="return confirm('Change the Lake Shore setpoint on output 1 to ' + this.value.value + ' °C?');">
+        <label class="dim" style="align-self:center;min-width:4.2rem">setpoint</label>
+        <input type="text" name="value" inputmode="decimal"
+               placeholder="°C" aria-label="new setpoint in Celsius"
+               style="max-width:6rem">
+        <input type="text" name="by" maxlength="40" placeholder="your name"
+               aria-label="who is making this change">
+        <button type="submit">Set</button>
+      </form>
+
+      <form method="post" action="/lakeshore/range" class="reset-form"
+            onsubmit="return confirm('Switch the Lake Shore heater ' + this.range.value + ' on output 1?');">
+        <label class="dim" style="align-self:center;min-width:4.2rem">heater</label>
+        <select name="range" aria-label="heater range" style="max-width:6rem">
+          <option value="high">high</option>
+          <option value="off">off</option>
+        </select>
+        <input type="text" name="by" maxlength="40" placeholder="your name"
+               aria-label="who is making this change">
+        <button type="submit">Apply</button>
+      </form>
     </div>
-    {% if drift.state == 'drift' %}
+
     <div class="note">
-      Pull the edits into git, then commit (§12):<br>
-      <code>tools\save_dashboard.py --save --password &lt;pw&gt;</code>
+      The loop runs in the instrument; the setpoint and the heater range are
+      the only things written, and the permitted setpoint range lives in
+      <code>channels.yaml</code> (§8.1). Every write is read back from the
+      instrument before it is called successful, and every write — and every
+      refusal — is recorded in <code>audit</code> (§10).
+      <br><br>
+      Sensors and outputs are listed separately because which input drives
+      which output is set on the front panel and is not read here — pairing
+      them would be a guess. <strong>Output 2 is not used</strong> on this
+      cryostat and is not writable.
     </div>
-    {% endif %}
   </div>
 
   <div class="card">

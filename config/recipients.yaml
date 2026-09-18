@@ -15,3 +15,11 @@ recipients:
     email: a.p.colijn@nikhef.nl
     phone: "+31646812133"             
     enabled: true
+  - name: Ardjan Westveer
+    email: a.westveer@nikhef.nl
+    phone: ""
+    enabled: true
+  - name: Ronald van Beek
+    email: r.j.j.vabeek@student.hhs.nl
+    phone: ""
+    enabled: true
