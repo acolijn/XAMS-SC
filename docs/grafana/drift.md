@@ -18,7 +18,17 @@ and when they have diverged:
 ```
   grafana   NOT SAVED TO GIT — XAMS Overview (differs)
             a dashboard only in Grafana is lost with Grafana:
-            tools\save_dashboard.py --save
+            .\.venv\Scripts\python.exe tools\save_dashboard.py --save
+```
+
+`--save` writes a file and stops there. Until that file is committed the
+dashboard is still on one disk, so the export alone does not answer the
+question in the title — and the check says so:
+
+```
+  grafana   NOT SAVED TO GIT — XAMS Heaters (uncommitted)
+            exported but NOT COMMITTED — on this disk only:
+            git add grafana\dashboards-archive && git commit
 ```
 
 ---
@@ -30,14 +40,26 @@ Every dashboard Grafana holds whose uid or title mentions XAMS, against every
 the file**, not on the filename, because that is what `save_dashboard.py`
 matches on.
 
-Four per-dashboard verdicts:
+…and each of those files against git, by asking
+`git status --porcelain` about the archive directory.
+
+Five per-dashboard verdicts:
 
 | | meaning |
 |---|---|
-| `ok` | live and file agree |
+| `ok` | live and file agree, and git has that file's contents |
 | `differs` | both exist, contents disagree — **run `--save`** |
-| `unsaved` | in Grafana, not in the archive — a new dashboard nobody has committed |
+| `unsaved` | in Grafana, not in the archive — a new dashboard nobody has exported |
 | `missing` | in the archive, not in Grafana — deleted in the UI, or a fresh install that needs `--load` |
+| `uncommitted` | file matches Grafana but git does not have it — **commit it**; `--save` has nothing left to do |
+
+**Staged counts as uncommitted.** `git add` is not a backup either: until there
+is a commit the dashboard exists on this machine and nowhere else, which is the
+whole thing §12 is about.
+
+**A working tree git cannot be asked about is not drift.** No checkout, no git
+installed, a deployment from a tarball: the file-versus-Grafana comparison still
+runs and the git question is skipped, rather than reported as a fault.
 
 **A version bump alone is not drift.** Grafana keeps `id`, `version` and
 `iteration` about its stored copy rather than about the dashboard, and they
@@ -51,8 +73,8 @@ change does.
 
 | state | |
 |---|---|
-| `ok` | every dashboard matches its file |
-| `drift` | at least one differs, or exists on only one side |
+| `ok` | every dashboard matches its file, and git has every one of those files |
+| `drift` | at least one differs, exists on only one side, or was exported but never committed |
 | `unknown` | Grafana could not be reached, the token is missing, revoked or rejected, or no XAMS dashboard was found anywhere |
 
 **Grafana being stopped, uninstalled or unreachable reports `unknown` — never
