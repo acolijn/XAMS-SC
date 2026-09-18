@@ -15,7 +15,7 @@ the next before the current one passes.
 | 5 | Lake Shore + CAEN monitoring | **done** |
 | 6 | UPS, alarms, flow integrator | **done** — email delivery finally works (18 Sep) |
 | 7 | Web UI and P&ID mimic | **mostly done** — no `/recipients` page, no Python client |
-| 8 | Control path | **in progress** — Lake Shore done; HV designed (§10a), stage 1 of 4 built |
+| 8 | Control path | **in progress** — Lake Shore and HV both writable from the UI and the CLI; the shared staged plan of §10a is not built |
 | 9 | Procedures | not started |
 | 10 | Production | **partly** — running as services, auto-start, nightly backup |
 
@@ -27,20 +27,31 @@ is called successful**, acknowledged on the bus and recorded in `audit` —
 including the writes that were refused. Output 2 is read but not writable: it
 is not used on this cryostat.
 
-**HV: designed in §10a, one stage of four built.**
+**HV: operable, 18 September 2026.** Setpoints and energising, from `/hv` or
+from `xams-ctl hv-set`, `hv-standby`, `hv-on` and `hv-off`.
 
 | Stage | | State |
 |---|---|---|
 | 1 | Read `VSET` into `hv_*_vset` channels | **done, 18 Sep** |
-| 2 | The write path | **done, 18 Sep** — the one-off zeroing is still to do |
-| 3 | The plan (staged setpoints, applied as one action) | not started |
-| 4 | The UI for it | not started |
+| 2 | The write path (`VSET`, and `ON`/`OFF`) | **done, 18 Sep** |
+| 3 | The plan (staged setpoints, applied as one action) | **partly** — staged in the page, not on the bus |
+| 4 | The UI for it | **done, 18 Sep** |
+
+**Stage 3 is the one that is not what §10a asks for.** The plan is held in the
+boxes on `/hv`: *Load defaults* fills them from `channels.yaml` and writes
+nothing, *Apply setpoints* writes every filled box as one action, and energising
+is a separate button per channel. So the plan-then-apply order is real, and so
+are the refusals. What is missing is the plan being **server-side and retained
+on the bus**: a second browser sees nothing pending, and a reload throws away
+what was typed. It matters when two people operate the supplies; it has not yet,
+and rebuilding it is the remaining work on this milestone.
 
 **The write path (stage 2) is built and verified against the real supplies.**
-`xams-ctl hv-set` and `xams-ctl hv-standby`. It writes `VSET` and nothing else:
-no command exists that can change `MAXV`, `RUP`, `RDW`, `TRIP` or `ISET`, or
-that can enable or disable a channel. Each of these was refused by the live
-boards on 18 September 2026, with nothing written:
+It writes exactly three things — `VSET`, `ON` and `OFF` — and nothing else: no
+command exists that can change `MAXV`, `RUP`, `RDW`, `TRIP` or `ISET`, that can
+enable or disable a channel, or that can take a board out of `LOCAL`. Every
+write is read back from the board before it is called successful. Each of these
+was refused by the live boards on 18 September 2026, with nothing written:
 
 | asked for | refused because |
 |---|---|
@@ -61,20 +72,19 @@ front-panel only, so there are **two** hand gates before software can put
 volts anywhere — the board in `REMOTE`, and the channel enabled — and neither
 is reachable from code.
 
-Stage 1 was worth doing on its own, because it made a live hazard visible.
-Every channel is `DISABLED`, and the setpoints sitting in the boards are:
+**Stage 1 was worth doing on its own, because it made a live hazard visible.**
+Reading `VSET` for the first time showed every channel `DISABLED` with these
+setpoints sitting in the boards:
 
 | | pmt_bot | pmt_top | ts | bs | cathode | gate | anode | nai |
 |---|---|---|---|---|---|---|---|---|
 | `VSET` | −700 | 0 | −500 | −600 | −2250 | −1750 | **+4200** | +600 |
 
 The enable switch is a hand operation and the board ramps to `VSET` the instant
-it is flipped, so **seven of the eight channels would go straight to those
-voltages if somebody touched the switch today.** `/hv` now marks them in red
-and says so at the top of each supply.
-
-Zeroing them is stage 2, because doing it needs a write path — and building
-that write path carefully is the point of §10a.
+it is flipped, so **seven of the eight channels would have gone straight to
+those voltages if somebody had touched the switch that morning** — the anode to
+4.2 kV. They have since been zeroed, `/hv` marks any recurrence in red, and the
+write path exists largely to make that state impossible to reach again.
 
 ### Also done since the milestone table was last accurate
 

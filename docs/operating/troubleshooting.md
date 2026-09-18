@@ -325,6 +325,53 @@ Check in this order:
 3. Has a board been replaced? A new board has a new serial, and
    `devices.yaml` must be edited deliberately — that is the point.
 
+### A setpoint is refused: "the supply is in LOCAL mode"
+
+The board's `BDCTR` is `LOCAL`, in which the front panel has control and every
+remote `SET` is refused with `LOC:ERR` — **while `MON` keeps answering
+perfectly.** That asymmetry is why a board in `LOCAL` looks exactly like a
+working one until somebody tries to write, and the whole reason the refusal
+names the mode instead of saying the command was not accepted.
+
+Put the board in `REMOTE` at its front panel. Nothing in this software can
+change it, by design: it is one of the two hand gates between code and an
+electrode (§10a). The mode is read at startup and logged.
+
+### A setpoint is refused: "its setpoint must stay at 0"
+
+The channel's enable switch is off, and §10a's invariant says a disabled channel
+holds `VSET` 0 — because the board ramps to `VSET` the instant the switch is
+flipped. Flip the enable at the front panel first; the channel comes up at zero
+volts and stays there until it is energised. Then set the voltage.
+
+Writing **zero** to a disabled channel is always allowed. That is how the
+invariant is re-established on a channel whose stored setpoint is wrong:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-standby --by <you>
+```
+
+### A setpoint is refused: outside the permitted range
+
+The range in `channels.yaml` carries the polarity, so the wrong sign is refused
+as firmly as the wrong magnitude — −500 V on the anode fails against its
+`0..4500`, −3000 V on the cathode against its `−2500..0`. A channel with no
+range refuses everything, which is intended: a range nobody wrote down is not
+permission to put volts on an electrode.
+
+A value the board itself refuses fails at the read-back instead, reported as
+*the write did not take*. Above the board's own `MAXV`, that is the protection
+working — and `MAXV` is not something this software can change.
+
+### A channel says ON after being turned off
+
+It is ramping down at the board's own `RDW`, and bit 0 of `STAT` stays set until
+it actually reaches zero. The acknowledgement says *ramping down at the board's
+own rate*. **Do not re-send the command**; watch `VMON` fall.
+
+Turning on is verified immediately, because the bit is set as soon as the board
+accepts it — even though the channel then spends a minute ramping up.
+
 ### Lake Shore serial settings
 
 **57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is the 335's factory

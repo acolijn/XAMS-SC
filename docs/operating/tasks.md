@@ -123,98 +123,23 @@ the database after you delete it. Clearing the broker is the only fix.
 
 ## Saving a Grafana dashboard
 
-### Editing a dashboard, the right way round
-
-**Grafana owns the dashboard. `grafana/dashboards-archive/` is the copy git
-tracks.** Edit in one place — the Grafana UI — and copy it to the other. The
-loop:
+After **every** editing session in the Grafana UI:
 
 ```powershell
-# 1. edit in the Grafana UI, and save there as normal
-# 2. pull it into git  (no password needed: it uses the read-only token)
 .\.venv\Scripts\python.exe tools\save_dashboard.py --save
-# 3. commit
 git add grafana/dashboards-archive
 git commit -m "grafana: <what changed>"
 ```
 
-!!! warning "Run it with the venv Python, not as `.	ools\save_dashboard.py`"
-    Windows maps `.py` to the `py` launcher, which uses a different
-    interpreter and sends the script's errors to stderr, where PowerShell's
-    file-association path discards them. **A failed run then looks exactly
-    like a successful one** — on 18 September 2026 that made a save appear to
-    work, the commit afterwards find nothing to commit, and the drift warning
-    stay up with nothing to explain it.
+**Grafana owns the live dashboard; `grafana/dashboards-archive/` is the copy git
+tracks, and a dashboard that exists only in Grafana is lost when Grafana's
+database is.** Nothing runs the save for you, so the system watches for it and
+says so on `xams-ctl status` and the Overview page.
 
-Step 2 is the one that matters: **a dashboard that exists only in Grafana's
-own database is lost when that database is.** Nothing runs it for you.
-
-| command | direction | when |
-|---|---|---|
-| `--save` *(the default)* | Grafana → git | after **every** editing session |
-| `--check` | compare only | before `--load`, before a reinstall, before a `git pull` |
-| `--load` | git → Grafana | **only** to restore: fresh install, or Grafana's database lost |
-
-**Never edit a file in `dashboards-archive/` by hand.** That is how both
-copies end up changed at once, and `--load` then silently reverts whatever was
-done in the UI. This happened on 17 September 2026: a panel setting was edited
-into the archive file while the panel layout had been rearranged in the UI, and
-`--load` would have thrown the layout away. If a change is easier to express as
-JSON than by clicking, run `--save` first, apply it to the file, and `--load`
-it straight back — so the two are only ever out of step for a moment.
-
-Dashboards are deliberately **not** provisioned from a file, which is why the
-UI can save them at all. Provisioning refuses every UI save with *"cannot be
-saved from the Grafana UI because it has been provisioned from another
-source"*, and the setting that permits it is only read when the service starts.
-
-### Noticing drift before it costs you
-
-Forgetting step 2 is silent, so the system says so instead. Both
-`xams-ctl status` and the web UI overview show it:
-
-```
-  grafana   dashboards saved to git (1)
-```
-
-and when they have diverged:
-
-```
-  grafana   NOT SAVED TO GIT — XAMS Overview (differs)
-            a dashboard only in Grafana is lost with Grafana:
-            tools\save_dashboard.py --save
-```
-
-This reads Grafana through a **read-only service account** (`xams-drift-check`,
-role Viewer), whose token lives in `config/secrets.yaml` — which is gitignored.
-It can look at dashboards and nothing else: it cannot edit a panel, delete
-anything or touch a datasource.
-
-**`--save` and `--check` use that same token**, so neither needs a password:
-both only read from Grafana and write to disk. **`--load` still requires the
-admin password**, because it is the one that writes back into Grafana. The
-asymmetry is deliberate — the operation you run after every edit should have
-no friction, and the one that can overwrite a live dashboard should.
-
-If Grafana is stopped, uninstalled or unreachable the check reports
-**unknown**, never "fine" and never "drift". A check that cries wolf about its
-own plumbing trains people to ignore it, and one that reports green because it
-could not reach anything is worse still.
-
-To re-issue the token — after rotating the admin password, say:
-
-```powershell
-# In Grafana: Administration > Users and access > Service accounts
-#   xams-drift-check > Add service account token
-# then put it in config/secrets.yaml under:
-#   grafana:
-#     url: http://127.0.0.1:3000
-#     token: <the new token>
-```
-
-Deleting the `grafana:` section turns the check off; it then reports nothing
-rather than complaining, on the grounds that a check nobody configured is not
-a fault.
+The full round trip, which direction wins, the venv-Python trap that makes a
+failed save look successful, and how to add a channel to a graph in the first
+place: [Editing dashboards](../grafana/dashboards.md). What the warning means:
+[Drift](../grafana/drift.md).
 
 ---
 

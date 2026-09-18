@@ -187,11 +187,19 @@ LabVIEW out (§12).
 
 <http://127.0.0.1:3000>, `admin` / `admin`, and change the password when asked.
 
-The **XAMS** datasource and the **XAMS Overview** dashboard are provisioned
-from this repository. Dashboards live in `grafana/dashboards/*.json`, in git,
-and the file is authoritative: edit a dashboard in the UI to get it right, then
-export the JSON and commit it. A dashboard that exists only in Grafana's own
-database is lost when that database is.
+The **XAMS** datasource is provisioned from this repository. **Dashboards are
+not** — provisioning refuses every UI save, so Grafana owns the live dashboard
+and `grafana/dashboards-archive/` is the copy git tracks. On a fresh install,
+load them:
+
+```powershell
+.\.venv\Scripts\python.exe tools\save_dashboard.py --load --password <admin pw>
+```
+
+Afterwards the direction reverses: edit in the UI, then
+`tools\save_dashboard.py --save` and commit. A dashboard that exists only in
+Grafana's own database is lost when that database is — see
+[Grafana](grafana/index.md).
 
 ## 5. Windows services
 

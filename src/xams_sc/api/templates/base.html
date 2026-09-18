@@ -211,8 +211,10 @@ every command you send">set</button>
 </nav>
 <main>{% block content %}{% endblock %}</main>
 <footer>
-  Read-only. No setpoint can be written from this interface — the control
-  surface is milestone 8 (DESIGN.md §10). Bound to 127.0.0.1 only.
+  Writes the Lake Shore heater and the CAEN setpoints, each validated, read
+  back and audited (DESIGN.md §10, §10a). It cannot enable a channel, switch a
+  board out of LOCAL, or change a board's protection settings — those are hand
+  operations at the instrument. Bound to 127.0.0.1 only.
 </footer>
 </body>
 </html>

@@ -242,7 +242,8 @@ function clearBoxes() {
     that is what keeps this software out of the protection path (§10).</p>
 
     <p><strong>VSET is what the channel was told to hold; VMON is what it is
-    doing.</strong> Both are read, neither is written from here.</p>
+    doing.</strong> VSET is written from the boxes above, read back from the
+    board and audited; VMON is only ever read.</p>
 
     <p><strong>A VSET in red is a disabled channel whose setpoint is not
     zero.</strong> The enable switch is a hand operation and the board ramps to
@@ -251,10 +252,11 @@ function clearBoxes() {
     "a disabled channel has VSET 0" into an invariant precisely so that the
     switch becomes safe to flip; until the setpoints are zeroed it is not.</p>
 
-    <p><strong>Nothing here can set a voltage yet.</strong> §10's open decision
-    was resolved on 18 September 2026, so the control path is no longer
-    blocked - but the HV part of it is designed (§10a) and not built. The
-    supplies are still operated from their own front panels.</p>
+    <p><strong>What this page cannot do, by design.</strong> It cannot flip a
+    channel's enable switch, and it cannot take a board out of LOCAL - both are
+    hand operations at the supply, and they are the two gates between this
+    software and an electrode (§10a). It cannot change MAXV, RUP, RDW, TRIP or
+    ISET. And it never acts on its own: a restart writes nothing.</p>
 
     <p>The two units are told apart by asking each board for its own serial
     number over the wire, never by COM port. Swapping the USB cables is
