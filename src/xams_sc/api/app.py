@@ -41,7 +41,8 @@ from fastapi.templating import Jinja2Templates
 from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_LS_RANGE,
                    TOPIC_LS_SETPOINT, Bus)
 from ..config import load
-from ..hv_status import describe_status, is_enabled, status_faults
+from ..hv_status import (describe_status, is_disabled, is_enabled,
+                         status_faults)
 from ..grafana import DriftWatcher
 from .state import SystemState
 
@@ -326,6 +327,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 imon_name = ch.name.replace("_vmon", "_imon")
                 expect = (spec.get("expect") or {}).get(index, {})
                 stat_view = state.channel(ch.name.replace("_vmon", "_stat"))
+                vset_view = state.channel(ch.name.replace("_vmon", "_vset"))
 
                 # The board's own STAT word decides on/off, NEVER whether
                 # VMON is above zero: a channel can be enabled and sitting at
@@ -336,14 +338,43 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                         and stat_view.value is not None):
                     word = int(stat_view.value)
 
+                # THE SECTION 10a INVARIANT: a channel that is not enabled
+                # must have VSET 0, because the enable is a hand operation and
+                # the board ramps to whatever VSET holds the moment it is
+                # flipped. Where that is not true, flipping the switch is a
+                # step into an unannounced voltage - so the page says so
+                # rather than leaving it to be discovered at the supply.
+                armed = None
+                if (vset_view is not None and vset_view.healthy
+                        and vset_view.value is not None):
+                    enabled = (word is not None and is_enabled(word))
+                    armed = (not enabled) and abs(vset_view.value) > 1.0
+
+                # FOUR STATES, and the distinction between the middle two
+                # is the whole of section 10a:
+                #
+                #   bit 10 set              the front-panel switch is off
+                #   neither bit            switch on, output NOT energised
+                #   bit 0 set, VMON ~ 0    energised, sitting at zero volts
+                #   bit 0 set, VMON != 0   energised with volts out
+                #
+                # `enabled` used to mean bit 0, on the mistaken belief that
+                # bit 0 was the enable. It is not: bit 0 is the OUTPUT. A
+                # channel whose switch had been flipped on but which had not
+                # been energised therefore matched nothing and displayed as
+                # "off" - which is what it looked like on 18 September 2026
+                # after the nai channel was re-enabled by hand.
                 channels.append({
                     "index": index,
                     "label": ch.name.replace("hv_", "").replace("_vmon", ""),
                     "description": ch.description,
                     "vmon": state.channel(ch.name),
                     "imon": state.channel(imon_name),
+                    "vset": vset_view,
+                    "armed": armed,
                     "stat": stat_view,
-                    "enabled": None if word is None else is_enabled(word),
+                    "energised": None if word is None else is_enabled(word),
+                    "switched_off": None if word is None else is_disabled(word),
                     "faults": [] if word is None else status_faults(word),
                     "flags": "" if word is None else describe_status(word),
                     "expect": expect,
@@ -351,6 +382,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     "sign": ch.sign,
                 })
             supplies.append({
+                "armed": [c for c in channels if c.get("armed")],
                 "id": spec["id"], "serial": spec.get("board_serial"),
                 "model": spec.get("board_name"),
                 "firmware": spec.get("firmware"),

@@ -520,6 +520,174 @@ def cmd_flow_reset(args) -> int:
     return 0
 
 
+def _hv_write(args, targets) -> int:
+    """Send VSET commands and report each acknowledgement. See DESIGN.md 10a.
+
+    `targets` is a list of (channel, signed value). Sent one at a time and
+    waited for individually: a batch that reported "3 of 4 succeeded" without
+    saying which would be worse than useless on a rack of electrodes.
+    """
+    from ..bus import ACK_HV_VSET, TOPIC_HV_VSET, Bus
+
+    who = args.by or os.environ.get("USERNAME") or "unknown"
+    acks = []
+
+    bus = Bus(client_id="xams-ctl-hv", host=args.broker, port=args.port)
+    bus.subscribe(ACK_HV_VSET, lambda t, p: acks.append(json.loads(p)))
+    bus.connect()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not bus.connected:
+        time.sleep(0.1)
+    if not bus.connected:
+        print("broker not reachable; nothing was sent")
+        bus.disconnect()
+        return 1
+    time.sleep(0.3)
+
+    failures = 0
+    for channel, value in targets:
+        before = len(acks)
+        bus.publish_raw(TOPIC_HV_VSET, json.dumps(
+            {"channel": channel, "value": value, "by": who}))
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and len(acks) == before:
+            time.sleep(0.2)
+
+        if len(acks) == before:
+            print(f"  {channel:22s} NO ANSWER - is the caen service running?")
+            failures += 1
+            continue
+        ack = acks[-1]
+        if ack.get("ok"):
+            old = ack.get("old")
+            print(f"  {channel:22s} {old:+.1f} -> {ack['new']:+.1f} V"
+                  if isinstance(old, (int, float))
+                  else f"  {channel:22s} now {ack['new']:+.1f} V")
+        else:
+            print(f"  {channel:22s} REFUSED: {ack.get('reason')}")
+            failures += 1
+
+    bus.disconnect()
+    if failures:
+        print()
+        print(f"{failures} of {len(targets)} refused or unanswered. "
+              f"Nothing partial was left behind: each write is verified "
+              f"against the board before it is called successful.")
+    return 1 if failures else 0
+
+
+def cmd_hv_set(args) -> int:
+    """Set one HV channel's setpoint (10a).
+
+    Refused unless the channel is enabled at the supply, unless the value is
+    inside the range in channels.yaml, and unless the polarity matches the
+    electrode. The service does that checking, not this command: a command
+    that validated locally would be a second copy of the rules, and the copy
+    that matters is the one next to the hardware.
+    """
+    return _hv_write(args, [(args.channel, args.value)])
+
+
+def cmd_hv_standby(args) -> int:
+    """Set HV setpoints to zero - the way down, and the way to make the
+    enable switch safe to touch (10a).
+
+    With no channel named, every hv_vset channel is zeroed. This is the
+    operation that establishes the invariant on a system where the stored
+    setpoints are whatever somebody last left in the boards.
+    """
+    config = load()
+    names = [args.channel] if args.channel else sorted(
+        c.name for c in config.enabled_channels() if c.kind == "hv_vset")
+    if not names:
+        print("no hv_vset channels are configured")
+        return 1
+
+    print(f"Setting {len(names)} setpoint(s) to zero.")
+    print("This does NOT switch anything off: a channel that is on will ramp")
+    print("down at the board's own RDW rate, and the enable switch is")
+    print("untouched either way.")
+    print()
+    return _hv_write(args, [(name, 0.0) for name in names])
+
+
+def _hv_output(args, on: bool) -> int:
+    """Energise or de-energise HV channels. See DESIGN.md 10a.
+
+    This is NOT the enable switch. A channel has to be enabled by hand at the
+    supply first; this energises one that already is.
+    """
+    from ..bus import ACK_HV_OUTPUT, TOPIC_HV_OUTPUT, Bus
+
+    config = load()
+    names = [args.channel] if args.channel else sorted(
+        c.name for c in config.enabled_channels() if c.kind == "hv_vset")
+    if not names:
+        print("no hv_vset channels are configured")
+        return 1
+
+    who = args.by or os.environ.get("USERNAME") or "unknown"
+    acks = []
+
+    bus = Bus(client_id="xams-ctl-hv-output", host=args.broker, port=args.port)
+    bus.subscribe(ACK_HV_OUTPUT, lambda t, p: acks.append(json.loads(p)))
+    bus.connect()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not bus.connected:
+        time.sleep(0.1)
+    if not bus.connected:
+        print("broker not reachable; nothing was sent")
+        bus.disconnect()
+        return 1
+    time.sleep(0.3)
+
+    failures = 0
+    for name in names:
+        before = len(acks)
+        bus.publish_raw(TOPIC_HV_OUTPUT, json.dumps(
+            {"channel": name, "on": on, "by": who}))
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and len(acks) == before:
+            time.sleep(0.2)
+
+        if len(acks) == before:
+            print(f"  {name:22s} NO ANSWER - is the caen service running?")
+            failures += 1
+            continue
+        ack = acks[-1]
+        if ack.get("ok"):
+            state = "ON" if ack.get("on") else "off"
+            detail = ack.get("detail") or ""
+            print(f"  {name:22s} {state}" + (f"  ({detail})" if detail else ""))
+        else:
+            print(f"  {name:22s} REFUSED: {ack.get('reason')}")
+            failures += 1
+
+    bus.disconnect()
+    if failures:
+        print()
+        print(f"{failures} of {len(names)} refused or unanswered.")
+    return 1 if failures else 0
+
+
+def cmd_hv_on(args) -> int:
+    """Energise HV channels (10a step 4).
+
+    A channel ramps to whatever VSET holds, so the acknowledgement says which
+    voltage that is. With the setpoints at zero - the resting state 10a's
+    invariant guarantees - this energises at zero and moves nothing, which is
+    a perfectly reasonable thing to do first.
+    """
+    return _hv_output(args, True)
+
+
+def cmd_hv_off(args) -> int:
+    """De-energise HV channels. The channel ramps down at the board's own RDW
+    rate, so it does not reach zero instantly and its status keeps reporting
+    ON until it does."""
+    return _hv_output(args, False)
+
+
 def cmd_check(args) -> int:
     """Validate the configuration and print what it defines. No side effects."""
     try:
@@ -580,6 +748,34 @@ def main(argv=None) -> int:
     flow = sub.add_parser("flow-reset",
                           help="close the flow-integrator period and open a new one")
     flow.add_argument("--by", help="who is doing this (recorded in the audit log)")
+
+    hv_set = sub.add_parser(
+        "hv-set", help="set one HV channel's setpoint (DESIGN.md 10a)")
+    hv_set.add_argument("channel", help="e.g. hv_cathode_vset")
+    hv_set.add_argument("value", type=float, help="signed volts, e.g. -2250")
+    hv_set.add_argument("--by", help="who is doing this (recorded in audit)")
+    hv_set.set_defaults(func=cmd_hv_set)
+
+    hv_standby = sub.add_parser(
+        "hv-standby",
+        help="set HV setpoints to zero (all of them, unless one is named)")
+    hv_standby.add_argument("channel", nargs="?",
+                            help="one channel; default is every hv_vset channel")
+    hv_standby.add_argument("--by", help="who is doing this (recorded in audit)")
+    hv_standby.set_defaults(func=cmd_hv_standby)
+
+    hv_on = sub.add_parser(
+        "hv-on", help="energise HV channels (they must be enabled by hand first)")
+    hv_on.add_argument("channel", nargs="?",
+                       help="one channel; default is every hv_vset channel")
+    hv_on.add_argument("--by", help="who is doing this (recorded in audit)")
+    hv_on.set_defaults(func=cmd_hv_on)
+
+    hv_off = sub.add_parser("hv-off", help="de-energise HV channels")
+    hv_off.add_argument("channel", nargs="?",
+                        help="one channel; default is every hv_vset channel")
+    hv_off.add_argument("--by", help="who is doing this (recorded in audit)")
+    hv_off.set_defaults(func=cmd_hv_off)
     flow.set_defaults(func=cmd_flow_reset)
 
     args = p.parse_args(argv)

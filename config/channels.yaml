@@ -259,6 +259,46 @@ channels:
      description: "external NaI detector status word"}
 
   # ------------------------------------------------------------------
+  # CAEN SETPOINTS (section 10a)
+  #
+  # What each channel has been TOLD to hold, as against VMON which is what it
+  # is doing. Read with the ordinary monitor command; nothing writes these.
+  #
+  # WHY THIS IS WORTH A CHANNEL EACH. Switching a channel on is a hand
+  # operation at the supply, and the board then ramps straight to whatever
+  # VSET happens to be stored in it - a number set by somebody, at some point,
+  # that until now was invisible from the lab. On 18 September 2026 every
+  # channel was DISABLED and the stored setpoints were 700, 0, 500, 600, 2250,
+  # 1750, 4200 and 600 V. Flipping the anode enable would have gone to 4.2 kV.
+  #
+  # Section 10a turns that into an invariant - a channel that is not enabled
+  # has VSET 0 - and an invariant that cannot be observed is a wish. These
+  # channels are what make it observable.
+  #
+  # STORED SIGNED, like VMON (section 7.2). The supplies report an unsigned
+  # magnitude with POL separate, so the cathode's 2250 is written here as
+  # -2250. `limits` is the signed software write range, present now so that
+  # the write path of stage 2 has it: a channel with no limits refuses every
+  # write, which is the intended default.
+  # ------------------------------------------------------------------
+  - {name: hv_pmt_bot_vset, device: hv_1, phys: 0, kind: hv_vset, unit: V, sign: -1,
+     limits: {min: -1100.0, max: 0.0}, description: "PMT bottom setpoint"}
+  - {name: hv_pmt_top_vset, device: hv_1, phys: 1, kind: hv_vset, unit: V, sign: -1,
+     limits: {min: -1100.0, max: 0.0}, description: "PMT top setpoint"}
+  - {name: hv_ts_vset, device: hv_1, phys: 2, kind: hv_vset, unit: V, sign: -1,
+     limits: {min: -1710.0, max: 0.0}, description: "top screen setpoint"}
+  - {name: hv_bs_vset, device: hv_1, phys: 3, kind: hv_vset, unit: V, sign: -1,
+     limits: {min: -2000.0, max: 0.0}, description: "bottom screen setpoint"}
+  - {name: hv_cathode_vset, device: hv_2, phys: 0, kind: hv_vset, unit: V, sign: -1,
+     limits: {min: -2500.0, max: 0.0}, description: "TPC cathode setpoint"}
+  - {name: hv_gate_vset, device: hv_2, phys: 1, kind: hv_vset, unit: V, sign: -1,
+     limits: {min: -3750.0, max: 0.0}, description: "TPC gate setpoint"}
+  - {name: hv_anode_vset, device: hv_2, phys: 2, kind: hv_vset, unit: V, sign: 1,
+     limits: {min: 0.0, max: 4500.0}, description: "TPC anode setpoint"}
+  - {name: hv_nai_vset, device: hv_2, phys: 3, kind: hv_vset, unit: V, sign: 1,
+     limits: {min: 0.0, max: 1000.0}, description: "external NaI detector setpoint"}
+
+  # ------------------------------------------------------------------
   # Lake Shore 335
   # ------------------------------------------------------------------
   # UNIT IS CELSIUS, not Kelvin. An earlier draft of this file said K; the

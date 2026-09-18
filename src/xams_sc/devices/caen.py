@@ -3,9 +3,28 @@
 Two units, both on USB, ASCII protocol over the virtual COM port. No vendor
 library.
 
-**READ-ONLY at milestone 5.** This service issues `CMD:MON` only. The control
-path is milestone 8, and only after §10's open decision is made. There is
-deliberately no code here that can write a setpoint.
+**This driver writes exactly three things: `VSET`, `ON` and `OFF`** (§10a).
+Everything else is read. There is deliberately no code here that can change
+`MAXV`, `RUP`, `RDW`, `TRIP` or `ISET` - protection stays configured on the
+instrument (§10 rule 2).
+
+**`ON` is not the enable switch, and the difference matters.** Three separate
+things decide whether there are volts on an electrode:
+
+  * the **enable switch** on the front panel clears the `DISABLED` bit. It is
+    a hand operation and no command here can change it.
+  * **`ON`/`OFF`** energises a channel that is already enabled. That is the
+    "turn on the HV" step, and it is this driver's business.
+  * **`VSET`** decides where it ramps to.
+
+Clearing `DISABLED` alone does nothing visible, which is exactly what was
+observed on 18 September 2026 when the `nai` enable was flipped and the
+channel sat at `STAT=0`: permitted, but not energised.
+
+A write is validated against `channels.yaml`, refused outright if it would put
+a non-zero setpoint on a channel that is not enabled (§10a), **read back from
+the board before it is called successful**, acknowledged on the bus and
+recorded in the audit trail.
 
 Both units answer at **board address 0**: they are two independent USB
 connections, not a daisy chain. They are told apart by which port their
@@ -20,14 +39,18 @@ stored signed (§7.2). This is almost certainly what the LabVIEW
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 import time
 
 import serial
 
+from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
+                   TOPIC_HV_VSET)
 from ..config import Config
-from ..model import Measurement, Quality, utcnow
-from ..scaling import apply_sign
+from ..model import Measurement, Quality, iso, utcnow
+from ..scaling import apply_sign, magnitude_for
 from ..service import BaseService
 from .serial_id import IdentityError, resolve
 
@@ -39,6 +62,11 @@ log = logging.getLogger(__name__)
 from ..hv_status import (  # noqa: F401
     BIT_DISABLED, BIT_ON, FAULT_BITS, STAT_BITS, describe_status, is_disabled,
     is_enabled, status_faults)
+
+# A setpoint that reads back further than this from what was asked means the
+# write did not take. 0.5 V is far below anything that matters on a kilovolt
+# electrode and well above the board's own rounding.
+VSET_TOLERANCE_V = 0.5
 
 
 def _decode(response: str) -> str | None:
@@ -69,6 +97,14 @@ class CaenChannelReader:
         self.board_name = board_name
         self.board_serial = board_serial
         self._serial: serial.Serial | None = None
+        # ONE CONVERSATION AT A TIME, for the same reason as the Lake Shore.
+        # A serial instrument matches a reply to a query only by arrival
+        # order, so the 1 Hz poll and a command arriving on the MQTT thread
+        # hand each other their answers - and the answers are plausible
+        # numbers, so nothing looks wrong. On the Lake Shore, on 18 September
+        # 2026, a setpoint read back as the heater percentage. Reentrant, so a
+        # command can hold it across write-then-read-back.
+        self._lock = threading.RLock()
 
     # ----------------------------------------------------------------- serial
 
@@ -85,34 +121,90 @@ class CaenChannelReader:
                 pass
             self._serial = None
 
-    def _command(self, par: str, channel: int | None = None) -> str | None:
-        """Send one CMD:MON and return its VAL, or None.
+    def _talk(self, cmd: str) -> str | None:
+        """Send one command, return the RAW reply, or None if it did not answer.
 
-        MON only. There is no SET path in this class, by design.
+        Shared by MON and SET: the framing, the lock and the retry are
+        identical, and two copies of them would drift.
         """
         if self._serial is None:
             return None
+        with self._lock:
+            try:
+                self._serial.reset_input_buffer()
+                self._serial.write((cmd + "\r\n").encode("ascii"))
+                time.sleep(0.05)
+                raw = self._serial.read_until(b"\r\n", 200).decode(
+                    "ascii", errors="replace")
+                if not raw.strip():
+                    # Some firmware answers slowly; one short retry.
+                    time.sleep(0.15)
+                    raw = self._serial.read(200).decode("ascii", errors="replace")
+            except Exception as exc:
+                log.debug("%s: %s raised %s", self.device_id, cmd, exc)
+                return None
+        return raw
+
+    def _command(self, par: str, channel: int | None = None) -> str | None:
+        """Read one parameter with CMD:MON, returning its VAL."""
         cmd = f"$BD:{self.address},CMD:MON,PAR:{par}"
         if channel is not None:
             cmd += f",CH:{channel}"
-        try:
-            self._serial.reset_input_buffer()
-            self._serial.write((cmd + "\r\n").encode("ascii"))
-            time.sleep(0.05)
-            raw = self._serial.read_until(b"\r\n", 200).decode("ascii", errors="replace")
-            if not raw.strip():
-                # Some firmware answers slowly; one short retry, then give up.
-                time.sleep(0.15)
-                raw = self._serial.read(200).decode("ascii", errors="replace")
-        except Exception as exc:
-            log.debug("%s: %s raised %s", self.device_id, cmd, exc)
-            return None
-        value = _decode(raw)
+        raw = self._talk(cmd)
+        value = _decode(raw) if raw is not None else None
         if value is None:
-            # Log the raw instrument response, not just the parsed failure —
-            # that is what makes protocol bugs findable (§12).
+            # The raw instrument response, not just the parsed failure - that
+            # is what makes protocol bugs findable (section 12).
             log.debug("%s: %s -> unparseable %r", self.device_id, cmd, raw)
         return value
+
+    def set_voltage(self, channel: int, magnitude: float) -> bool:
+        """Write VSET for one channel. THE ONLY WRITE IN THIS DRIVER.
+
+        `magnitude` is unsigned, as the supply expects. The caller converts
+        from the signed value with `scaling.magnitude_for`, which refuses the
+        wrong polarity rather than silently taking its absolute value.
+
+        Returns whether the board ACKNOWLEDGED the command - not whether it is
+        now holding that value. Only a read-back establishes that, and every
+        caller here does one. A value above the board's own MAXV is refused by
+        the instrument, which is the protection working as intended.
+
+        Note the reply shape: a successful SET answers `#BD:00,CMD:OK` with no
+        `VAL:` field, so `_decode` returns None for it. Success is therefore
+        the presence of CMD:OK, not the presence of a value - which is why
+        this does not go through `_command`.
+        """
+        if magnitude < 0:
+            raise ValueError("set_voltage takes an unsigned magnitude")
+        raw = self._talk(f"$BD:{self.address},CMD:SET,PAR:VSET,"
+                         f"CH:{channel},VAL:{magnitude:.1f}")
+        if raw is None:
+            log.warning("%s ch%d: no reply to SET VSET", self.device_id, channel)
+            return False, "the supply did not answer"
+
+        reply = raw.strip()
+        if reply.startswith("#BD:") and "CMD:OK" in reply:
+            return True, ""
+
+        log.warning("%s ch%d: the board refused SET VSET: %r",
+                    self.device_id, channel, reply)
+
+        # The board says WHY, and the reasons are not interchangeable.
+        # LOC:ERR means it is in LOCAL mode: the front panel has control and
+        # every remote SET is refused, while MON keeps working perfectly -
+        # which is why every reading looked fine and only writing failed.
+        if "LOC:ERR" in reply:
+            return False, ("the supply is in LOCAL mode, so it refuses every "
+                           "remote setpoint. Put the board in REMOTE at its "
+                           "front panel; nothing in this software can do it, "
+                           "by design")
+        if "CMD:ERR" in reply:
+            return False, "the supply rejected the command itself (%s)" % reply
+        if "VAL:ERR" in reply:
+            return False, ("the supply rejected the value, most likely above "
+                           "its own MAXV (%s)" % reply)
+        return False, "the supply refused it: %s" % reply
 
     # --------------------------------------------------------------- identity
 
@@ -135,6 +227,38 @@ class CaenChannelReader:
         except ValueError:
             log.debug("%s ch%d %s: non-numeric %r", self.device_id, channel, par, value)
             return None
+
+    def set_output(self, channel: int, on: bool) -> tuple[bool, str]:
+        """Energise or de-energise one channel. NOT the enable switch.
+
+        A channel whose `DISABLED` bit is set cannot be energised by this -
+        the enable is a hand operation, and the board refuses. The caller
+        checks first so the refusal names the remedy rather than the symptom.
+        """
+        par = "ON" if on else "OFF"
+        raw = self._talk(f"$BD:{self.address},CMD:SET,PAR:{par},CH:{channel}")
+        if raw is None:
+            return False, "the supply did not answer"
+        reply = raw.strip()
+        if reply.startswith("#BD:") and "CMD:OK" in reply:
+            return True, ""
+        log.warning("%s ch%d: the board refused %s: %r",
+                    self.device_id, channel, par, reply)
+        if "LOC:ERR" in reply:
+            return False, ("the supply is in LOCAL mode, so it refuses remote "
+                           "commands. Switch the board to REMOTE at its front "
+                           "panel; nothing here can do it, by design")
+        return False, "the supply refused it: %s" % reply
+
+    def control_mode(self) -> str:
+        """LOCAL or REMOTE, from the board's own BDCTR.
+
+        In LOCAL the front panel has control and every remote SET is refused
+        with LOC:ERR, while MON keeps answering normally. That asymmetry is
+        why a board in LOCAL is indistinguishable from a working one until
+        somebody tries to write.
+        """
+        return (self._command("BDCTR") or "unknown").strip().upper()
 
     def status(self, channel: int) -> int | None:
         value = self._command("STAT", channel)
@@ -221,6 +345,14 @@ class CaenService(BaseService):
                 return False
             log.info("%s: %s serial %s on %s, verified",
                      device_id, reader.board_name, reader.board_serial, reader.port)
+            # LOCAL or REMOTE. Logged at startup because it decides whether
+            # any setpoint can be written at all, and a board quietly in
+            # LOCAL looks identical to a working one until the first write.
+            mode = reader.control_mode()
+            log.info("%s: control mode %s%s", device_id, mode,
+                     "" if mode == "REMOTE" else
+                     " - setpoints cannot be written until the front panel "
+                     "is switched to REMOTE")
             self._check_expectations(device_id, reader)
 
         return True
@@ -287,7 +419,11 @@ class CaenService(BaseService):
                                        raw=float(word), quality=Quality.OK))
                 continue
 
-            par = "VMON" if ch.kind == "hv_vmon" else "IMON"
+            # VSET is a set parameter, but it is READ here with the ordinary
+            # monitor command - CMD:MON,PAR:VSET - which is what makes stage 1
+            # of section 10a a read-only change. There is still no SET path in
+            # this driver.
+            par = {"hv_vmon": "VMON", "hv_vset": "VSET"}.get(ch.kind, "IMON")
             magnitude = reader.monitor(index, par)
 
             if magnitude is None:
@@ -298,7 +434,11 @@ class CaenService(BaseService):
                 continue
 
             alive[ch.device] = True
-            value = apply_sign(magnitude, ch.sign) if ch.kind == "hv_vmon" else magnitude
+            # Both VMON and VSET come back as unsigned magnitudes with POL
+            # separate, and both are stored signed (section 7.2). IMON is a
+            # current and has no polarity to apply.
+            value = (apply_sign(magnitude, ch.sign)
+                     if ch.kind in ("hv_vmon", "hv_vset") else magnitude)
             out.append(Measurement(t=now, channel=ch.name, value=value,
                                    unit=ch.unit, raw=magnitude, quality=Quality.OK))
 
@@ -340,7 +480,7 @@ class CaenService(BaseService):
                                        unit=ch.unit, raw=1.0,
                                        quality=Quality.OK, src="sim"))
                 continue
-            if ch.kind == "hv_vmon" and ch.limits:
+            if ch.kind in ("hv_vmon", "hv_vset") and ch.limits:
                 span = ch.limits["max"] if ch.sign > 0 else ch.limits["min"]
                 magnitude = abs(span) * 0.8 + random.gauss(0, 1.0)
                 value = apply_sign(magnitude, ch.sign)
@@ -350,6 +490,278 @@ class CaenService(BaseService):
                                    unit=ch.unit, raw=magnitude,
                                    quality=Quality.OK, src="sim"))
         return out
+
+    # ------------------------------------------------------------- control
+    #
+    # THE ONLY WRITE PATH IN THIS DRIVER (section 10a). It writes VSET and
+    # nothing else. There is no command here that enables or disables a
+    # channel: that is a hand operation at the supply, and a hardware gate
+    # the software cannot reach is the last thing standing between a bug and
+    # an electrode.
+
+    def _audit(self, target, old, new, result, detail="", actor="",
+               action="caen_vset"):
+        self.bus.publish_raw(TOPIC_AUDIT, json.dumps(
+            {"t": iso(utcnow()), "actor": actor or "unknown",
+             "action": action, "target": target,
+             "old": None if old is None else str(old),
+             "new": None if new is None else str(new),
+             "result": result, "detail": detail}, separators=(",", ":")))
+
+    def _refuse(self, target, reason, actor, old=None, new=None,
+                ack_topic=None, action="caen_vset"):
+        """Say no, out loud, and record it.
+
+        A refused command is acknowledged with a reason and audited, never
+        dropped (section 10). What somebody TRIED to put on an electrode is
+        worth as much afterwards as what they managed to.
+        """
+        log.warning("refused %s on %s by %s: %s", action, target,
+                    actor or "unknown", reason)
+        self.bus.publish_raw(ack_topic or ACK_HV_VSET, json.dumps(
+            {"ok": False, "channel": target, "reason": reason, "by": actor},
+            separators=(",", ":")))
+        self._audit(target, old, new, "rejected", reason, actor, action=action)
+
+    def _handle_vset(self, topic: str, payload: str) -> None:
+        try:
+            command = json.loads(payload) or {}
+        except ValueError:
+            self._refuse(None, "unparseable command", "")
+            return
+
+        actor = str(command.get("by") or "").strip() or "unknown"
+        name = str(command.get("channel") or "").strip()
+
+        channel = self.config.channels.get(name)
+        if channel is None or channel.kind != "hv_vset" or not channel.enabled:
+            self._refuse(name or None,
+                         "%r is not an enabled hv_vset channel" % name, actor)
+            return
+
+        try:
+            wanted = float(command["value"])
+        except (KeyError, TypeError, ValueError):
+            self._refuse(name, "no usable 'value' in the command", actor)
+            return
+
+        if self.simulate:
+            self._refuse(name, "this service is simulating and holds no "
+                               "instrument to write to", actor, new=wanted)
+            return
+
+        reader = self._readers.get(channel.device)
+        if reader is None:
+            self._refuse(name, "not connected to %s" % channel.device, actor,
+                         new=wanted)
+            return
+
+        # The software write range from channels.yaml. A channel with no
+        # limits refuses everything, which is the intended default: a range
+        # nobody wrote down is not permission to put volts on an electrode.
+        if not channel.in_limits(wanted):
+            limits = channel.limits or {}
+            self._refuse(name, "%+.1f V is outside the permitted range %s to "
+                               "%s set in channels.yaml"
+                               % (wanted, limits.get("min", "unset"),
+                                  limits.get("max", "unset")), actor,
+                         new=wanted)
+            return
+
+        index = int(channel.phys)
+
+        # THE SECTION 10a RULE. A channel that is not enabled must keep VSET 0,
+        # because the enable is a hand operation and the board ramps to VSET
+        # the instant it is flipped. Allowing a non-zero setpoint on a
+        # disabled channel would let somebody stage 4.2 kV, walk to the
+        # supply, flip the switch and get exactly the unannounced ramp this
+        # whole design exists to prevent - with the software's blessing.
+        #
+        # Zero is always allowed. That is how the invariant gets established
+        # on a channel whose stored setpoint is currently wrong.
+        word = reader.status(index)
+        if word is None:
+            self._refuse(name, "could not read the channel's status word, so "
+                               "whether it is enabled is unknown", actor,
+                         new=wanted)
+            return
+        if wanted != 0 and not is_enabled(word):
+            self._refuse(
+                name,
+                "this channel is not enabled, so its setpoint must stay at 0 "
+                "(section 10a). Enable it at the supply first - it will come "
+                "up at zero volts - then set the voltage.", actor, new=wanted)
+            return
+
+        try:
+            magnitude = magnitude_for(wanted, channel.sign)
+        except ValueError as exc:
+            self._refuse(name, str(exc), actor, new=wanted)
+            return
+
+        # Held across read-old / write / read-back, so the 1 Hz poll cannot
+        # land in the middle and hand us its reply instead of ours.
+        with reader._lock:
+            before_mag = reader.monitor(index, "VSET")
+            sent, why = reader.set_voltage(index, magnitude)
+            after_mag = reader.monitor(index, "VSET") if sent else None
+
+        before = (apply_sign(before_mag, channel.sign)
+                  if before_mag is not None else None)
+        if not sent:
+            self._refuse(name, why, actor, old=before, new=wanted)
+            return
+
+        if after_mag is None:
+            self._refuse(name, "the setpoint could not be read back, so "
+                               "whether the write took is unknown", actor,
+                         old=before, new=wanted)
+            return
+
+        after = apply_sign(after_mag, channel.sign)
+        if abs(after - wanted) > VSET_TOLERANCE_V:
+            self._refuse(
+                name, "read back %+.1f V after asking for %+.1f V; the write "
+                      "did not take. A value above the board's own MAXV is "
+                      "refused by the instrument, which is the protection "
+                      "working." % (after, wanted), actor, old=before,
+                new=wanted)
+            return
+
+        log.warning("VSET %s: %s -> %+.1f V, by %s", name,
+                    ("%+.1f" % before) if before is not None else "unknown",
+                    after, actor)
+        self.bus.publish_raw(ACK_HV_VSET, json.dumps(
+            {"ok": True, "channel": name, "old": before, "new": after,
+             "by": actor}, separators=(",", ":")))
+        self._audit(name, before, after, "ok", "", actor)
+
+    def _resolve(self, name, ack_topic, actor):
+        """(channel, reader, index) for an hv_vset name, or None after refusing."""
+        channel = self.config.channels.get(name)
+        if channel is None or channel.kind != "hv_vset" or not channel.enabled:
+            self._refuse(name or None,
+                         "%r is not an enabled hv_vset channel" % name, actor,
+                         ack_topic=ack_topic, action="caen_output")
+            return None
+        if self.simulate:
+            self._refuse(name, "this service is simulating and holds no "
+                               "instrument to write to", actor,
+                         ack_topic=ack_topic, action="caen_output")
+            return None
+        reader = self._readers.get(channel.device)
+        if reader is None:
+            self._refuse(name, "not connected to %s" % channel.device, actor,
+                         ack_topic=ack_topic, action="caen_output")
+            return None
+        return channel, reader, int(channel.phys)
+
+    def _handle_output(self, topic: str, payload: str) -> None:
+        """Energise or de-energise a channel - the "turn ON HV" of section 10a.
+
+        The safety of this rests on one thing: **it says what will happen.**
+        Turning a channel on ramps it to whatever VSET holds, so the
+        acknowledgement carries that voltage. Turning on at VSET 0 - which is
+        the resting state the invariant guarantees - energises at zero and
+        moves nothing, and that is a perfectly reasonable thing to do.
+        """
+        try:
+            command = json.loads(payload) or {}
+        except ValueError:
+            self._refuse(None, "unparseable command", "",
+                         ack_topic=ACK_HV_OUTPUT, action="caen_output")
+            return
+
+        actor = str(command.get("by") or "").strip() or "unknown"
+        name = str(command.get("channel") or "").strip()
+        if "on" not in command:
+            self._refuse(name or None, "the command must say on: true or false",
+                         actor, ack_topic=ACK_HV_OUTPUT, action="caen_output")
+            return
+        wanted_on = bool(command["on"])
+
+        resolved = self._resolve(name, ACK_HV_OUTPUT, actor)
+        if resolved is None:
+            return
+        channel, reader, index = resolved
+
+        with reader._lock:
+            word = reader.status(index)
+            vset_mag = reader.monitor(index, "VSET")
+
+            if word is None:
+                self._refuse(name, "could not read the channel's status word",
+                             actor, ack_topic=ACK_HV_OUTPUT,
+                             action="caen_output")
+                return
+
+            # A channel whose enable is off cannot be energised, and the board
+            # would refuse anyway - but saying so here names the remedy rather
+            # than reporting the symptom.
+            if wanted_on and is_disabled(word):
+                self._refuse(
+                    name, "this channel is disabled at the supply. Flip its "
+                          "enable switch on the front panel first - nothing "
+                          "here can do that, by design (section 10a)", actor,
+                    ack_topic=ACK_HV_OUTPUT, action="caen_output")
+                return
+
+            was_on = is_enabled(word)
+            sent, why = reader.set_output(index, wanted_on)
+            after = reader.status(index) if sent else None
+
+        vset = (apply_sign(vset_mag, channel.sign)
+                if vset_mag is not None else None)
+
+        if not sent:
+            self._refuse(name, why, actor, old="on" if was_on else "off",
+                         new="on" if wanted_on else "off",
+                         ack_topic=ACK_HV_OUTPUT, action="caen_output")
+            return
+
+        # THE READ-BACK IS ASYMMETRIC, and deliberately so.
+        #
+        # Turning ON sets bit 0 immediately, even when the channel then spends
+        # a minute ramping, so it can be verified at once.
+        #
+        # Turning OFF starts a ramp DOWN, and bit 0 stays set until the
+        # channel actually reaches zero. Demanding it clear immediately would
+        # report a failure for a command that worked perfectly - and, worse,
+        # would train somebody to re-send OFF to a channel already on its way
+        # down. So OFF is verified as "the board accepted it", and the state
+        # is reported as it is.
+        now_on = is_enabled(after) if after is not None else None
+        if wanted_on and now_on is not True:
+            self._refuse(
+                name, "asked the channel to turn on, but it did not report ON "
+                      "(status %s). The write did not take." % after, actor,
+                old="on" if was_on else "off", new="on",
+                ack_topic=ACK_HV_OUTPUT, action="caen_output")
+            return
+
+        ramping = vset is not None and abs(vset) > 1.0
+        detail = ""
+        if wanted_on and ramping:
+            detail = "ramping to %+.1f V" % vset
+        elif wanted_on:
+            detail = "energised at 0 V; nothing will move until a setpoint is set"
+        elif now_on:
+            detail = "ramping down at the board's own rate"
+
+        log.warning("output %s: %s -> %s%s, by %s", name,
+                    "on" if was_on else "off", "on" if wanted_on else "off",
+                    (" (%s)" % detail) if detail else "", actor)
+        self.bus.publish_raw(ACK_HV_OUTPUT, json.dumps(
+            {"ok": True, "channel": name, "on": wanted_on, "vset": vset,
+             "detail": detail, "by": actor}, separators=(",", ":")))
+        self._audit(name, "on" if was_on else "off",
+                    "on" if wanted_on else "off", "ok", detail, actor,
+                    action="caen_output")
+
+    def run(self) -> int:
+        self.bus.subscribe(TOPIC_HV_VSET, self._handle_vset)
+        self.bus.subscribe(TOPIC_HV_OUTPUT, self._handle_output)
+        return super().run()
 
     def _relink(self, force: bool = False) -> bool:
         """Re-resolve the supplies after a link loss, keeping what still works.

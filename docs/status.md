@@ -10,14 +10,87 @@ the next before the current one passes.
 |---|---|---|
 | 1 | Skeleton: config, bus, sinks, simulation, install | **done** |
 | 2 | cDAQ read-only | **done** |
-| 3 | Channel verification against physical sensors | **partial** — see below |
+| 3 | Channel verification against physical sensors | **partial** — the empirical per-sensor check is still outstanding, see below |
 | 4 | Scaling and history import | **done** |
 | 5 | Lake Shore + CAEN monitoring | **done** |
-| 6 | UPS, alarms, flow integrator | **done** |
-| 7 | Web UI and P&ID mimic | **mostly done** |
-| 8 | Control path | |
-| 9 | Procedures | |
-| 10 | Production | |
+| 6 | UPS, alarms, flow integrator | **done** — email delivery finally works (18 Sep) |
+| 7 | Web UI and P&ID mimic | **mostly done** — no `/recipients` page, no Python client |
+| 8 | Control path | **in progress** — Lake Shore done; HV designed (§10a), stage 1 of 4 built |
+| 9 | Procedures | not started |
+| 10 | Production | **partly** — running as services, auto-start, nightly backup |
+
+### Where milestone 8 actually stands, 18 September 2026
+
+**Lake Shore: complete.** Setpoint and heater range, output 1 only. Every write
+is validated against `channels.yaml`, **read back from the instrument before it
+is called successful**, acknowledged on the bus and recorded in `audit` —
+including the writes that were refused. Output 2 is read but not writable: it
+is not used on this cryostat.
+
+**HV: designed in §10a, one stage of four built.**
+
+| Stage | | State |
+|---|---|---|
+| 1 | Read `VSET` into `hv_*_vset` channels | **done, 18 Sep** |
+| 2 | The write path | **done, 18 Sep** — the one-off zeroing is still to do |
+| 3 | The plan (staged setpoints, applied as one action) | not started |
+| 4 | The UI for it | not started |
+
+**The write path (stage 2) is built and verified against the real supplies.**
+`xams-ctl hv-set` and `xams-ctl hv-standby`. It writes `VSET` and nothing else:
+no command exists that can change `MAXV`, `RUP`, `RDW`, `TRIP` or `ISET`, or
+that can enable or disable a channel. Each of these was refused by the live
+boards on 18 September 2026, with nothing written:
+
+| asked for | refused because |
+|---|---|
+| −1000 V on the disabled cathode | not enabled, so its setpoint must stay at 0 (§10a) |
+| −3000 V on the cathode | outside the −2500..0 range in `channels.yaml` |
+| −500 V on the anode | outside the 0..4500 range — the wrong polarity for that electrode |
+| a value on `hv_cathode_vmon` | that is a monitor, not a setpoint |
+
+**The zeroing is done, 18 September 2026.** Both boards were put in `REMOTE`
+at the front panel, and all eight setpoints were zeroed — each verified by
+read-back, each in the audit trail. **§10a’s invariant now holds**, so enabling
+a channel brings it up at zero volts and `/hv` shows nothing armed.
+
+A gate nobody knew about turned up in the process: the supplies were in
+`LOCAL` mode, in which the front panel has control and every remote setpoint
+is refused with `LOC:ERR` while `MON` keeps working normally. `BDCTR` is
+front-panel only, so there are **two** hand gates before software can put
+volts anywhere — the board in `REMOTE`, and the channel enabled — and neither
+is reachable from code.
+
+Stage 1 was worth doing on its own, because it made a live hazard visible.
+Every channel is `DISABLED`, and the setpoints sitting in the boards are:
+
+| | pmt_bot | pmt_top | ts | bs | cathode | gate | anode | nai |
+|---|---|---|---|---|---|---|---|---|
+| `VSET` | −700 | 0 | −500 | −600 | −2250 | −1750 | **+4200** | +600 |
+
+The enable switch is a hand operation and the board ramps to `VSET` the instant
+it is flipped, so **seven of the eight channels would go straight to those
+voltages if somebody touched the switch today.** `/hv` now marks them in red
+and says so at the top of each supply.
+
+Zeroing them is stage 2, because doing it needs a write path — and building
+that write path carefully is the point of §10a.
+
+### Also done since the milestone table was last accurate
+
+- **Nightly backup** of the irreplaceable data to `/data/xenon/xams_slow_control/`
+  at Nikhef, verified, registered as a Scheduled Task. The restore has **never
+  been rehearsed**, so that path is still a claim.
+- **Email works.** `smtp_host` had been empty since the system was built, so
+  every email alarm ever raised was silently discarded. Alarm mail now carries
+  the plant around the alarm, and there is a daily report at 07:30.
+- **The manual** (`/manual`) was never built; it is now, and the three tests
+  that had been silently skipping now run.
+- **The NI driver** is archived on the cluster — for the ordinary reason that a
+  rebuild should not need an ni.com account, not the dramatic one first given
+  here. The cDAQ-9174 is **not** discontinued; that claim was wrong.
+- **An undefined-name check** over the whole package, after a `NameError` in
+  `xams-ctl status` was committed and shipped.
 
 Each has an acceptance criterion in [the design specification §15](DESIGN.md). Do
 not start the next before the current one passes.

@@ -1051,6 +1051,178 @@ Three properties this must have, because each failure is worse than not having t
 
 ---
 
+## 10a. Bringing the high voltage up
+
+**Status: designed, not built.** Written 18 September 2026 from the operating
+problem below. Nothing here exists in code yet.
+
+### The problem
+
+Today, switching a channel on means flipping the physical enable at the supply,
+after which **the channel ramps immediately to whatever `VSET` happens to be
+stored in the board.** That stored value is invisible from the lab, unchanged
+since whenever somebody last set it, and nobody is asked to confirm it.
+
+This is not hypothetical. On 18 September 2026 all eight channels were
+`DISABLED`, and the setpoints sitting in the boards were:
+
+| | pmt_bot | pmt_top | ts | bs | cathode | gate | anode | nai |
+|---|---|---|---|---|---|---|---|---|
+| `VSET` | 700 | 0 | 500 | 600 | 2250 | 1750 | **4200** | 600 |
+
+Flipping the anode enable at that moment would have taken it to 4.2 kV, with
+the only warning being that somebody remembered.
+
+### Two hand gates, not one
+
+Found on 18 September 2026, while the write path was first tried against the
+real supplies: **every `SET` was refused with `#BD:00,LOC:ERR`.** Both boards
+were in `LOCAL` mode, in which the front panel has control and remote
+setpoints are rejected — while `MON` keeps answering perfectly. That asymmetry
+is why a board in `LOCAL` is indistinguishable from a working one until
+somebody tries to write, and why the first version of the error message
+(*"the supply did not accept the command"*) was useless.
+
+`BDCTR` is set from the front panel and **nothing in this software can change
+it.** So there are two independent gates between code and an electrode, and
+neither is reachable from here:
+
+| Gate | Scope | Set by |
+|---|---|---|
+| `BDCTR` = `REMOTE` | the whole board | front panel menu |
+| the channel enable | one channel | front panel |
+
+This was not designed, it was discovered — and it is a better safety story
+than the one this section was originally written around. Both are read and
+both are shown: the control mode is logged at startup and named in the refusal
+when a write is attempted in `LOCAL`.
+
+### The invariant that fixes it
+
+> **A channel that is not enabled has `VSET` = 0.**
+
+Everything else follows. If that holds, the physical enable becomes a safe
+action: it always brings a channel up at zero volts. **Raising voltage is then
+always a deliberate, software, audited step**, never a side effect of touching
+the hardware.
+
+The enable switch stays a hand operation and the software never gets a command
+to change it. That is not an omission — a hardware gate that software cannot
+reach is the last thing standing between a bug and an electrode.
+
+### States
+
+Per channel, derived from `STAT` and the monitors (§7.2):
+
+| State | Meaning |
+|---|---|
+| `DISABLED` | hardware enable off. **Invariant: `VSET` must be 0.** |
+| `STANDBY` | enabled, `VSET` 0, `VMON` ~ 0. Live, and harmless. |
+| `RAMPING` | `VSET` != `VMON`; the board is moving at its own `RUP`/`RDW` |
+| `ON` | `VMON` at a non-zero `VSET` |
+| `FAULT` | trip, interlock, over-current, over-temp |
+
+`DISABLED` <-> `STANDBY` is **by hand, at the supply.** No software path
+exists in either direction.
+
+### Plan, then apply
+
+Setpoints are staged before they are written. A **plan** is a set of proposed
+values that has had no effect on any instrument.
+
+1. **Load defaults** — fill the plan from configuration. No hardware effect.
+2. **Edit** — the operator changes what they want, validated against the
+   `limits` in `channels.yaml` as they type, and again at apply.
+3. **Apply** — write `VSET` per channel, read back, verify, audit.
+4. **Standby** — write `VSET` 0 to the named channels. The way down.
+
+The plan lives **server-side and published retained on the bus**, not in a
+browser tab: two people looking at the page must see the same pending change,
+and a page reload must not silently discard one.
+
+**A plan is discarded when the service restarts** (§6.1 rule 4: restart never
+actuates). A plan that survived a restart and was applied later, by somebody
+who had not staged it, is worse than losing it.
+
+### The rule that makes the order safe
+
+> **Apply refuses to write a non-zero `VSET` to a channel that is not enabled.**
+
+This is what keeps the invariant true, and it forces the only safe order:
+
+```
+   stage the values          (no effect)
+   enable by hand            (safe: the channel is at 0 V)
+   apply                     (the board ramps, at its own rate)
+```
+
+Without this rule the whole design is decorative: an operator could stage
+4.2 kV, apply it to a disabled anode, walk over and flip the switch — and get
+exactly today's rough behaviour, now with the software's blessing.
+
+It also settles what "turn on the HV with everything at 0 V" means: it is
+allowed, and it does nothing. The UI shows *waiting for the enable switch* on
+any planned channel that is still disabled.
+
+### Changing a voltage while it is on
+
+**The same plan-and-apply flow, always.** No text box that acts on Enter, and
+no quick path that skips the audit — one mechanism is easier to reason about
+than two, and the second one is always the one that bites.
+
+What changes is the confirmation, which should state what the operator
+actually needs to judge:
+
+- the change, from and to
+- **the ramp time**, computed from the board's own `RUP`/`RDW`: a 2 kV move at
+  50 V/s is forty seconds during which the detector is neither where it was
+  nor where it is going
+- whether the new value crosses an alarm threshold
+
+### What the software must never do
+
+1. **Never enable or disable a channel.** No such command exists.
+2. **Never write `MAXV`, `RUP`, `RDW`, `TRIP` or `ISET`** (§10 rule 2).
+   Protection stays configured on the instrument.
+3. **Never actuate on startup or restart** (§6.1 rule 4).
+4. **Never apply a plan on its own.** A plan is applied by a person, once.
+
+### Before any of this can be true
+
+~~**The invariant is violated today.**~~ **Done, 18 September 2026.** Both
+boards were switched to `REMOTE` at the front panel, and
+`xams-ctl hv-standby --by AP` zeroed all eight setpoints — each verified by
+read-back and recorded in the audit trail:
+
+```
+hv_anode_vset    +4200.0 -> 0.0     hv_cathode_vset  -2250.0 -> -0.0
+hv_gate_vset     -1750.0 -> -0.0    hv_pmt_bot_vset   -700.0 -> -0.0
+hv_bs_vset        -600.0 -> -0.0    hv_nai_vset       +600.0 -> 0.0
+hv_ts_vset        -500.0 -> -0.0    hv_pmt_top_vset     -0.0 -> -0.0
+```
+
+The invariant now holds, and `/hv` shows it: no channel is armed, and the
+enable switch is a safe thing to flip.
+
+~~**`VSET` is not currently read.**~~ **Done, 18 September 2026.** `VSET` is
+published as `hv_*_vset`, stored signed, and shown on `/hv` beside `VMON`.
+A disabled channel whose setpoint is not zero is marked in red — which is how
+the seven violations above were found rather than guessed at.
+
+### Open
+
+- **Ordering between channels.** Does the gate require the cathode first? If so
+  this grows into §10's `procedures/hv_rampup.yaml`, and the plan-and-apply
+  model above is the step on the way.
+- **Where default setpoints live.** `channels.yaml` if there is one right
+  answer per channel; a separate file per run configuration if there are
+  several.
+- **An orderly "everything to standby"** — distinct from `KILL VOLTAGE`, which
+  remains TBD.
+
+
+---
+
 ## 11. Alarm engine
 
 `alarms/engine.py` subscribes to `xams/meas/#` and evaluates against `alarms.yaml`. It decides and notifies; Grafana only displays the result.
@@ -1269,7 +1441,7 @@ Each milestone has an acceptance criterion. Do not start the next before the cur
 | 5 | Lake Shore + CAEN monitoring | Read-only. Identity verification working. Unplug test passes. |
 | 6 | UPS, alarms, flow integrator | Thresholds from `alarms.yaml`, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm. Integrator survives a service restart without losing its total. |
 | 7 | Web UI | Current values, alarm state, service health. Read-only, bound to `127.0.0.1`. Python client works from a notebook. The P&ID mimic (§8.2) shows live values on the drawing, greys stale channels, and the SVG-vs-`channels.yaml` tag check passes in both directions. |
-| 8 | Control path | Lake Shore setpoint, then HV — only after §10's open decision is made and monitoring has run reliably for weeks. Audit log complete; every write validated; dry run works. |
+| 8 | Control path | **Lake Shore setpoint and heater range: DONE** (18 Sep 2026) — validated, read back, acknowledged, audited. **HV: designed, not built** — see §10a. Prerequisites, in order: read `VSET` into `hv_*_vset` channels; zero the setpoint of every disabled channel once, by hand; then plan-and-apply. |
 | 9 | Procedures | Named sequences (§10) run, abort cleanly, and are audited step by step. |
 | 10 | Production | `SERVICE_AUTO_START`, LabVIEW retired but installed. **`OPERATIONS.md` passes the acceptance test of §14** — a colleague operates the system from it unaided. |
 

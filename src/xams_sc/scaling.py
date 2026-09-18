@@ -34,6 +34,40 @@ def apply_sign(magnitude: float, sign: int) -> float:
     return abs(magnitude) * sign
 
 
+def magnitude_for(value: float, sign: int) -> float:
+    """Signed value -> the unsigned magnitude the supply expects. The inverse
+    of `apply_sign`, and the only place a setpoint crosses that boundary.
+
+    **This refuses a value of the wrong polarity rather than taking `abs()`.**
+
+    The temptation is to write `abs(value)` and be done, because the wire
+    format is unsigned anyway. That would mean asking for +2250 on the cathode
+    and getting -2250 on the electrode: the board applies its own POL, so the
+    magnitude is obeyed and the operator's sign is silently discarded. The
+    request would be honoured, the read-back would agree, the audit record
+    would look clean, and the wrong voltage would be on the detector.
+
+    A wrong sign is a mistake about which electrode is being addressed. It is
+    refused, not corrected.
+
+    Zero has no polarity and is always allowed - which matters, because zero
+    is how section 10a's invariant gets established on a channel whose stored
+    setpoint is wrong.
+    """
+    if sign not in (-1, 1):
+        raise ValueError(f"sign must be -1 or +1, got {sign!r}")
+    if value == 0:
+        return 0.0
+    if (value > 0) != (sign > 0):
+        wanted = "positive" if sign > 0 else "negative"
+        raise ValueError(
+            f"{value:+g} has the wrong polarity for this channel, which is "
+            f"{wanted}. Refusing rather than taking the magnitude: the supply "
+            f"applies its own POL, so the sign would be discarded and the "
+            f"opposite voltage delivered without anything reporting an error.")
+    return abs(value)
+
+
 def strip_sign(value: float) -> float:
     """Inverse of apply_sign, for values going back out to a supply.
 
