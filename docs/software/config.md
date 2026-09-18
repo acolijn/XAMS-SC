@@ -21,12 +21,149 @@ Three conventions that must not be changed:
 - **Channel names are permanent.** They are the identity of a measurement in
   the MQTT topic, the archive, the database and the UI.
 
+Every file is validated at load. A typo stops a service at startup with a
+message naming the problem, rather than becoming a wrong number six months
+later — run [`xams-ctl check`](../reference/cli.md#check) to validate without
+starting anything.
+
+---
+
+## `channels.yaml`
+
+One entry per channel. Only `name`, `device`, `phys` and `kind` are required.
+
+```yaml
+  - name: p101
+    device: cdaq
+    phys: 9207/ai0
+    kind: voltage
+    unit: bar
+    offset: 1.0
+    multiplier: 25.0
+    legacy: P101
+    description: gas rack high pressure side
+```
+
+| Field | |
+|---|---|
+| `name` | **the identity of the measurement.** MQTT topic, archive record, database row, UI label. Renaming one breaks history |
+| `device` | which service reads it: `cdaq`, `hv_1`, `hv_2`, `lakeshore`, `ups`, `derived` |
+| `phys` | where it is, in that device's own terms — a module alias and line, an HV channel index, a HID usage |
+| `kind` | `voltage` · `rtd` · `temperature` · `hv_vmon` · `hv_imon` · `hv_stat` · `hv_vset` · `status` · `power` · `setpoint` · `current` |
+| `unit` | engineering unit as published. Declared, never inferred |
+| `offset`, `multiplier` | the scaling, in that order. Default 0 and 1 |
+| `sign` | `+1` or `-1`. Applied to the unsigned magnitudes the CAEN supplies report |
+| `rtd` | RTD type and wiring for a cDAQ RTD channel |
+| `limits` | `{min, max}` — the **software write range** |
+| `derive` | compute this channel from another: `{from, transform, …}`, for relationships that are not linear |
+| `default_setpoint` | what the HV page offers as "load defaults". Offered, never applied |
+| `legacy` | the LabVIEW name, for `tools/compare_to_labview.py` |
+| `enabled` | `false` leaves the channel defined but unread. Listed, not deleted |
+| `log_minmax` | also store the window's min and max, not only the mean |
+| `on_pid` | whether the channel belongs on the [P&ID mimic](webui.md). `false` for a reading with no place on a piping drawing |
+| `description` | one line, shown in the UI and in the generated table |
+
+**`limits` is convenience, not protection.** The instrument's own limit
+applies underneath and always wins. A channel with **no** `limits` accepts
+nothing: a write range that was never specified is not permission to write
+anything.
+
+**A disabled channel is listed, not removed.** The map stays complete and a
+gap is never left ambiguous — `v4` and `v6` are in the file and say *not
+connected*.
+
+---
+
+## `devices.yaml`
+
+How each instrument is found and how it proves it is the right one.
+**Resolution never uses a COM number.** Candidates are narrowed by USB
+hardware ID, then the instrument is asked who it is — which for the CAEN
+supplies is the *only* identification, since neither carries a USB serial
+number and both present the same VID/PID.
+
+```yaml
+  - id: hv_1
+    match: {vid: "21E1", pid: "0003"}
+    board_name: DT1470ET
+    board_serial: "19198"
+    baud: 9600
+    expect:
+      0: {pol: "-", maxv: 1100, rup: 1, rdw: 20, trip: 2.0, iset: 20}
+```
+
+| Field | |
+|---|---|
+| `match` | the USB hardware id: `vid`, `pid`, and `serial` where the device has one. Ports that do not match are **never opened** |
+| `board_name` + `board_serial`, `idn_contains` | the identity the instrument must report. Matched as a **pair**, never on the serial alone |
+| `baud` and friends | serial settings. The Lake Shore's 7-O-1 is not a typo — see [its page](../drivers/lakeshore.md) |
+| `expect` | the protection settings this system **reads and alarms on, and never writes** |
+| `chassis`, `modules` | the cDAQ chassis and its modules, by alias, model, slot and serial |
+
+`expect` is the shape of §10 rule 2: ramp rate, trip current and over-voltage
+limit are configured on the instrument and stay there. The software compares
+and complains; it has no code that could change them.
+
+---
+
+## `alarms.yaml`
+
+Thresholds, four per channel, EPICS-style — `lolo`, `low`, `high`, `hihi` —
+each with a severity and who to notify. Plus `defaults` (hysteresis, repeat
+interval, `stale_after_seconds`) and a `staleness` block.
+
+Editing a threshold silently changes what the system protects against, which
+is why this file is in git and applied with an explicit `xams-ctl reload`.
+The current contents are published as [the alarm
+table](../reference/alarms.md); the engine's behaviour is on [Alarm
+engine](alarms.md).
+
+---
+
+## `recipients.yaml`, and why it is the odd one out
+
+Everything else here is edited in a text editor, committed, and reloaded.
+This one is edited **from the web UI** and takes effect without restarting
+anything.
+
+The difference is what the file is. A threshold is an engineering decision:
+it should be reviewable, attributable and revertible, so it belongs in git.
+A phone number is not — it is a fact about who is on shift this month, it
+changes when somebody goes on leave, and it has to be changeable at the
+moment somebody notices that alarms are going to a person who left. Putting
+that behind an edit-commit-reload cycle means the list is wrong on exactly
+the weekend it matters.
+
+So the recipients list is read at **send time**, not at startup: a change
+applies to the next alarm, with no restart and no reload. Changes are
+[audited](storage.md) like any other write.
+
+---
+
+## `secrets.yaml`
+
+Database DSN, the SMS gateway key, the Grafana token, SMTP credentials.
+**Never committed** — `secrets.example.yaml` is the template in git, with
+empty values.
+
+A key committed to git stays in the history after it is deleted, and private
+repositories are still cloned, shared and backed up. Absent secrets is a
+normal state rather than an error: without a DSN the archive still runs, and
+without a Grafana token the [drift check](../grafana/drift.md) reports
+`unknown` instead of complaining.
+
+---
+
+## The config hash
+
+Every load computes a hash over the YAML. It is stamped into the header of
+each JSONL file, logged at service start, and shown on the Overview page — so
+an archive file says what configuration produced it, and two services running
+different configurations are visible rather than mysterious.
+
 ## Generated references
 
 The current contents of two of these files are published as part of this
 manual, straight from the YAML: [the channel table](../reference/channels.md)
 and [the alarm table](../reference/alarms.md). They are regenerated at every
 build, so they cannot drift.
-
-!!! warning "Not written yet"
-    Wanted: the field-by-field meaning of each file, and why `recipients.yaml` is the one that is edited from the UI. The generated [channel](../reference/channels.md) and [alarm](../reference/alarms.md) tables show the current contents.

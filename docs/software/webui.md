@@ -23,6 +23,147 @@ of a permitted range and no instrument handle — a command from this UI and one
 from the CLI get identical treatment. POST then redirect, so a refresh cannot
 repeat a write.
 
-!!! warning "Not written yet"
-    Wanted: the mimic build step (`tools/build_mimic.py`) and its tag-drift
-    check, and the shape of `/api/state`.
+---
+
+## The routes
+
+| | |
+|---|---|
+| `GET /` | Overview |
+| `GET /status` | every channel, as a table |
+| `GET /hv` | high voltage, with the controls |
+| `GET /mimic` | the P&ID mimic |
+| `GET /logs` | service logs |
+| `GET /api/state` | everything the pages show, as JSON |
+| `GET /healthz` | plain text, for a watchdog |
+| `GET /manual/…` | this manual, mounted as static files |
+| `POST /hv/apply`, `/hv/output` | HV setpoint, energise/de-energise |
+| `POST /lakeshore/setpoint`, `/lakeshore/range` | Lake Shore, output 1 |
+| `POST /flow/reset` | close the integrator period |
+| `POST /operator` | remember who is at the keyboard, in a cookie |
+
+Every POST publishes a command and waits for its acknowledgement. None of
+them touch an instrument.
+
+**Who did it** comes from a cookie set once, rather than a name typed before
+every command — retyping a name for each setpoint is the kind of friction
+that gets worked around by leaving it blank, which costs the audit trail the
+thing it exists for. It is taken on trust: there is no login, so this
+identifies a browser, not a person, and that is recorded honestly rather than
+dressed up.
+
+---
+
+## `/api/state`
+
+For the Python client, and for anything else that wants the state without
+scraping HTML. One object, built from the same retained topics the pages
+render from:
+
+```json
+{
+  "overall": "ok",
+  "config": "89f5d1d",
+  "services": {…},
+  "alarms": […],
+  "faults": […],
+  "channels": [
+    {"name":"tt301","value":-92.4,"unit":"C","quality":"ok",
+     "age_s":3.1,"alarm":null,"healthy":true}
+  ]
+}
+```
+
+`age_s` is how long ago the reading arrived, which is what makes a stale
+channel visible to a caller that has no clock of its own. `healthy` folds
+quality and age into the one boolean a dashboard usually wants.
+
+---
+
+## The mimic
+
+`/mimic` serves a static SVG with live values written into it.
+
+```powershell
+python tools/build_mimic.py
+```
+
+That converts `notes/xams_piping_and_instrumentation.pdf` into
+`src/xams_sc/api/static/xams_pid.svg` and adds an empty `<text>` node beside
+every instrument tag that corresponds to a channel. The page fills those in
+on each render; the SVG itself never changes at runtime.
+
+**Re-run it when the P&ID is revised.** A mimic quietly out of date with the
+plant is a liability.
+
+### The tag check, in both directions
+
+At startup the web service compares the ids in the SVG against
+`channels.yaml` and logs every mismatch. Both directions matter, and they
+fail differently:
+
+| | |
+|---|---|
+| an id with no channel | the drawing shows an instrument this system does not read, and the bubble would sit empty forever |
+| a channel with no id | a reading nobody can find on the drawing |
+
+It is never fatal — a mimic that has drifted is still more useful than no
+mimic — and it is roughly ten lines. Channels that legitimately have no place
+on a piping drawing (the ambient room temperature, for instance) set
+`on_pid: false` in [`channels.yaml`](config.md), because a warning that is
+always on is one nobody reads.
+
+**The drawing is the authoritative list of tag names.** Mostly they are the
+channel names in lower case; the pressures are the exception, where the P&ID
+says `PT101`–`PT104` and `channels.yaml` says `p101`–`p104`, following what
+LabVIEW logged. That mapping is declared in `TAG_ALIASES` rather than inferred
+by a regular expression, so the divergence is stated rather than hidden.
+
+---
+
+## Refreshing, and the one page that does not
+
+Every page reloads itself every 10 s — except **Logs**. A log that reloads
+while you are reading it takes the line away mid-sentence, so that page is a
+snapshot and says when it was taken.
+
+The refresh is done in JavaScript with a `<noscript>` meta fallback, and it
+**pauses while somebody is typing into the page**. A meta refresh cannot be
+cancelled once parsed, and it would clear a half-entered operator name and
+throw away the click that was about to follow.
+
+---
+
+## Logs
+
+`/logs` tails `<repo>\logs\<service>.log`, newest first, from the folder
+[`config.LOG_DIR`](config.md) names — anchored to the repository rather than
+to whatever directory the service was started from.
+
+Two details worth keeping:
+
+- **It reverses records, not lines.** A traceback is one record of several
+  lines, and a line-by-line reverse prints it inside out — exactly the record
+  somebody opened the page for.
+- **The selectable names are a whitelist.** The name from the URL is looked
+  up among the files that exist, never interpolated into a path. Loopback
+  binding is a second line of defence, not the first.
+
+Rotated files (`.1` … `.5`) are offered beside the current one, because a
+talkative service can have its last hour in `.1` while `caen.log` looks
+nearly empty.
+
+---
+
+## What it deliberately does not do
+
+- **No JavaScript framework, no build step, no bundler.** The whole UI is
+  Jinja templates and one small script.
+- **No database access.** Retained MQTT only, so every page answers when
+  PostgreSQL does not.
+- **No validation of control values.** Ranges live in `channels.yaml` and are
+  enforced by the service that owns the port. Duplicating them here would
+  mean two numbers to keep in step, and the copy in the config is the one
+  that counts.
+- **No instrument handles.** The web process could not write to hardware if
+  it tried.
