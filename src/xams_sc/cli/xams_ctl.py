@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..config import CONFIG_DIR, ConfigError, load
+from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
 
 # Started in this order; stopped in reverse, so sinks outlive the producers
 # and the last measurements are archived rather than dropped.
@@ -37,7 +37,7 @@ from ..config import CONFIG_DIR, ConfigError, load
 SERVICES = ["sinks", "cdaq", "caen", "lakeshore", "ups", "derived", "alarms",
             "webui"]
 
-PID_DIR = Path("logs")
+PID_DIR = LOG_DIR
 
 
 SERVICE_PREFIX = "XAMS-"

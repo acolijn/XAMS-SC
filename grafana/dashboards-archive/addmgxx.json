@@ -22,6 +22,10 @@
   "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "xams-postgres"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -83,6 +87,7 @@
         "y": 0
       },
       "id": 1,
+      "interval": "10s",
       "options": {
         "legend": {
           "calcs": [],
@@ -100,6 +105,10 @@
       "targets": [
         {
           "dataset": "xams",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "xams-postgres"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -193,6 +202,7 @@
         "y": 0
       },
       "id": 2,
+      "interval": "10s",
       "options": {
         "legend": {
           "calcs": [],

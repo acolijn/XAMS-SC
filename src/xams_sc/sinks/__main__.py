@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 from ..bus import Bus
-from ..config import CONFIG_DIR, ConfigError, load
+from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
 from ..model import ServiceState, utcnow
 from ..service import SingleInstance, setup_logging
 from .alarm_writer import AlarmWriter
@@ -83,7 +83,7 @@ def main(argv=None) -> int:
     # Duplication here is worse than for a driver: two drivers fighting over an
     # instrument fail loudly, whereas two writers succeed quietly and corrupt
     # the archive in a way that only shows up as a row count.
-    lock = SingleInstance("sinks", Path("logs"))
+    lock = SingleInstance("sinks", LOG_DIR)
     if not lock.acquire():
         log.critical(
             "FATAL: another sinks process is already running (lock: %s). "
