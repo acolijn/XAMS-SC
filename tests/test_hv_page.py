@@ -76,6 +76,32 @@ def page(monkeypatch):
     return render
 
 
+@pytest.fixture
+def page_html(monkeypatch):
+    """Like `page`, but returns the whole page and lets VSET be set too."""
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: FakeBus())
+    monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
+    app = app_module.create_app()
+    state = app.state.system
+
+    def render(stat_word, vmon, vset):
+        def channel(name):
+            if name.endswith("_stat"):
+                return None if stat_word is None else                     view(name, float(stat_word), "bits")
+            if name.endswith("_vset"):
+                return view(name, vset)
+            if name.endswith("_imon"):
+                return view(name, 0.0, "uA")
+            return view(name, vmon)
+
+        monkeypatch.setattr(state, "channel", channel)
+        response = TestClient(app).get("/hv")
+        assert response.status_code == 200
+        return response.text
+
+    return render
+
+
 def status_cells(html):
     """The rendered Status column, one entry per channel row.
 
@@ -177,3 +203,96 @@ class TestFaultsAndGaps:
         """With no STAT the page must NOT fall back to inferring from the
         voltage. That inference is the bug this whole change removes."""
         assert page(stat_word=None, vmon=-99.8) == ["no reading"] * 8
+
+
+def armed_warnings(html):
+    """The red banners only — NOT the whole page.
+
+    The explanatory text under the controls also contains the phrase
+    "setpoint above zero", so searching the page matched the help rather than
+    the warning and three of these tests failed on a page that was correct.
+    The same mistake as searching an email for "ON" and matching its own
+    glossary.
+    """
+    import re
+    return re.findall(r'<div class="flash bad".*?</div>', html, re.S)
+
+
+class TestTheArmedWarning:
+    """"Flipping the enable would ramp straight to it" must only appear for a
+    channel whose switch is actually OFF.
+
+    It asked `is_energised` (bit 0) instead of `is_disabled` (bit 10), so a
+    channel that was switched on but not energised — the ordinary state while
+    loading a setpoint — was reported as dangerous to enable. It was already
+    enabled. The warning told the operator to undo the thing they had just
+    correctly done, about a hazard that did not exist.
+    """
+
+    def test_a_disabled_channel_with_a_setpoint_is_flagged(self, page_html):
+        banners = armed_warnings(page_html(stat_word=1024, vmon=0.0,
+                                           vset=-2250.0))
+
+        assert any("setpoint above zero" in b for b in banners)
+
+    def test_a_switched_on_channel_with_a_setpoint_is_NOT_flagged(self, page_html):
+        """The bug. Switch on, not energised, setpoint loaded and waiting —
+        which is exactly what §10a's procedure asks the operator to do."""
+        assert armed_warnings(page_html(stat_word=0, vmon=0.0,
+                                        vset=100.0)) == []
+
+    def test_an_energised_channel_with_a_setpoint_is_NOT_flagged(self, page_html):
+        assert armed_warnings(page_html(stat_word=1, vmon=100.0,
+                                        vset=100.0)) == []
+
+    def test_a_disabled_channel_at_zero_is_NOT_flagged(self, page_html):
+        """Zero is the resting state the invariant guarantees; there is
+        nothing to warn about."""
+        assert armed_warnings(page_html(stat_word=1024, vmon=0.0,
+                                        vset=0.0)) == []
+
+
+class TestOnlyUsableBoxesAreOffered:
+    """§10a: a channel whose switch is off cannot hold a setpoint above zero.
+
+    Offering a box for one, letting it be filled, and then refusing it is how
+    a single click on "load defaults" turned into a column of error messages.
+    The box is disabled instead — and a disabled input is not submitted at
+    all, so "apply" cannot carry a value that was always going to fail.
+    """
+
+    def test_a_switched_off_channel_gets_no_usable_box(self, page_html):
+        html = page_html(stat_word=1024, vmon=0.0, vset=0.0)
+
+        assert 'placeholder="disabled"' in html
+        assert 'name="hv_cathode_vset"' not in html, (
+            "a disabled channel's box would still be submitted")
+
+    def test_a_switched_on_channel_gets_a_box(self, page_html):
+        html = page_html(stat_word=0, vmon=0.0, vset=0.0)
+
+        assert 'name="hv_cathode_vset"' in html
+
+    def test_an_energised_channel_gets_a_box(self, page_html):
+        """Changing a voltage while it is on is allowed — the same
+        plan-and-apply flow, with the board ramping at its own rate."""
+        html = page_html(stat_word=1, vmon=-2250.0, vset=-2250.0)
+
+        assert 'name="hv_cathode_vset"' in html
+
+    def test_a_default_is_only_offered_where_it_could_be_applied(self, page_html):
+        """`load defaults` reads data-default, so a switched-off channel is
+        skipped by construction rather than by a rule in the script."""
+        off = page_html(stat_word=1024, vmon=0.0, vset=0.0)
+        on = page_html(stat_word=0, vmon=0.0, vset=0.0)
+
+        assert "data-default" not in off
+        assert "data-default" in on
+
+    def test_an_unreadable_status_offers_no_box_either(self, page_html):
+        """Not knowing whether a channel can take a setpoint is not a reason
+        to offer one."""
+        html = page_html(stat_word=None, vmon=0.0, vset=0.0)
+
+        assert 'placeholder="no status"' in html
+        assert 'name="hv_cathode_vset"' not in html

@@ -2,11 +2,23 @@
 {% block title %}High voltage{% endblock %}
 {% block content %}
 
-{# Both supplies on one row: four channels each is a short table, and stacking
-   them meant scrolling to compare two boards that are read together. #}
-<div class="grid wide">
+{% if hv_ok %}<div class="flash good" style="margin:0 0 1rem 0">{{ hv_ok }}</div>{% endif %}
+{% if hv_error %}<div class="flash bad" style="margin:0 0 1rem 0">
+  <strong>Refused — nothing was changed for these.</strong> {{ hv_error }}</div>{% endif %}
+
+{# ONE form across both supplies, so "apply" is a single action over every box
+   the operator has filled in - which is what §10a asks for. Empty boxes are
+   left alone, so one channel or eight is the same gesture. #}
+<form method="post" action="/hv/apply" id="setpoints"
+      onsubmit="return confirm('Apply the setpoints you have entered?
+
+Each channel that is energised will ramp to its new value at the board's own rate.');">
+{# STACKED, not side by side. The two supplies shared a row until the table
+   grew a VSET column, a setpoint box and an energise button; eleven columns
+   in half a window is narrower than the content deserves. Full width each,
+   one above the other. #}
 {% for s in supplies %}
-<div class="card">
+<div class="card" style="margin-bottom:1.2rem">
   {% if s.armed %}
   <div class="flash bad" style="margin:.9rem">
     <strong>{{ s.armed|length }} disabled channel{{ '' if s.armed|length == 1 else 's' }}
@@ -24,16 +36,17 @@
     {# Identical in both tables, so the columns line up across the two
        supplies now that they sit next to each other. #}
     <colgroup>
-      <col style="width:5%">    <!-- CH                                        -->
-      <col style="width:23%">   <!-- Channel — 'nai — external NaI detector'   -->
-      <col style="width:11%">   <!-- VSET  — what it was told to hold          -->
-      <col style="width:11%">   <!-- VMON  — what it is doing                  -->
-      <col style="width:10%">   <!-- IMON                                      -->
+      <col style="width:4%">    <!-- CH                                        -->
+      <col style="width:26%">   <!-- Channel — 'nai — external NaI detector'   -->
+      <col style="width:10%">   <!-- VSET  — what it was told to hold          -->
+      <col style="width:9%">    <!-- VMON  — what it is doing                  -->
+      <col style="width:8%">    <!-- IMON                                      -->
       <col style="width:12%">   <!-- Status                                    -->
-      <col style="width:7%">    <!-- MAXV                                      -->
-      <col style="width:6%">    <!-- RUP                                       -->
-      <col style="width:6%">    <!-- RDW                                       -->
-      <col style="width:6%">    <!-- TRIP                                      -->
+      <col style="width:8%">    <!-- Energise                                  -->
+      <col style="width:6%">    <!-- MAXV                                      -->
+      <col style="width:5%">    <!-- RUP                                       -->
+      <col style="width:5%">    <!-- RDW                                       -->
+      <col style="width:5%">    <!-- TRIP                                      -->
       <col>                     <!-- POL                                       -->
     </colgroup>
     <tr>
@@ -41,7 +54,7 @@
       <th class="num">VSET</th>
       <th class="num">VMON</th><th class="num">IMON</th>
       <th>Status</th>
-      <th class="num">MAXV</th><th class="num">RUP</th><th class="num">RDW</th>
+      <th>Energise</th><th class="num">MAXV</th><th class="num">RUP</th><th class="num">RDW</th>
       <th class="num">TRIP</th><th>POL</th>
     </tr>
     {% for c in s.channels %}
@@ -52,12 +65,40 @@
          is doing". A non-zero setpoint on a DISABLED channel is exactly what
          §10a exists to stop, so it is marked here rather than left to be
          discovered by flipping the switch. #}
+      {# Reading above, box below: what it holds now, and what you propose.
+         The box is empty until somebody fills it - an empty box applies
+         nothing, so a page-wide "apply" never moves a channel by accident. #}
       <td class="num {{ 'dim' if not (c.vset and c.vset.healthy) }}">
         {% if c.armed %}<span class="bad"
           title="disabled, but its setpoint is not zero: flipping the enable would ramp straight to this voltage"
           >{{ c.vset.formatted() }}</span>
         {% else %}{{ c.vset.formatted() if c.vset else '—' }}{% endif %}
-        <span class="unit">V</span></td>
+        <span class="unit">V</span>
+        {# A channel whose switch is off cannot take a setpoint (§10a), so its
+           box is disabled rather than left to be filled and refused. A
+           disabled input is not submitted at all, so "apply" never carries a
+           value that was going to fail - which is what turned one wrong click
+           into a column of error messages.
+
+           `data-default` is only emitted for a box that can actually take
+           one, so "load defaults" fills exactly the channels that are ready
+           and silently skips the rest. Flip a switch and the default appears
+           on the next refresh. #}
+        {% if c.switched_off is none %}
+          <input type="text" class="vset-box" disabled
+                 placeholder="no status"
+                 title="the status word cannot be read, so it is not known whether this channel can take a setpoint">
+        {% elif c.switched_off %}
+          <input type="text" class="vset-box" disabled
+                 placeholder="disabled"
+                 title="this channel is switched off at the supply. Flip its enable first - it stays at zero volts until energised - and the default will appear here.">
+        {% else %}
+          <input type="text" name="{{ c.vset_channel }}" form="setpoints"
+                 class="vset-box" inputmode="decimal" placeholder="set V"
+                 data-default="{{ c.default if c.default is not none else '' }}"
+                 aria-label="new setpoint for {{ c.label }}">
+        {% endif %}
+      </td>
       <td class="num {{ 'dim' if not (c.vmon and c.vmon.healthy) }}">
         {{ c.vmon.formatted() if c.vmon else '—' }}
         <span class="unit">V</span></td>
@@ -95,6 +136,18 @@
             title="the enable switch is on, but the output is not energised. It will do nothing until it is switched on.">enabled</span>
         {% endif %}
       </td>
+      {# Energising is its own form, submitted on its own: it is a different
+         decision from moving a setpoint and must not ride along with one. #}
+      <td>
+        {% if c.energised is not none and not c.switched_off %}
+          <button type="submit" form="out-{{ c.vset_channel }}"
+                  class="hv-btn {{ 'off' if c.energised else 'on' }}"
+                  title="{{ 'de-energise this channel' if c.energised else 'energise; it will ramp to its setpoint' }}"
+          >{{ 'turn off' if c.energised else 'turn ON' }}</button>
+        {% else %}
+          <span class="dim" title="enable it at the supply first">&mdash;</span>
+        {% endif %}
+      </td>
       <td class="num dim">{{ c.expect.get('maxv', '—') }}</td>
       <td class="num dim">{{ c.expect.get('rup', '—') }}</td>
       <td class="num dim">{{ c.expect.get('rdw', '—') }}</td>
@@ -105,7 +158,52 @@
   </table>
 </div>
 {% endfor %}
+
+<div class="card" style="margin-top:1.2rem">
+  <div class="body">
+    <button type="button" onclick="loadDefaults()" class="hv-btn">Load defaults</button>
+    <button type="button" onclick="clearBoxes()" class="hv-btn">Clear</button>
+    <button type="submit" form="setpoints" class="hv-btn apply">Apply setpoints</button>
+    <div class="dim" style="font-size:.8rem;margin-top:.6rem">
+      <strong>Load defaults fills the boxes and writes nothing.</strong> Read
+      them, change what you want, then apply. Defaults come from
+      <code>channels.yaml</code>, so they are in git and reviewable rather
+      than remembered (§10a).
+      <br>
+      Only channels whose enable switch is on are filled. A channel that is
+      switched off cannot hold a setpoint above zero, so its box is greyed
+      out rather than offered and then refused — flip the switch and its
+      default appears here.
+    </div>
+  </div>
 </div>
+</form>
+
+{# Outside the setpoint form: one tiny form per channel, so energising is a
+   separate act from applying a voltage. #}
+{% for s in supplies %}{% for c in s.channels %}
+<form method="post" action="/hv/output" id="out-{{ c.vset_channel }}"
+      onsubmit="return confirm({{ ('Turn OFF ' ~ c.label ~ '?' ) if c.energised else ('Energise ' ~ c.label ~ '?
+
+It will ramp to its loaded setpoint.') | tojson }});">
+  <input type="hidden" name="channel" value="{{ c.vset_channel }}">
+  <input type="hidden" name="on" value="{{ '0' if c.energised else '1' }}">
+</form>
+{% endfor %}{% endfor %}
+
+<script>
+// Fills the boxes from channels.yaml. Writes nothing: section 10a wants the
+// operator to see the numbers, change them if they like, and press the
+// button themselves.
+function loadDefaults() {
+  document.querySelectorAll('.vset-box').forEach(function (box) {
+    if (box.dataset.default !== '') box.value = box.dataset.default;
+  });
+}
+function clearBoxes() {
+  document.querySelectorAll('.vset-box').forEach(function (b) { b.value = ''; });
+}
+</script>
 
 <div class="card">
   <h2>What these columns are, and what this page cannot do</h2>

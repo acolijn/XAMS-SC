@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 # here because this is where anyone would look for them.
 from ..hv_status import (  # noqa: F401
     BIT_DISABLED, BIT_ON, FAULT_BITS, STAT_BITS, describe_status, is_disabled,
-    is_enabled, status_faults)
+    is_energised, status_faults)
 
 # A setpoint that reads back further than this from what was asked means the
 # write did not take. 0.5 V is far below anything that matters on a kilovolt
@@ -585,12 +585,24 @@ class CaenService(BaseService):
                                "whether it is enabled is unknown", actor,
                          new=wanted)
             return
-        if wanted != 0 and not is_enabled(word):
+        # is_disabled (bit 10, the front-panel switch), NOT is_energised
+        # (bit 0, the output being energised). This first read bit 0 and so
+        # refused a setpoint to any channel that was switched on but not yet
+        # energised - which is precisely the state the operator is in between
+        # flipping the switch and pressing turn-on, and precisely when they
+        # want to load a setpoint.
+        #
+        # The invariant is about the SWITCH: a channel whose switch is off
+        # keeps VSET 0, because flipping it would ramp straight there. Once
+        # the switch is on, a setpoint may be loaded; energising is a separate,
+        # explicit act that reports the voltage it will ramp to.
+        if wanted != 0 and is_disabled(word):
             self._refuse(
                 name,
-                "this channel is not enabled, so its setpoint must stay at 0 "
-                "(section 10a). Enable it at the supply first - it will come "
-                "up at zero volts - then set the voltage.", actor, new=wanted)
+                "this channel is disabled at the supply, so its setpoint must "
+                "stay at 0 (section 10a). Flip its enable switch first - the "
+                "channel stays at zero volts until it is energised - then set "
+                "the voltage.", actor, new=wanted)
             return
 
         try:
@@ -706,7 +718,7 @@ class CaenService(BaseService):
                     ack_topic=ACK_HV_OUTPUT, action="caen_output")
                 return
 
-            was_on = is_enabled(word)
+            was_on = is_energised(word)
             sent, why = reader.set_output(index, wanted_on)
             after = reader.status(index) if sent else None
 
@@ -730,7 +742,7 @@ class CaenService(BaseService):
         # would train somebody to re-send OFF to a channel already on its way
         # down. So OFF is verified as "the board accepted it", and the state
         # is reported as it is.
-        now_on = is_enabled(after) if after is not None else None
+        now_on = is_energised(after) if after is not None else None
         if wanted_on and now_on is not True:
             self._refuse(
                 name, "asked the channel to turn on, but it did not report ON "

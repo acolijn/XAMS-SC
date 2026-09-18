@@ -111,9 +111,26 @@ class TestTheInvariant:
         ack = send(service, value=-1000.0)
 
         assert ack["ok"] is False
-        assert "not enabled" in ack["reason"]
+        assert "disabled at the supply" in ack["reason"]
         assert service._readers["hv_2"].written == [], (
             "a setpoint reached a disabled channel")
+
+    def test_a_switched_on_but_UNENERGISED_channel_accepts_a_setpoint(self, service):
+        """The rule is about the SWITCH (bit 10), not the output (bit 0).
+
+        This is the state an operator is in between flipping the enable and
+        pressing turn-on, and it is exactly when they want to load a setpoint:
+        load defaults, read them, adjust, apply, and only then energise.
+
+        The first version of the rule read bit 0 and refused here - which made
+        the intended sequence impossible, while looking like a safety feature.
+        """
+        service._readers["hv_2"].stat = 0        # neither bit: switch on, off
+
+        ack = send(service, value=-1000.0)
+
+        assert ack["ok"] is True
+        assert service._readers["hv_2"].written == [1000.0]
 
     def test_zero_IS_allowed_on_a_disabled_channel(self, service):
         """This is how the invariant gets established on a channel whose
