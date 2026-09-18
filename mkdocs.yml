@@ -79,7 +79,6 @@ plugins:
 nav:
   - Home: index.md
   - Installation: install.md
-  - Project status: status.md
   - Operating:
       - operating/index.md
       - The web interface: operating/webui.md
@@ -90,6 +89,17 @@ nav:
       - Backup and restore: operating/backup.md
       - Email and reports: operating/email.md
       - Emergency card: operating/emergency.md
+  - Grafana:
+      - grafana/index.md
+      - Editing dashboards: grafana/dashboards.md
+      - Drift test: grafana/drift.md
+  - Reference:
+      - Command line: reference/cli.md
+      - Channels: reference/channels.md
+      - Alarms: reference/alarms.md
+      - Hardware: reference/hardware.md
+      - Python API: reference/api.md
+  - Project status: status.md
   - Software:
       - Architecture: software/architecture.md
       - Topic contract: software/topics.md
@@ -105,16 +115,6 @@ nav:
       - UPS: drivers/ups.md
       - Derived channels: drivers/derived.md
       - Writing a new driver: drivers/writing.md
-  - Grafana:
-      - grafana/index.md
-      - Editing dashboards: grafana/dashboards.md
-      - Drift test: grafana/drift.md
-  - Reference:
-      - Command line: reference/cli.md
-      - Channels: reference/channels.md
-      - Alarms: reference/alarms.md
-      - Hardware: reference/hardware.md
-      - Python API: reference/api.md
   - Decisions:
       - Design specification: DESIGN.md
       - Options and rationale: OPTIONS.md
