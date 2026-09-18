@@ -363,7 +363,6 @@
         "type": "grafana-postgresql-datasource",
         "uid": "xams-postgres"
       },
-      "description": "NOT SLPM. The LabVIEW front panel label is wrong (§4.2).",
       "fieldConfig": {
         "defaults": {
           "color": {
