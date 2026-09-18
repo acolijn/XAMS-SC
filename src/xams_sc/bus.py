@@ -54,6 +54,11 @@ ACK_LS_RANGE = "xams/ack/lakeshore/range"
 # being down: it is in the JSONL archive either way.
 TOPIC_AUDIT = "xams/audit"
 
+# The nightly backup's last result, published RETAINED by tools/backup.ps1 so
+# that anything wanting to know can ask the broker rather than read a file on
+# the lab PC (section 2.1).
+TOPIC_BACKUP = "xams/backup/status"
+
 
 class Bus:
     """A thin wrapper over paho-mqtt with an outage buffer.

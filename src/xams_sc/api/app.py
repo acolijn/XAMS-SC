@@ -190,6 +190,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     faults=state.known_faults(),
                     flow=state.flow_total(),
                     drift=drift.get(),
+                    backup=state.backup_status(),
                     lakeshore=lakeshore_view(),
                     operator=request.cookies.get(OPERATOR_COOKIE, ""),
                     ls_ok=request.query_params.get("ls_ok"),

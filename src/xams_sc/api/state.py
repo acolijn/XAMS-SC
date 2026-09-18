@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_ALARM,
+from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_ALARM, TOPIC_BACKUP,
                    TOPIC_FLOW_RESET, TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS,
                    Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
@@ -85,6 +85,7 @@ class SystemState:
         self._flow_gaps: float = 0.0
         self._flow_ack: dict | None = None
         self._acks: dict[str, dict] = {}
+        self._backup: dict | None = None
         self.started = utcnow()
 
     # ---------------------------------------------------------------- inputs
@@ -208,6 +209,49 @@ class SystemState:
         except ValueError:
             pass
 
+    def _on_backup(self, topic: str, payload: str) -> None:
+        try:
+            with self._lock:
+                self._backup = json.loads(payload)
+        except ValueError:
+            pass
+
+    def backup_status(self, overdue_hours: float = 30.0) -> dict:
+        """What the nightly backup last did (docs/operating/backup.md).
+
+        Returns {"state": ok|overdue|failed|unknown, "detail", "age_h"}.
+
+        **`unknown` is not `ok`.** Nothing published means the backup has never
+        run, or its retained message was cleared - not that all is well. The
+        classic way to lose data is a backup that stopped months ago and said
+        nothing, so the absence of news is reported as an absence, never as
+        good news.
+
+        `overdue` at 30 hours: a daily job that has not reported for more than
+        a day and a bit has missed one, and one missed night is worth a look
+        before it becomes thirty.
+        """
+        with self._lock:
+            status = dict(self._backup) if self._backup else None
+        if status is None:
+            return {"state": "unknown", "age_h": None,
+                    "detail": "the backup has never reported"}
+
+        age_h = None
+        try:
+            age_h = (utcnow() - parse_iso(status["t"])).total_seconds() / 3600.0
+        except Exception:
+            pass
+
+        detail = str(status.get("detail") or "")
+        if not status.get("ok"):
+            return {"state": "failed", "age_h": age_h,
+                    "detail": detail or "the last run failed"}
+        if age_h is not None and age_h > overdue_hours:
+            return {"state": "overdue", "age_h": age_h,
+                    "detail": "last success %.0f hours ago: %s" % (age_h, detail)}
+        return {"state": "ok", "age_h": age_h, "detail": detail}
+
     def _on_flow_ack(self, topic: str, payload: str) -> None:
         try:
             self._flow_ack = json.loads(payload)
@@ -215,6 +259,7 @@ class SystemState:
             pass
 
     def start(self) -> None:
+        self.bus.subscribe(TOPIC_BACKUP, self._on_backup)
         self.bus.subscribe("xams/ack/derived/flow_reset", self._on_flow_ack)
         self.bus.subscribe(ACK_LS_SETPOINT, self._on_ack)
         self.bus.subscribe(ACK_LS_RANGE, self._on_ack)

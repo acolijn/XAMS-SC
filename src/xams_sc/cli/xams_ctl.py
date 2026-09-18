@@ -300,41 +300,57 @@ def cmd_status(args) -> int:
     except Exception as exc:
         print(f"  broker    unreachable — {exc}")
 
+    _print_backup_status(args)
     _print_dashboard_drift()
     return 0
 
 
-def _print_dashboard_drift() -> None:
-    """Say so when Grafana and git have diverged (§12).
+def _print_backup_status(args) -> None:
+    """The nightly backup's last result, from its retained topic.
 
-    Drift is otherwise silent until somebody thinks to check, and a dashboard
-    that exists only in Grafana's database is lost when that database is.
-    Printed here because this is the command that gets run daily.
-
-    Never fatal and never noisy: Grafana being down or unconfigured means the
-    question cannot be answered, not that something is wrong.
+    Read from the broker rather than from `data/.backup-stamp`, so this
+    reports what the backup actually published rather than what a file on
+    this disk claims. Never fatal.
     """
-    from ..grafana import check
+    from ..bus import TOPIC_BACKUP, Bus
+    from ..model import parse_iso, utcnow
 
-    result = check()
-    if result["state"] == "ok":
-        # Said out loud rather than passed over in silence: "nothing printed"
-        # is also what a check that never ran looks like.
-        print(f"\n  grafana   dashboards saved to git ({len(result['dashboards'])})")
+    seen: dict[str, str] = {}
+    try:
+        bus = Bus(client_id="xams-ctl-backup", host=args.broker, port=args.port)
+        bus.subscribe(TOPIC_BACKUP, lambda t, p: seen.__setitem__(t, p))
+        bus.connect()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not bus.connected:
+            time.sleep(0.1)
+        time.sleep(1.0)
+        bus.disconnect()
+    except Exception:
         return
-    if result["state"] == "unknown":
-        # Only worth a line when it looks like it was meant to work.
-        if "no Grafana token" not in result["detail"]:
-            print(f"\n  grafana   drift unknown — {result['detail']}")
+
+    if not seen:
+        # Silence here would read as "fine". It is not: it means the backup
+        # has never reported, and the archive is on one disk.
+        print("\n  backup    NEVER REPORTED - the archive is on this PC only")
+        print("            .\\tools\\backup.ps1")
         return
-    print(f"\n  grafana   NOT SAVED TO GIT — {result['detail']}")
-    print("            a dashboard only in Grafana is lost with Grafana:")
-    # The full command, with the venv interpreter. `.\tools\save_dashboard.py`
-    # goes through the Windows py launcher, which runs a different Python and
-    # swallows the script's stderr — so a failed run looks like a successful
-    # one. No --password: --save reads, and uses the read-only token.
-    print("            .\\.venv\\Scripts\\python.exe "
-          "tools\\save_dashboard.py --save")
+
+    try:
+        status = json.loads(next(iter(seen.values())))
+        age_h = (utcnow() - parse_iso(status["t"])).total_seconds() / 3600.0
+    except Exception:
+        print("\n  backup    unparseable status")
+        return
+
+    detail = status.get("detail", "")
+    if not status.get("ok"):
+        print(f"\n  backup    FAILED - {detail}")
+        print("            .\\tools\\backup.ps1")
+    elif age_h > 30:
+        print(f"\n  backup    OVERDUE - last success {age_h:.0f} hours ago")
+        print("            .\\tools\\backup.ps1")
+    else:
+        print(f"\n  backup    ok, {age_h:.1f} h ago ({detail})")
 
 
 def _print_bus_status(args) -> None:

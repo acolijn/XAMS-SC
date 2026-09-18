@@ -71,6 +71,21 @@
       {# Dashboard drift rides along here rather than taking a card of its own:
          it is a one-line housekeeping fact, and a whole panel overstated it. #}
       <tr>
+        <td>Nightly backup</td>
+        <td class="num">
+          {% if backup.state == 'ok' %}
+            <span class="dot good"></span><span class="good">
+              {{ '%.0f h ago'|format(backup.age_h) if backup.age_h is not none else 'ok' }}</span>
+          {% elif backup.state == 'overdue' %}
+            <span class="dot warn"></span><span class="warn">overdue</span>
+          {% elif backup.state == 'failed' %}
+            <span class="dot bad"></span><span class="bad">failed</span>
+          {% else %}
+            <span class="dot bad"></span><span class="bad">never reported</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
         <td>Grafana dashboards</td>
         <td class="num">
           {% if drift.state == 'ok' %}
@@ -86,6 +101,11 @@
     <div class="note">
       A power event is one of the few things that can end a run, which is why
       the smallest service in the system earns its place (§7.4).
+      {% if backup.state != 'ok' %}
+        <br><span class="{{ 'warn' if backup.state == 'overdue' else 'bad' }}">
+          Backup: {{ backup.detail }}</span> — until it runs, the measurement
+        archive exists only on this machine.
+      {% endif %}
       {% if drift.state == 'drift' %}
         <br><span class="bad">{{ drift.detail }}</span> — a dashboard that
         exists only in Grafana is lost with Grafana:
