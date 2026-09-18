@@ -278,6 +278,32 @@ channels:
   - {name: ls_heater_2, device: lakeshore, phys: "2", kind: status, unit: percent,
      description: "Lake Shore heater output 2"}
 
+  # The control setpoints, READ. The loop runs in the instrument; this only
+  # records what it was told to hold, so the landing page can show the
+  # temperature next to the temperature that was asked for. A setpoint sitting
+  # where nobody can see it is how a heater ends up chasing a number somebody
+  # typed last month.
+  #
+  # Reading these is not the control path (section 10) and does not depend on
+  # it: `SETP?` is a query, and the driver has no SET command in it.
+  #
+  # `limits` is the SOFTWARE write range (section 8.1) and it is what makes a
+  # setpoint writable at all: a channel with no limits refuses every write,
+  # because a range nobody specified is not permission to write anything.
+  #
+  # DELIBERATELY CONSERVATIVE. The working points are -90 and -100 C, and the
+  # floor is LN2. The ceiling is 0 C, which covers all cryogenic operation and
+  # stops a mistyped sign warming the cryostat: -25 typed as 25 is refused
+  # rather than obeyed. Warming to ambient is a real procedure but a rare and
+  # consequential one, and it should take a deliberate edit of this line
+  # rather than a number typed into a web form.
+  - {name: ls_setpoint_1, device: lakeshore, phys: "1", kind: setpoint, unit: C,
+     limits: {min: -196.0, max: 0.0},
+     description: "Lake Shore setpoint, output 1"}
+  - {name: ls_setpoint_2, device: lakeshore, phys: "2", kind: setpoint, unit: C,
+     limits: {min: -196.0, max: 0.0},
+     description: "Lake Shore setpoint, output 2"}
+
   # Heater output in watts, derived from the percentage above.
   #
   #     volts = percent / 100 * full_scale_v

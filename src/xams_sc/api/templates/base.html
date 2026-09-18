@@ -117,7 +117,11 @@ pre { margin:0; padding:.9rem; overflow-x:auto; font-size:.8rem; line-height:1.4
   flex:1; min-width:0; padding:.35rem .5rem; font:inherit; font-size:.85rem;
   color:var(--text); background:var(--bg); border:1px solid var(--line);
   border-radius:3px; }
-.reset-form input:focus { outline:none; border-color:var(--dim); }
+.reset-form input:focus, .reset-form select:focus {
+  outline:none; border-color:var(--dim); }
+.reset-form select {
+  padding:.35rem .5rem; font:inherit; font-size:.85rem; color:var(--text);
+  background:var(--bg); border:1px solid var(--line); border-radius:3px; }
 .reset-form button {
   padding:.35rem .9rem; font:inherit; font-size:.85rem; font-weight:600;
   color:var(--text); background:var(--panel); border:1px solid var(--line);

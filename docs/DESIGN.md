@@ -1029,9 +1029,25 @@ Requirements:
 - **The whole run is audited**, step by step, not merely as "procedure executed".
 - A procedure that is edited is a change to a file in git, reviewable like code.
 
-### Open decision
+### Decided: the heaters are cut on a `pmain` hihi, and on nothing else
 
-The existing LabVIEW system performs protective actions in software: a "Shut off heater if Alarm is active" switch and a `KILL VOLTAGE` button. **TBD** — reproduce as-is, or move into hardware. Reproducing it is defensible; doing so without noticing the choice is not. Decide before the control path is implemented.
+The existing LabVIEW system performs protective actions in software: a "Shut off heater if Alarm is active" switch and a `KILL VOLTAGE` button.
+
+**Decided 18 September 2026: the heaters are switched OFF when `pmain` reaches its `hihi` threshold (2.5 bar). That is the only condition, and it is the only automatic actuation anywhere in this system.**
+
+The reasoning is the physics, and it is worth writing down because the direction is not obvious from the alarm name. Cutting the heater lets the cryostat run colder; colder xenon recondenses; recondensing xenon drops the pressure. **The wanted direction in this emergency is more cooling, not less**, and cutting the heater is how the software can move that way. It is not a temperature action that happens to be triggered by a pressure alarm — it is a pressure action.
+
+**Narrower than LabVIEW's, deliberately.** The original switch fired on *any* active alarm. A thermocouple going stale, a UPS on battery or a gate current drifting would all have cut the heaters, none of which is helped by doing so, and each of which teaches the operator that the system does surprising things. The trigger here is one channel at one threshold.
+
+Three properties this must have, because each failure is worse than not having the feature:
+
+- **It latches.** Once cut, the heaters stay off until a person puts them back. Restoring them because the pressure dipped back under 2.5 bar would drive exactly the oscillation that got us there.
+- **A failed write is loud.** If the command cannot be delivered, that is an alarm in its own right, at the severity of the condition that prompted it. Silence must never be mistaken for "the heaters are off".
+- **It is audited like every other write** (rule 5): who or what, when, previous value, new value.
+
+**This is not an interlock, and must not be described as one.** It depends on the broker being up, the alarm service being alive, the reading being fresh and the threshold being right, and it fails silently if any of those is untrue — which is precisely what rule 1 says a protective system may not do. It is a **software backup that acts faster than a person can**, and where the pressure excursion is genuinely dangerous the protection belongs in hardware, wired from a gauge trip. Having this must not be allowed to postpone that.
+
+`KILL VOLTAGE` is a separate question about the CAEN supplies and **remains TBD** (§16). It is not settled by the above.
 
 ---
 

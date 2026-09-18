@@ -7,10 +7,19 @@ tutorials and in much example code; on this system it would expose the control
 surface to the building network. Every bind address is explicit, and loopback
 is the only accepted value without a recorded decision to the contrary (§8).
 
-**Read-only.** Nothing here writes to an instrument. The control surface is
-milestone 8 and needs §10's open decision resolved first. The one action the
-UI offers is the flow-integrator reset, which changes a record rather than
-any hardware, and which is audited like any other control action (§7.5).
+**Almost everything here is read-only.** Three things are not:
+
+  * the flow-integrator reset, which changes a record rather than hardware
+    (§7.5)
+  * the Lake Shore setpoint, on output 1
+  * the Lake Shore heater range, on output 1
+
+The last two write to an instrument (§10). This module validates none of it
+beyond "is that a number": the range, the connection, the read-back and the
+audit record all belong to the service that owns the port, so a command from
+this page is treated exactly like one from the CLI. Duplicating the limits
+here would mean two numbers to keep in step, and the copy in channels.yaml is
+the one that counts.
 
 Deliberately plain: server-rendered HTML, a meta refresh, no JavaScript
 framework and no build step. In three years a student must be able to change
@@ -29,7 +38,8 @@ from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from ..bus import Bus
+from ..bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_LS_RANGE,
+                   TOPIC_LS_SETPOINT, Bus)
 from ..config import load
 from ..hv_status import describe_status, is_enabled, status_faults
 from ..grafana import DriftWatcher
@@ -81,6 +91,15 @@ def check_mimic_tags(config) -> list[str]:
     return problems
 
 
+def _redirect_ls(error: str | None, ok: str | None = None):
+    """Back to the overview, carrying what happened. POST then redirect: a
+    refresh must not repeat a write to an instrument."""
+    from urllib.parse import quote
+    if error:
+        return RedirectResponse("/?ls_error=" + quote(error), status_code=303)
+    return RedirectResponse("/?ls_ok=" + quote(ok or "done"), status_code=303)
+
+
 def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
     # The INITIAL configuration only. Handlers read `state.config`, which is
     # replaced on `xams-ctl reload` — a description or a unit edited in
@@ -123,9 +142,68 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     faults=state.known_faults(),
                     flow=state.flow_total(),
                     drift=drift.get(),
+                    lakeshore=lakeshore_view(),
+                    ls_ok=request.query_params.get("ls_ok"),
+                    ls_error=request.query_params.get("ls_error"),
                     reset=request.query_params.get("reset"),
                     reset_total=request.query_params.get("total"),
                     ups=state.channels("ups"))
+
+    def lakeshore_view():
+        """The Lake Shore as the landing page shows it (§8.1).
+
+        Sensors and outputs are listed SEPARATELY rather than paired up. Which
+        input drives which output is set by OUTMODE on the instrument and is
+        not read here, so pairing them on the page would be a guess presented
+        as a fact — and a convincing one, since output 1's setpoint and tt401
+        currently agree to a millikelvin.
+        """
+        return {
+            "sensors": [state.channel(n) for n in ("tt401", "tt402")],
+            "outputs": [
+                {"n": n,
+                 "setpoint": state.channel("ls_setpoint_%d" % n),
+                 "percent": state.channel("ls_heater_%d" % n),
+                 "watts": state.channel("ls_heater_%d_w" % n)}
+                for n in (1, 2)],
+        }
+
+    @app.post("/lakeshore/setpoint")
+    def lakeshore_setpoint(request: Request, value: str = Form(""),
+                           by: str = Form("")):
+        """Change the Lake Shore setpoint (§10).
+
+        This page validates NOTHING beyond "is it a number". The range, the
+        instrument being connected, the read-back and the audit record all
+        live in the service that owns the port, so a command from the CLI
+        gets exactly the same treatment as one from this form. Duplicating
+        the range here would mean two numbers to keep in step, and the copy
+        in channels.yaml is the one that counts.
+        """
+        who = (by or "").strip() or "webui (unnamed)"
+        try:
+            wanted = float((value or "").strip())
+        except ValueError:
+            return _redirect_ls("that is not a number")
+        result = state.command(TOPIC_LS_SETPOINT, ACK_LS_SETPOINT,
+                               {"output": 1, "value": wanted, "by": who})
+        if result.get("ok"):
+            log.warning("setpoint changed to %.3f C by %s", wanted, who)
+            return _redirect_ls(None, "setpoint now %.3f C" % result["new"])
+        return _redirect_ls(result.get("reason", "refused"))
+
+    @app.post("/lakeshore/range")
+    def lakeshore_range(request: Request, range: str = Form(""),
+                        by: str = Form("")):
+        """Switch the heater on (high) or off (§10)."""
+        who = (by or "").strip() or "webui (unnamed)"
+        result = state.command(TOPIC_LS_RANGE, ACK_LS_RANGE,
+                               {"output": 1, "range": (range or "").strip(),
+                                "by": who})
+        if result.get("ok"):
+            log.warning("heater range set to %s by %s", result["new"], who)
+            return _redirect_ls(None, "heater %s" % result["new"])
+        return _redirect_ls(result.get("reason", "refused"))
 
     @app.post("/flow/reset")
     def flow_reset(request: Request, by: str = Form("")):
