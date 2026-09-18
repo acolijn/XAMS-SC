@@ -82,7 +82,10 @@ nav:
   - Project status: status.md
   - Operating:
       - operating/index.md
+      - The web interface: operating/webui.md
       - Starting and stopping: operating/running.md
+      - Routine tasks: operating/tasks.md
+      - Troubleshooting: operating/troubleshooting.md
       - Tests: operating/tests.md
       - Backup and restore: operating/backup.md
       - Email and reports: operating/email.md
