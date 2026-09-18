@@ -94,8 +94,12 @@ ignore.
 
 ## The controls
 
-Everything that can be changed from this interface is on the Overview page.
-There are three things, and nothing else in the system actuates.
+Two pages act on hardware: **Overview** carries the Lake Shore and the flow
+integrator, **High voltage** carries the supplies. Everything below is confirmed
+before it is sent, audited with your name, and answered by the service that owns
+the instrument — never by the web process, which holds no permitted range and no
+instrument handle. A command from this UI and one from `xams-ctl` get identical
+treatment.
 
 ### Lake Shore setpoint
 
@@ -143,12 +147,27 @@ Equivalently, from a terminal:
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl flow-reset --by <you>
 ```
 
-### What cannot be changed here
+### High voltage
 
-The CAEN high-voltage supplies are **read-only** — there is no code in the
-driver that can write a setpoint, and the High voltage page has no controls on
-it. The cDAQ has no output module. The UPS is read through its HID and is not
-commanded. Named procedures (§10) do not exist yet.
+On the [High voltage](#high-voltage) page: setpoints, and energising a channel.
+See that section — it is long enough to belong with the page it describes.
+
+### What cannot be changed here, by design
+
+- **A channel's enable switch.** No such command exists. A hardware gate that
+  software cannot reach is the last thing standing between a bug and an
+  electrode.
+- **`BDCTR`, the board's LOCAL/REMOTE mode.** Front panel only.
+- **`MAXV`, `RUP`, `RDW`, `TRIP`, `ISET`** — the board's own protection. The
+  software displays them and alarms when a board disagrees with `devices.yaml`;
+  it cannot write them (§10 rule 2).
+- **The cDAQ**, which has no output module, and **the UPS**, which is read
+  through its HID and not commanded.
+- **Anything at all on startup or restart.** A restart is invisible to the
+  hardware (§6.1 rule 4).
+
+Named procedures — a reviewed sequence run as one action — are milestone 9 and
+do not exist yet.
 
 ---
 
@@ -194,29 +213,141 @@ it, and a channel that appears nowhere on the drawing.
 
 ## High voltage
 
-Both CAEN supplies, eight channels each: `VMON`, `IMON`, the state, and the
-board's own protection settings. Read-only.
+Both CAEN supplies, eight channels each, stacked one above the other: `VSET`,
+`VMON`, `IMON`, the state, and the board's own protection settings. **This page
+also operates them** — setpoints and energising.
 
-The **Status** column comes from the board's own `STAT` word, **not** from the
-voltage:
+### The three things that decide whether there are volts out
+
+They are separate on purpose, and only the third is a command:
+
+| | changed by | what it does |
+|---|---|---|
+| the board's `BDCTR` mode | **front panel only** | in `LOCAL` the board refuses every remote setpoint |
+| the channel **enable switch** | **front panel only** | clears `DISABLED`. Permits; energises nothing |
+| **turn ON / turn off** | this page, or `xams-ctl hv-on` / `hv-off` | energises a channel that is already enabled; it then ramps to `VSET` |
+
+Nothing in the software can touch the first two, by design. Two hand gates sit
+between code and an electrode, and neither is reachable from here.
+
+### The Status column
+
+From the board's own `STAT` word, never from the voltage. **Four** states:
 
 | shown | meaning |
 |---|---|
-| `ON` | output enabled and putting volts out |
-| `enabled` | output enabled, sitting at **zero volts** — still live |
-| `off` | output disabled (STAT bit 10) |
-| `TRIP`, `INTERLOCK`, … | a fault flag, shown in red in place of the state |
-| `no reading` | the status word could not be read |
+| `disabled` | the front-panel enable switch is off |
+| `enabled` | switch on, output **not energised**. Permitted and inert |
+| `ON 0 V` | energised, sitting at zero. Live, with nothing on it yet |
+| `ON` | energised with volts out |
+| `TRIP`, `INTERLOCK`, … | a fault flag, in red, in place of all four |
 
-**`enabled` is not `off`.** The supplies have a physical enable per channel, and
-a channel can be switched on with its setpoint at zero — one turn of a knob from
-putting volts on an electrode. This page said "off" for exactly that case until
-17 September 2026, because it inferred the state from `VMON > 1` instead of
-asking the board. Treat `enabled` as live.
+**`enabled` is not `off`.** The page showed both as "off" until 17 September
+2026, because it inferred the state from `VMON > 1` instead of asking the board.
 
 The full bitmask is stored as `hv_*_stat`, so the history carries `TRIP`,
-`INTERLOCK`, `OVER_CURRENT` and `OVER_TEMP` too, whether or not anything alarms
-on them yet.
+`INTERLOCK`, `OVER_CURRENT` and `OVER_TEMP` too.
+
+### A VSET in red
+
+A **disabled** channel whose setpoint is not zero, and each supply says so in a
+red banner at the top listing them.
+
+The enable switch is a hand operation and the board ramps to `VSET` the moment
+it is flipped — so a red value is the voltage you would get by touching that
+switch, with no confirmation and no warning. On 18 September 2026 seven of eight
+channels sat like that, the anode at **+4200 V**.
+
+§10a turns *a disabled channel has `VSET` 0* into an invariant precisely so that
+the switch is safe to flip. **Until the red values are zeroed, it is not.**
+Zeroing everything:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-standby --by <you>
+```
+
+### Setting voltages
+
+The boxes in the `set V` column are a **plan**: filling them changes nothing.
+
+1. **Load defaults** fills every box from `channels.yaml` — in git, reviewable,
+   rather than remembered — and **writes nothing**. Read them, change what you
+   want. **Clear** empties the boxes.
+2. **Apply setpoints** writes every box you filled in, as one action, across
+   both supplies. Empty boxes are left alone, so one channel or eight is the
+   same gesture.
+3. Each channel is answered individually: `cathode now -2250.0 V`, or the reason
+   it was refused. A refusal is shown in red as **"Refused — nothing was changed
+   for these"**.
+
+A box is greyed out and cannot be filled when the channel's switch is off: such
+a channel must keep `VSET` 0, so offering the box and then refusing it would be
+theatre. Flip the switch and its default appears.
+
+What the service checks before writing, in order — the page itself checks
+nothing but *is it a number*:
+
+1. it is an enabled `hv_vset` channel, not a monitor;
+2. the value is inside the range in `channels.yaml`. That range carries the
+   polarity: −500 V on the anode is refused as firmly as −3000 V on the cathode;
+3. the channel's **enable switch is on**, unless the value is zero. Zero is
+   always allowed — that is how the invariant gets re-established;
+4. the setpoint is **read back from the board** and must match to within the
+   tolerance. A value above the board's own `MAXV` is refused by the instrument
+   itself, which is the protection working;
+5. the result is published on `xams/ack/caen/vset` and written to the audit log
+   with the old value, the new value and your name.
+
+From a terminal, one channel at a time:
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-set hv_cathode_vset -2250 --by <you>
+```
+
+### Energising a channel
+
+**turn ON** / **turn off**, per channel, each its own button and its own
+confirmation — a separate act from applying a voltage, because it is one.
+
+**Turning on ramps the channel to whatever `VSET` currently holds**, at the
+board's own `RUP`, so the confirmation and the answer both name that voltage:
+*ramping to −2250.0 V*, or *energised at 0 V; nothing will move until a setpoint
+is set*. Turning on at zero is a perfectly reasonable thing to do and moves
+nothing.
+
+**Turning off starts a ramp down** at the board's `RDW`, and the channel reads
+`ON` until it actually reaches zero. That is reported as *ramping down at the
+board's own rate* rather than as a failure — demanding the bit clear at once
+would report a failure for a command that worked, and train somebody to re-send
+*off* to a channel already on its way down.
+
+A channel whose switch is off cannot be energised. The refusal says so and names
+the remedy: flip the enable at the front panel.
+
+```powershell
+.\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-on  hv_cathode_vset --by <you>
+.\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-off hv_cathode_vset --by <you>
+```
+
+With no channel named, `hv-on`, `hv-off` and `hv-standby` act on every
+`hv_vset` channel.
+
+### The safe order
+
+```
+   load defaults, edit          no effect on anything
+   flip the enable by hand      safe: the channel is at 0 V
+   apply setpoints              VSET written, read back, audited
+   turn ON                      the board ramps, at its own rate
+```
+
+### What this page shows but cannot change
+
+`MAXV`, `RUP`, `RDW`, `TRIP` and `POL` are the board's own protection settings,
+displayed from `devices.yaml`. The software alarms when a board disagrees with
+what is recorded and **cannot write any of them** (§8.3, §10 rule 2). Ramp rate,
+trip current and over-voltage limit live on the instrument, and that is what
+keeps this software out of the protection path.
 
 ---
 

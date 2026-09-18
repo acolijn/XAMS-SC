@@ -4,28 +4,42 @@ Monitoring and convenience control of the XAMS slow-control hardware: one NI
 cDAQ-9174 chassis, two CAEN DT1470ET high-voltage supplies, a Lake Shore 335
 and a UPS. Storage, plotting, alarming and a small web UI.
 
-**Current state: milestone 7 largely complete, milestone 8 started, milestone 3
-partial.** The cDAQ, both CAEN supplies, the Lake Shore and the UPS are read and
-logged on the lab PC — 45 channels — with alarms, SMS notification, the flow
-integrator, a week of imported LabVIEW history, a web UI and a live P&I mimic.
+**Current state: milestone 7 largely complete, milestone 8 in progress — the
+Lake Shore and the HV write paths are built — milestone 3 partial.** The cDAQ,
+both CAEN supplies, the Lake Shore and the UPS are read and logged on the lab PC — 45 channels — with alarms, SMS and email
+notification, the flow integrator, a week of imported LabVIEW history, a web UI
+and a live P&I mimic.
 
-**The system is read-only with one exception: the Lake Shore heater.** Its
-setpoint and heater range can be written, on output 1 only — from the web UI or
-by publishing on the bus. That is the first write path (§10), added once §10's
-open decision was resolved on 18 September 2026. Every write is validated
-against the range in `channels.yaml`, **read back from the instrument** before
-it counts as successful, acknowledged on `xams/ack/#` and appended to the audit
-log. A value with no range written down is refused, not permitted.
+**The system reads everything and controls what needs controlling.** Two
+instruments actuate:
 
-**Nothing else actuates.** The cDAQ chassis has no output module, so there is no
-control path to have; the CAEN high-voltage supplies and the UPS are read only.
-There is no automatic actuation anywhere yet: the decided heater cut on a
-`pmain` hihi is specified but **not built**, and `KILL VOLTAGE` remains an open
-question. Procedures (named sequences) are still milestone 9.
+- **Lake Shore 335** — setpoint and heater range, output 1.
+- **Both CAEN DT1470ET supplies** — `VSET` per channel, and energising a
+  channel on or off.
 
-**This is not a protection system.** Interlocks belong in hardware and limits
-belong in the instrument, which the software verifies and alarms on but does not
-write (§10 rules 1–2).
+Every write is validated against `channels.yaml`, **read back from the
+instrument** before it counts as successful, acknowledged on `xams/ack/#` and
+appended to the audit log with the old value, the new value and who did it. A
+channel with no range written down refuses everything: a range nobody recorded
+is not permission to put volts on an electrode.
+
+**Two gates stay in your hands, and no command can reach either.** A board must
+be switched to `REMOTE` at its front panel, and a channel must be enabled at its
+front panel, before software can do anything at all. Enabling a channel is a
+hand operation on purpose — which is what makes the invariant of §10a matter:
+**a channel that is not enabled holds `VSET` 0**, so flipping its switch always
+brings it up at zero volts and raising voltage is always a deliberate, audited,
+software step.
+
+**Protection is never written.** `MAXV`, `RUP`, `RDW`, `TRIP` and `ISET` live on
+the instrument; the software displays them and alarms when a board disagrees
+with what is recorded, and no code exists that can change them. Nothing actuates
+on startup or restart, and there is no automatic actuation anywhere — the
+decided heater cut on a `pmain` hihi (§10) is specified but not built, and
+`KILL VOLTAGE` remains open. Named procedures are milestone 9.
+
+**This is not a protection system.** Interlocks belong in hardware, wired from a
+real gauge trip (§10 rule 1).
 
 LabVIEW is installed and recoverable but no longer running. See
 [Project status](status.md).

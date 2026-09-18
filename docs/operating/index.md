@@ -58,20 +58,32 @@ dashboard.
 
 ## What this system will and will not do to the hardware
 
-**One instrument is writable: the Lake Shore heater** — setpoint and heater
-range, on output 1, from [the Overview page](webui.md#the-controls) or over the
-bus. Every write is range-checked against `channels.yaml`, read back from the
-instrument, acknowledged and audited.
+**It writes to two instruments.** The Lake Shore heater — setpoint and range, on
+output 1 — and both CAEN supplies: `VSET` per channel, and energising a channel
+on or off. How to drive either is in
+[The web interface](webui.md#the-controls); the same commands exist as
+`xams-ctl hv-set`, `hv-standby`, `hv-on`, `hv-off` and `flow-reset`.
 
-**Nothing else actuates.** The CAEN supplies are read with `CMD:MON` only and
-there is deliberately no code that can write a setpoint; the cDAQ chassis has no
-output module; the UPS is read, not commanded. There is no automatic actuation
-anywhere — the decided heater cut on a `pmain` hihi (§10) is specified but not
-built, and `KILL VOLTAGE` remains open. Named procedures are milestone 9.
+Every write is range-checked against `channels.yaml`, **read back from the
+instrument** before it counts as successful, acknowledged on the bus and
+recorded in the audit log with the old value, the new value and who did it —
+including the writes that were refused.
 
-**This is not a protection system.** Interlocks belong in hardware and limits
-belong in the instrument, which the software verifies at startup and alarms on,
-but does not write (§10 rules 1–2).
+**Two hand gates stay out of software's reach.** A board must be in `REMOTE` at
+its front panel, and a channel must be enabled at its front panel. No command
+exists for either. Hence §10a's invariant — **a disabled channel holds `VSET`
+0** — which is what makes flipping an enable switch safe: it always brings a
+channel up at zero volts.
+
+**Nothing else actuates.** The cDAQ has no output module; the UPS is read, not
+commanded; the board's protection settings (`MAXV`, `RUP`, `RDW`, `TRIP`,
+`ISET`) are displayed and alarmed on, never written. Nothing actuates on startup
+or restart. There is no automatic actuation anywhere — the decided heater cut on
+a `pmain` hihi (§10) is specified but not built, `KILL VOLTAGE` is open, and
+named procedures are milestone 9.
+
+**This is not a protection system.** Interlocks belong in hardware, wired from a
+real gauge trip (§10 rule 1).
 
 ---
 

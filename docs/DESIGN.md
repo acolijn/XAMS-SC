@@ -1053,8 +1053,13 @@ Three properties this must have, because each failure is worse than not having t
 
 ## 10a. Bringing the high voltage up
 
-**Status: designed, not built.** Written 18 September 2026 from the operating
-problem below. Nothing here exists in code yet.
+**Status: built, 18 September 2026**, except where this section says otherwise.
+Written from the operating problem below, then implemented: `VSET` and
+energising are in the driver, on `/hv` and in `xams-ctl`; the invariant holds on
+both boards. The one part still unbuilt is the **server-side retained plan** —
+setpoints are staged in the page's own boxes and applied as one action, which
+gives the plan-then-apply order but not the shared, reload-proof plan described
+under *Plan, then apply* below.
 
 ### The problem
 
@@ -1139,6 +1144,15 @@ values that has had no effect on any instrument.
 The plan lives **server-side and published retained on the bus**, not in a
 browser tab: two people looking at the page must see the same pending change,
 and a page reload must not silently discard one.
+
+> **Not built as specified.** What `/hv` does today is steps 1–4 with the plan
+> held in the page's own boxes: *Load defaults* fills them from `channels.yaml`
+> and writes nothing, *Apply setpoints* writes every filled box as one action,
+> and *turn ON* is separate from both. The order and the refusals are as
+> designed; what is missing is the shared plan — a second browser sees nothing,
+> and a reload discards what was typed. That is a smaller loss than it looks
+> while one person operates the supplies, and it is the next thing to build if
+> two ever do.
 
 **A plan is discarded when the service restarts** (§6.1 rule 4: restart never
 actuates). A plan that survived a restart and was applied later, by somebody
