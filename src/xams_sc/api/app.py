@@ -91,6 +91,50 @@ def check_mimic_tags(config) -> list[str]:
     return problems
 
 
+OPERATOR_COOKIE = "xams_operator"
+
+
+def safe_next(target: str) -> str:
+    """Where to return after setting the operator.
+
+    Only a path on this site. A redirect target taken from a form is an open
+    redirect if it is used as given - "//evil.example" is a protocol-relative
+    URL, not a path - so anything that is not a single-slash path is thrown
+    away rather than repaired.
+    """
+    target = (target or "/").strip()
+    if not target.startswith("/") or target.startswith("//"):
+        return "/"
+    return target
+
+
+def operator_of(request: Request, submitted: str = "") -> str:
+    """Who is performing this action (section 10 rule 5).
+
+    Taken from a cookie set once, rather than typed before every command.
+    Retyping a name for each setpoint is the kind of friction that gets
+    worked around - by leaving it blank, which costs the audit trail the
+    thing it exists for.
+
+    Still taken on trust: there is no login on this UI, so this identifies
+    a browser, not a person. That is weak and is recorded honestly rather
+    than dressed up. A name given on the request itself wins, so the CLI and
+    the API are unaffected by any of this.
+    """
+    name = (submitted or "").strip()
+    if not name:
+        name = (request.cookies.get(OPERATOR_COOKIE) or "").strip()
+    return name or "webui (unnamed)"
+
+
+def _remember(response, name: str):
+    """Keep the operator name for a year. Harmless if never set."""
+    if name and name != "webui (unnamed)":
+        response.set_cookie(OPERATOR_COOKIE, name, max_age=365 * 24 * 3600,
+                            samesite="lax", path="/")
+    return response
+
+
 def _redirect_ls(error: str | None, ok: str | None = None):
     """Back to the overview, carrying what happened. POST then redirect: a
     refresh must not repeat a write to an instrument."""
@@ -128,6 +172,10 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         return templates.TemplateResponse(request, name, {
             "state": state, "config": state.config, "overall": status,
             "overall_class": css, "alarms": state.active_alarms(),
+            # Site-wide: the operator identifies the session, not one
+            # instrument, and the HV control surface will want the same name
+            # without setting it again (section 10 rule 5).
+            "operator": request.cookies.get(OPERATOR_COOKIE, ""),
             **context})
 
     # ------------------------------------------------------------- pages
@@ -143,6 +191,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     flow=state.flow_total(),
                     drift=drift.get(),
                     lakeshore=lakeshore_view(),
+                    operator=request.cookies.get(OPERATOR_COOKIE, ""),
                     ls_ok=request.query_params.get("ls_ok"),
                     ls_error=request.query_params.get("ls_error"),
                     reset=request.query_params.get("reset"),
@@ -158,6 +207,13 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         as a fact — and a convincing one, since output 1's setpoint and tt401
         currently agree to a millikelvin.
         """
+        # OUTPUT 1 ONLY. Output 2 is not used on this cryostat, and a row
+        # that always reads 0 % against a setpoint nobody acts on is noise on
+        # the page people are meant to scan in one glance (section 8.1).
+        #
+        # It is still READ, still archived, and still on /status - an unused
+        # heater that starts doing something remains worth catching. What
+        # changes here is only that it has no place on the landing page.
         return {
             "sensors": [state.channel(n) for n in ("tt401", "tt402")],
             "outputs": [
@@ -165,8 +221,23 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                  "setpoint": state.channel("ls_setpoint_%d" % n),
                  "percent": state.channel("ls_heater_%d" % n),
                  "watts": state.channel("ls_heater_%d_w" % n)}
-                for n in (1, 2)],
+                for n in (1,)],
         }
+
+    @app.post("/operator")
+    def set_operator(request: Request, operator: str = Form(""),
+                     next: str = Form("/")):
+        """Remember who is at the keyboard, so commands need no name.
+
+        Set from the header, so it can be submitted from any page and has to
+        return to the one it was submitted from.
+        """
+        name = (operator or "").strip()[:40]
+        response = RedirectResponse(safe_next(next), status_code=303)
+        if name:
+            return _remember(response, name)
+        response.delete_cookie(OPERATOR_COOKIE, path="/")
+        return response
 
     @app.post("/lakeshore/setpoint")
     def lakeshore_setpoint(request: Request, value: str = Form(""),
@@ -180,7 +251,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         the range here would mean two numbers to keep in step, and the copy
         in channels.yaml is the one that counts.
         """
-        who = (by or "").strip() or "webui (unnamed)"
+        who = operator_of(request, by)
         try:
             wanted = float((value or "").strip())
         except ValueError:
@@ -196,7 +267,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
     def lakeshore_range(request: Request, range: str = Form(""),
                         by: str = Form("")):
         """Switch the heater on (high) or off (§10)."""
-        who = (by or "").strip() or "webui (unnamed)"
+        who = operator_of(request, by)
         result = state.command(TOPIC_LS_RANGE, ACK_LS_RANGE,
                                {"output": 1, "range": (range or "").strip(),
                                 "by": who})
@@ -222,7 +293,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         POST, then redirect: a GET that mutates would fire on a refresh or a
         prefetch, and this page refreshes itself every ten seconds.
         """
-        who = (by or "").strip() or "webui (unnamed)"
+        who = operator_of(request, by)
         closed = state.reset_flow(who)
         if closed is None:
             log.warning("flow reset by %s was not acknowledged", who)

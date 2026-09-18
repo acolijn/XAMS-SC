@@ -187,3 +187,109 @@ class TestTheCardShowsTheRate:
 
         assert r.status_code == 200
         assert "Integrated flow" in r.text
+
+
+class TestTheOperatorIsRemembered:
+    """§10 rule 5 wants a name on every write. Typing one before each command
+    is the friction people work around by leaving it blank, which costs the
+    audit trail the one thing it exists for — so it is set once and kept."""
+
+    def test_a_remembered_name_is_used_without_being_typed(self, client, bus):
+        client.post("/operator", data={"operator": "ap"})
+        client.post("/flow/reset", data={})          # no name on the command
+
+        payload = next(json.loads(p) for t, p in bus.published
+                       if t == TOPIC_FLOW_RESET)
+        assert payload["by"] == "ap"
+
+    def test_a_name_on_the_request_still_wins(self, client, bus):
+        """The CLI and the API send their own, and must be unaffected."""
+        client.post("/operator", data={"operator": "ap"})
+        client.post("/flow/reset", data={"by": "someone else"})
+
+        payload = next(json.loads(p) for t, p in bus.published
+                       if t == TOPIC_FLOW_RESET)
+        assert payload["by"] == "someone else"
+
+    def test_with_no_operator_set_it_is_recorded_as_unnamed(self, client, bus):
+        client.post("/flow/reset", data={})
+
+        payload = next(json.loads(p) for t, p in bus.published
+                       if t == TOPIC_FLOW_RESET)
+        assert payload["by"] == "webui (unnamed)"
+
+    def test_clearing_the_name_forgets_it(self, client, bus):
+        client.post("/operator", data={"operator": "ap"})
+        client.post("/operator", data={"operator": "  "})
+        client.post("/flow/reset", data={})
+
+        payload = next(json.loads(p) for t, p in bus.published
+                       if t == TOPIC_FLOW_RESET)
+        assert payload["by"] == "webui (unnamed)"
+
+    def test_the_lakeshore_card_shows_only_the_used_output(self, client):
+        """Output 2 is not used on this cryostat, and a row that always reads
+        0 % is noise on a page meant to be scanned in one glance.
+
+        Scoped to the card deliberately: `ls_heater_2` is still read, so its
+        description legitimately appears elsewhere on the page when it is not
+        reporting. Dropping it from this card is a display choice, not a
+        decision to stop monitoring it.
+        """
+        card = client.get("/").text.split("Lake Shore 335")[1].split("</div>")[0]
+
+        assert "output 1" in card
+        assert "output 2" not in card
+
+
+class TestTheOperatorIsSiteWide:
+    """It identifies the session, not one instrument. The HV control surface
+    will want the same name without asking for it again."""
+
+    @pytest.mark.parametrize("path", ["/", "/status", "/hv", "/logs"])
+    def test_every_page_carries_the_operator_control(self, client, path):
+        r = client.get(path)
+
+        assert r.status_code == 200
+        assert 'action="/operator"' in r.text, (
+            "%s cannot set the operator; a control surface added to it later "
+            "would have no name to record" % path)
+
+    def test_it_returns_to_the_page_it_was_set_from(self, client):
+        r = client.post("/operator", data={"operator": "ap", "next": "/hv"},
+                        follow_redirects=False)
+
+        assert r.status_code == 303
+        assert r.headers["location"] == "/hv"
+
+    def test_a_name_set_on_one_page_is_used_on_another(self, client, bus):
+        client.post("/operator", data={"operator": "ap", "next": "/hv"})
+        client.post("/flow/reset", data={})
+
+        payload = next(json.loads(p) for t, p in bus.published
+                       if t == TOPIC_FLOW_RESET)
+        assert payload["by"] == "ap"
+
+
+class TestTheReturnPathCannotLeaveTheSite:
+    """`next` comes from a form, so it is attacker-controlled input."""
+
+    @pytest.mark.parametrize("target", [
+        "//evil.example",            # protocol-relative: NOT a local path
+        "https://evil.example",
+        "http://evil.example/x",
+        "evil.example",
+    ])
+    def test_an_offsite_target_is_discarded(self, client, target):
+        r = client.post("/operator",
+                        data={"operator": "ap", "next": target},
+                        follow_redirects=False)
+
+        assert r.headers["location"] == "/", (
+            "%r was used as a redirect target" % target)
+
+    def test_an_ordinary_path_is_kept(self, client):
+        r = client.post("/operator", data={"operator": "ap", "next": "/status"},
+                        follow_redirects=False)
+
+        assert r.headers["location"] == "/status"
