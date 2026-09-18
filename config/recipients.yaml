@@ -23,3 +23,7 @@ recipients:
     email: r.j.j.vabeek@student.hhs.nl
     phone: ""
     enabled: true
+  - name: Maxime Pierre
+    email: maxime.pierre@nikhef.nl
+    phone: "+33686567868"
+    enabled: true
