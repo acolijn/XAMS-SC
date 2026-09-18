@@ -22,6 +22,12 @@ import yaml
 # Repository root, found relative to this file: src/xams_sc/config.py -> ../../
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = Path(os.environ.get("XAMS_CONFIG_DIR", ROOT / "config"))
+# Logs, pid files and lock files, anchored to the repository rather than to
+# whatever directory a service happened to be started from. A relative "logs"
+# put them wherever the shell was standing: services started from one place
+# and a web UI started from another disagreed about where the logs were, and
+# the Logs tab answered by showing nothing at all.
+LOG_DIR = Path(os.environ.get("XAMS_LOG_DIR", ROOT / "logs"))
 
 VALID_KINDS = {
     "voltage", "current", "rtd", "hv_vmon", "hv_imon", "hv_stat", "hv_vset",

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -41,7 +42,7 @@ from fastapi.templating import Jinja2Templates
 from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
                    ACK_LS_SETPOINT, TOPIC_HV_OUTPUT, TOPIC_HV_VSET,
                    TOPIC_LS_RANGE, TOPIC_LS_SETPOINT, Bus)
-from ..config import load
+from ..config import LOG_DIR, load
 from ..hv_status import (describe_status, is_disabled, is_energised,
                          status_faults)
 from ..grafana import DriftWatcher
@@ -145,6 +146,48 @@ async def _form(request: Request):
 def _short(channel: str) -> str:
     """`hv_cathode_vset` reads as `cathode` in a message to a person."""
     return channel.replace("hv_", "").replace("_vset", "")
+
+
+# `setup_logging` keeps 5 rotated files per service; anything outside this
+# range is not a log this system wrote.
+_ROTATIONS = (1, 2, 3, 4, 5)
+
+# The start of a log line, per the format in `setup_logging`: a date, a time.
+_RECORD = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+
+
+def _log_files() -> dict[str, Path]:
+    """The logs the page may show, by the name it shows them under.
+
+    A whitelist by construction: the selected name is looked up here rather
+    than interpolated into a path, so `?service=../something` selects nothing
+    instead of reading it.
+    """
+    if not LOG_DIR.is_dir():
+        return {}
+    return {p.stem: p for p in sorted(LOG_DIR.glob("*.log"))}
+
+
+def _rotated(path: Path, n: int) -> Path:
+    """`caen.log` -> `caen.log.2`, as RotatingFileHandler names them."""
+    return path.with_name(f"{path.name}.{n}")
+
+
+def _newest_first(lines: list[str]) -> list[str]:
+    """Reverse the log RECORDS, not the lines.
+
+    A traceback is many lines of one record, and reversing line by line
+    prints it inside out — which is exactly the record somebody came to the
+    page to read. Lines that do not start a record stay with the line above
+    them, and a window that opens mid-record keeps its orphan lines together.
+    """
+    records: list[list[str]] = []
+    for line in lines:
+        if _RECORD.match(line) or not records:
+            records.append([line])
+        else:
+            records[-1].append(line)
+    return [line for record in reversed(records) for line in record]
 
 
 def _redirect_hv(error: str | None, ok: str | None = None):
@@ -510,21 +553,45 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                     svg=svg_path.read_text(encoding="utf-8"))
 
     @app.get("/logs", response_class=HTMLResponse)
-    def logs(request: Request, service: str = "alarms", lines: int = 80):
+    def logs(request: Request, service: str = "alarms", lines: int = 80,
+             older: int = 0):
         """The last lines of each service log — saves logging in and hunting
-        for files (§8.1)."""
-        log_dir = Path("logs")
-        available = sorted(p.stem for p in log_dir.glob("*.log"))
-        text = "(no such log)"
-        path = log_dir / f"{service}.log"
-        if path.exists():
+        for files (§8.1).
+
+        Newest first, because the reason anybody opens this page is the most
+        recent thing a service said.
+
+        `older=N` reads the Nth rotated file instead, `<service>.log.N`. The
+        handler writes 10 MB before rotating and keeps 5 of them, so a busy
+        service's last hour can already be in `.log.1` — without this the page
+        showed almost nothing and looked like silence.
+        """
+        # Chosen from the whitelist, never pasted together out of what the URL
+        # said: `logs/{service}.log` reads any .log file on the disk, loopback
+        # binding or not.
+        choices = _log_files()
+        current = choices.get(service)
+        rotations = [n for n in _ROTATIONS
+                     if current is not None and _rotated(current, n).exists()]
+        path = current if not older else (
+            _rotated(current, older) if current is not None
+            and older in _ROTATIONS else None)
+
+        if path is None:
+            text = "(no such log)"
+        elif not path.exists():
+            text = f"({path.name} does not exist — it has not rotated that far)"
+        else:
             try:
                 content = path.read_text(encoding="utf-8", errors="replace")
-                text = "\n".join(content.splitlines()[-lines:])
+                text = "\n".join(_newest_first(content.splitlines()[-lines:]))
             except Exception as exc:
                 text = f"could not read {path}: {exc}"
-        return page(request, "logs.html", available=available,
-                    selected=service, text=text)
+
+        return page(request, "logs.html", available=sorted(choices),
+                    selected=service, text=text, rotations=rotations,
+                    older=older, lines=lines,
+                    read_at=datetime.now().strftime("%H:%M:%S"))
 
     # --------------------------------------------------------------- api
 

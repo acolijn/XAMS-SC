@@ -32,7 +32,7 @@ from pathlib import Path
 import json
 
 from .bus import TOPIC_ACK, TOPIC_RELOAD, Bus
-from .config import Config
+from .config import LOG_DIR, Config
 from .model import Measurement, Quality, ServiceState, utcnow
 
 log = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ class BaseService:
         self.simulate = simulate
 
         self._stop = threading.Event()
-        self._lock = SingleInstance(self.name, lock_dir or Path("logs"))
+        self._lock = SingleInstance(self.name, lock_dir or LOG_DIR)
         self._window: dict[str, list[Measurement]] = {}
         self._backoff = 1.0
         self._state = ServiceState.STARTING
@@ -403,7 +403,7 @@ def setup_logging(service: str, level: str = "INFO", log_dir: Path | None = None
     """Rotating file plus stdout. Every line carries the service name (§12)."""
     from logging.handlers import RotatingFileHandler
 
-    d = log_dir or Path("logs")
+    d = log_dir or LOG_DIR
     d.mkdir(parents=True, exist_ok=True)
 
     fmt = logging.Formatter(

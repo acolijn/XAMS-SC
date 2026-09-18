@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Logs{% endblock %}
+{# No auto-refresh, unlike every other page: a log that reloads under you
+   while you are reading it loses the line you were reading. The cost is that
+   this page can be stale without looking stale, which is what the read-at
+   stamp below is for. #}
 {% block refresh %}{% endblock %}
 {% block content %}
 <div class="card">
@@ -9,6 +13,19 @@
       <a href="/logs?service={{ name }}"
          style="margin-right:.8rem;{{ 'font-weight:600' if name == selected }}">{{ name }}</a>
     {% endfor %}
+  </div>
+  <div class="body dim">
+    Newest first. Read at {{ read_at }} — this page does not refresh itself;
+    reload it.
+    {% if rotations %}
+      <br>Older, before the last rotation:
+      <a href="/logs?service={{ selected }}&amp;lines={{ lines }}"
+         style="margin-right:.6rem;{{ 'font-weight:600' if not older }}">current</a>
+      {% for n in rotations %}
+        <a href="/logs?service={{ selected }}&amp;older={{ n }}&amp;lines={{ lines }}"
+           style="margin-right:.6rem;{{ 'font-weight:600' if older == n }}">.{{ n }}</a>
+      {% endfor %}
+    {% endif %}
   </div>
   <pre>{{ text }}</pre>
 </div>

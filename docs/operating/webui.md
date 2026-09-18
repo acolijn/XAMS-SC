@@ -353,12 +353,32 @@ keeps this software out of the protection path.
 
 ## Logs
 
-The last lines of any service log, without going to the filesystem. The same
-files are in `logs\<service>.log` and rotate there.
+The last lines of any service log, without going to the filesystem, **newest
+first**. The same files are in `logs\<service>.log`.
 
 This is the second place to look when a service is unhappy; the first is
 `xams-ctl status`. What the messages mean is in
 [Troubleshooting](troubleshooting.md).
+
+**This page does not refresh itself**, and it is the only one that does not: a
+log that reloads while you are reading it takes the line away mid-sentence. It
+says when it was read, above the text — that stamp is the page's age, and
+reloading is a keystroke.
+
+**Older lines are behind the `.1` … `.5` links**, which appear next to
+`current` when a service has rotated. Logs rotate at 10 MB and five are kept,
+so a talkative service can have its last hour in `.1` while the tab shows a
+nearly empty `caen.log`. Anything past `.5` is gone.
+
+`?lines=N` shows more or fewer than the default 80.
+
+The tabs across the top are every `*.log` file in the log folder, which is why
+`backup` and `sim` appear there next to the services. That list is also the
+whole of what the page will open: a name that is not on it reads nothing,
+whatever the URL says.
+
+The folder is `<repo>\logs` — set `XAMS_LOG_DIR` to move it, and the services,
+their pid files and this page all follow.
 
 ---
 

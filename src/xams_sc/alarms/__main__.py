@@ -23,7 +23,7 @@ from pathlib import Path
 import yaml
 
 from ..bus import Bus
-from ..config import CONFIG_DIR, ConfigError, load
+from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
 from ..model import ServiceState
 from ..service import SingleInstance, setup_logging
 from .engine import AlarmEngine
@@ -71,7 +71,7 @@ def main(argv=None) -> int:
 
     setup_logging("alarms", args.log_level)
 
-    lock = SingleInstance("alarms", Path("logs"))
+    lock = SingleInstance("alarms", LOG_DIR)
     if not lock.acquire():
         log.critical("FATAL: another alarms process is already running "
                      "(lock: %s). Refusing to start — two engines would "
