@@ -153,18 +153,6 @@
       </form>
     </div>
 
-    <div class="note">
-      The loop runs in the instrument; the setpoint and the heater range are
-      the only things written, and the permitted setpoint range lives in
-      <code>channels.yaml</code> (§8.1). Every write is read back from the
-      instrument before it is called successful, and every write — and every
-      refusal — is recorded in <code>audit</code> (§10).
-      <br><br>
-      Sensors and outputs are listed separately because which input drives
-      which output is set on the front panel and is not read here — pairing
-      them would be a guess. <strong>Output 2 is not used</strong> on this
-      cryostat and is not writable.
-    </div>
   </div>
 
   <div class="card">

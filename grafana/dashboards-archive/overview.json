@@ -299,7 +299,7 @@
               }
             ]
           },
-          "unit": "none"
+          "unit": "pressurebar"
         }
       },
       "gridPos": {
@@ -412,7 +412,7 @@
               }
             ]
           },
-          "unit": "none"
+          "unit": "suffix:g/min"
         }
       },
       "gridPos": {
