@@ -1,8 +1,17 @@
 """Pull dashboards out of Grafana and into git. See DESIGN.md §12.
 
-    python tools/save_dashboard.py                 # every XAMS dashboard
-    python tools/save_dashboard.py xams-overview   # just one
-    python tools/save_dashboard.py --check         # report drift, write nothing
+    .venv\Scripts\python.exe tools/save_dashboard.py --save    # Grafana -> git
+    .venv\Scripts\python.exe tools/save_dashboard.py --check   # report drift only
+    .venv\Scripts\python.exe tools/save_dashboard.py xams-overview   # just one
+
+**Run it with the venv Python, not by double-clicking or `.\tools\...py`.**
+Windows maps .py to the py launcher, which runs a different interpreter and
+sends this script's errors to stderr where PowerShell's file-association path
+discards them - so a failed run looks exactly like a successful one.
+
+`--save` and `--check` need NO password: they only read, and they use the
+read-only Grafana token in config/secrets.yaml. `--load` writes and still
+requires `--password` or GRAFANA_PASSWORD.
 
 **Run this after editing a dashboard in the Grafana UI.** Grafana keeps
 dashboards in its own internal database; without them in git they are lost when
@@ -15,12 +24,14 @@ WHICH DIRECTION WINS, AND WHEN.
 Grafana then treats its stored copy as newer than the file. Two consequences,
 and the second one cost twenty minutes on 17 September 2026:
 
-  * Grafana -> file: this tool. Run it after a UI edit, then commit.
-  * file -> Grafana: editing `grafana/dashboards/*.json` by hand is NOT picked
-    up on its own once the dashboard has been saved from the UI. Restart
-    Grafana to make the file win again:
+  * Grafana -> file: this tool, with `--save`. Run it after a UI edit, then
+    commit `grafana/dashboards-archive/`.
+  * file -> Grafana: `--load`. Editing the archived JSON by hand does NOT
+    reach Grafana on its own.
 
-        Restart-Service Grafana
+Edit in ONE place. Both copies changed at once on 17 September 2026 - a panel
+setting into the file, a layout in the UI - and `--load` would have reverted
+the layout without a word.
 
 `--check` reports whether the live dashboard and the file have diverged, which
 is the question worth asking before a `git pull` or a reinstall.
@@ -58,9 +69,30 @@ DASHBOARD_DIR = ROOT / "grafana" / "dashboards-archive"
 VOLATILE = ("id", "version", "iteration")
 
 
+def read_token() -> str | None:
+    """The read-only Grafana token from config/secrets.yaml, if there is one.
+
+    `--save` and `--check` only READ, so the Viewer token the drift check
+    already uses is enough for both. `--load` writes and still wants the
+    admin password — that asymmetry is the point, not an oversight.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return None
+    path = ROOT / "config" / "secrets.yaml"
+    if not path.exists():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    return ((data.get("grafana") or {}).get("token")) or None
+
+
 def api(base: str, auth: str, path: str):
-    req = urllib.request.Request(base + path,
-                                 headers={"Authorization": "Basic " + auth})
+    """`auth` is a complete Authorization header value, scheme included."""
+    req = urllib.request.Request(base + path, headers={"Authorization": auth})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
@@ -89,10 +121,12 @@ def load_into_grafana(args) -> int:
     Grafana has no dashboards and this puts them all back.
     """
     if not args.password:
-        print("Grafana password needed: pass --password or set GRAFANA_PASSWORD.",
-              file=sys.stderr)
+        print("--load WRITES to Grafana, so it needs the admin password: "
+              "pass --password, or set GRAFANA_PASSWORD. The read-only token "
+              "in secrets.yaml deliberately cannot do this.", file=sys.stderr)
         return 2
-    auth = base64.b64encode(f"{args.user}:{args.password}".encode()).decode()
+    auth = "Basic " + base64.b64encode(
+        f"{args.user}:{args.password}".encode()).decode()
 
     files = sorted(DASHBOARD_DIR.glob("*.json"))
     if not files:
@@ -106,7 +140,7 @@ def load_into_grafana(args) -> int:
         payload = json.dumps({"dashboard": dashboard, "overwrite": True,
                               "message": f"loaded from {path.name}"}).encode()
         req = urllib.request.Request(args.url + "/api/dashboards/db", data=payload,
-            headers={"Authorization": "Basic " + auth,
+            headers={"Authorization": auth,
                      "Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
@@ -150,12 +184,23 @@ def main(argv=None) -> int:
     if args.load:
         return load_into_grafana(args)
 
-    if not args.password:
-        print("Grafana password needed: pass --password or set GRAFANA_PASSWORD.",
+    # Read-only work, so the Viewer token in secrets.yaml is enough and is
+    # preferred. Asking for the admin password to copy a dashboard INTO git
+    # is friction with nothing behind it, and friction is why this step gets
+    # skipped and the archive falls behind.
+    token = None if args.password else read_token()
+    if token:
+        auth = "Bearer " + token
+    elif args.password:
+        auth = "Basic " + base64.b64encode(
+            f"{args.user}:{args.password}".encode()).decode()
+    else:
+        print("Grafana credentials needed. Either:", file=sys.stderr)
+        print("  * put the read-only token in config/secrets.yaml under "
+              "grafana.token (see OPERATIONS.md), or", file=sys.stderr)
+        print("  * pass --password, or set GRAFANA_PASSWORD.",
               file=sys.stderr)
         return 2
-
-    auth = base64.b64encode(f"{args.user}:{args.password}".encode()).decode()
 
     try:
         if args.uid:
@@ -219,7 +264,11 @@ def main(argv=None) -> int:
 
     if written:
         print(f"\n{len(written)} file(s) updated. Commit them:")
-        print("  git add grafana/dashboards && git commit -m 'grafana: update dashboards'")
+        # The ARCHIVE directory, which is where this tool actually writes.
+        # It printed grafana/dashboards for a while, which stages nothing and
+        # leaves the save looking done when it is not committed.
+        print("  git add grafana/dashboards-archive && "
+              "git commit -m 'grafana: update dashboards'")
         print("\nA dashboard that exists only in Grafana's own database is lost")
         print("when that database is.")
     else:

@@ -288,12 +288,20 @@ loop:
 
 ```powershell
 # 1. edit in the Grafana UI, and save there as normal
-# 2. pull it into git
-.\.venv\Scripts\python.exe tools\save_dashboard.py --save --password <pw>
+# 2. pull it into git  (no password needed: it uses the read-only token)
+.\.venv\Scripts\python.exe tools\save_dashboard.py --save
 # 3. commit
 git add grafana/dashboards-archive
 git commit -m "grafana: <what changed>"
 ```
+
+!!! warning "Run it with the venv Python, not as `.	ools\save_dashboard.py`"
+    Windows maps `.py` to the `py` launcher, which uses a different
+    interpreter and sends the script's errors to stderr, where PowerShell's
+    file-association path discards them. **A failed run then looks exactly
+    like a successful one** — on 18 September 2026 that made a save appear to
+    work, the commit afterwards find nothing to commit, and the drift warning
+    stay up with nothing to explain it.
 
 Step 2 is the one that matters: **a dashboard that exists only in Grafana's
 own database is lost when that database is.** Nothing runs it for you.
@@ -331,14 +339,19 @@ and when they have diverged:
 ```
   grafana   NOT SAVED TO GIT — XAMS Overview (differs)
             a dashboard only in Grafana is lost with Grafana:
-            tools\save_dashboard.py --save --password <pw>
+            tools\save_dashboard.py --save
 ```
 
 This reads Grafana through a **read-only service account** (`xams-drift-check`,
 role Viewer), whose token lives in `config/secrets.yaml` — which is gitignored.
 It can look at dashboards and nothing else: it cannot edit a panel, delete
-anything or touch a datasource. Saving and loading still take the admin
-password, deliberately, because those write.
+anything or touch a datasource.
+
+**`--save` and `--check` use that same token**, so neither needs a password:
+both only read from Grafana and write to disk. **`--load` still requires the
+admin password**, because it is the one that writes back into Grafana. The
+asymmetry is deliberate — the operation you run after every edit should have
+no friction, and the one that can overwrite a live dashboard should.
 
 If Grafana is stopped, uninstalled or unreachable the check reports
 **unknown**, never "fine" and never "drift". A check that cries wolf about its
