@@ -329,7 +329,12 @@ def _print_dashboard_drift() -> None:
         return
     print(f"\n  grafana   NOT SAVED TO GIT — {result['detail']}")
     print("            a dashboard only in Grafana is lost with Grafana:")
-    print("            tools\\save_dashboard.py --save --password <pw>")
+    # The full command, with the venv interpreter. `.\tools\save_dashboard.py`
+    # goes through the Windows py launcher, which runs a different Python and
+    # swallows the script's stderr — so a failed run looks like a successful
+    # one. No --password: --save reads, and uses the read-only token.
+    print("            .\\.venv\\Scripts\\python.exe "
+          "tools\\save_dashboard.py --save")
 
 
 def _print_bus_status(args) -> None:
