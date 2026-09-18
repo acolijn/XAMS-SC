@@ -305,6 +305,37 @@ def cmd_status(args) -> int:
     return 0
 
 
+def _print_dashboard_drift() -> None:
+    """Say so when Grafana and git have diverged (§12).
+
+    Drift is otherwise silent until somebody thinks to check, and a dashboard
+    that exists only in Grafana's database is lost when that database is.
+    Printed here because this is the command that gets run daily.
+
+    Never fatal and never noisy: Grafana being down or unconfigured means the
+    question cannot be answered, not that something is wrong.
+    """
+    from ..grafana import check
+
+    result = check()
+    if result["state"] == "ok":
+        # Said out loud rather than passed over in silence: "nothing printed"
+        # is also what a check that never ran looks like.
+        print(f"\n  grafana   dashboards saved to git ({len(result['dashboards'])})")
+        return
+    if result["state"] == "unknown":
+        # Only worth a line when it looks like it was meant to work.
+        if "no Grafana token" not in result["detail"]:
+            print(f"\n  grafana   drift unknown — {result['detail']}")
+        return
+    print(f"\n  grafana   NOT SAVED TO GIT — {result['detail']}")
+    print("            a dashboard only in Grafana is lost with Grafana:")
+    # Full command, with the venv interpreter: .\\tools\\save_dashboard.py goes
+    # through the Windows py launcher, which swallows the script errors.
+    # No --password: --save reads, and uses the read-only token.
+    print("            .\\\\.venv\\\\Scripts\\\\python.exe "
+          "tools\\\\save_dashboard.py --save")
+
 def _print_backup_status(args) -> None:
     """The nightly backup's last result, from its retained topic.
 
