@@ -728,25 +728,35 @@ def cmd_check(args) -> int:
     return 0
 
 
-def main(argv=None) -> int:
-    # The Windows console defaults to a codepage that cannot render the §
-    # section references this project uses throughout. Ask for UTF-8 rather
-    # than avoiding the character.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, OSError):
-            pass
+def build_parser() -> argparse.ArgumentParser:
+    """The whole command line, in one place.
 
+    Separate from `main` so that `tools/gen_doc_pages.py` can walk it: the
+    Command line page in the manual is generated from this parser rather than
+    typed out next to it, on the same argument as the channel and alarm
+    tables. A list of options maintained by hand is wrong within a month, and
+    wrong in the way that costs the most — it reads as though it were right.
+
+    Which means the `help=` strings below are documentation, not hints.
+    """
     p = argparse.ArgumentParser(prog="xams-ctl", description=__doc__.split("\n")[0])
-    p.add_argument("--broker", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=1883)
+    p.add_argument("--broker", default="127.0.0.1",
+                   help="MQTT broker to talk to")
+    p.add_argument("--port", type=int, default=1883, help="broker port")
     sub = p.add_subparsers(dest="command", required=True)
-    for verb, fn in [
-        ("start", cmd_start), ("restart", cmd_restart),
-        ("status", cmd_status), ("reload", cmd_reload), ("check", cmd_check),
+    for verb, fn, helptext in [
+        ("start", cmd_start,
+         "start every service, in dependency order"),
+        ("restart", cmd_restart,
+         "stop, then start — what a channel change needs"),
+        ("status", cmd_status,
+         "what is running, what the bus says, what has drifted"),
+        ("reload", cmd_reload,
+         "re-read the YAML without restarting, so a change costs no data gap"),
+        ("check", cmd_check,
+         "validate the configuration and print what it defines; no side effects"),
     ]:
-        sub.add_parser(verb).set_defaults(func=fn)
+        sub.add_parser(verb, help=helptext).set_defaults(func=fn)
 
     stop = sub.add_parser("stop", help="stop the services and release the hardware")
     stop.add_argument("--for-labview", action="store_true",
@@ -757,6 +767,7 @@ def main(argv=None) -> int:
     flow = sub.add_parser("flow-reset",
                           help="close the flow-integrator period and open a new one")
     flow.add_argument("--by", help="who is doing this (recorded in the audit log)")
+    flow.set_defaults(func=cmd_flow_reset)
 
     hv_set = sub.add_parser(
         "hv-set", help="set one HV channel's setpoint (DESIGN.md 10a)")
@@ -785,9 +796,20 @@ def main(argv=None) -> int:
                         help="one channel; default is every hv_vset channel")
     hv_off.add_argument("--by", help="who is doing this (recorded in audit)")
     hv_off.set_defaults(func=cmd_hv_off)
-    flow.set_defaults(func=cmd_flow_reset)
+    return p
 
-    args = p.parse_args(argv)
+
+def main(argv=None) -> int:
+    # The Windows console defaults to a codepage that cannot render the §
+    # section references this project uses throughout. Ask for UTF-8 rather
+    # than avoiding the character.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 

@@ -120,3 +120,116 @@ with mkdocs_gen_files.open("reference/alarms.md", "w") as page:
     page.write("\n")
 
 mkdocs_gen_files.set_edit_path("reference/alarms.md", "../config/alarms.yaml")
+
+
+# -------------------------------------------------------------- command line
+
+# Walked, not transcribed. `xams_ctl.build_parser()` exists for this: a page
+# of options typed out beside the parser is a page that disagrees with the
+# parser, and the disagreement is invisible until somebody trusts the page.
+import argparse  # noqa: E402
+import sys  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "src"))
+from xams_sc.cli import xams_ctl  # noqa: E402
+
+# Exit codes are the one thing the parser does not know: they live in the
+# `cmd_*` return values. Kept here, next to the page that states them, rather
+# than scattered through the prose.
+EXIT_CODES = [
+    ("0", "it did what was asked"),
+    ("1", "it did not — a service that would not start or stop, a command "
+          "nothing acknowledged, a write an instrument refused"),
+    ("2", "the configuration is invalid and nothing was attempted "
+          "(`status`, `reload`, `check`), or a service refused the reload; "
+          "also what argparse itself returns for an unusable command line"),
+]
+
+
+def _arguments(parser: argparse.ArgumentParser) -> tuple[list, list]:
+    """The positionals and the options of one subcommand, minus `-h`."""
+    positional, optional = [], []
+    for action in parser._actions:
+        if isinstance(action, argparse._HelpAction):
+            continue
+        if action.option_strings:
+            optional.append(action)
+        else:
+            positional.append(action)
+    return positional, optional
+
+
+def _usage(name: str, positional: list, optional: list) -> str:
+    parts = ["xams-ctl", name]
+    for action in positional:
+        parts.append(f"<{action.dest}>" if action.nargs != "?"
+                     else f"[{action.dest}]")
+    for action in optional:
+        flag = action.option_strings[-1]
+        parts.append(f"[{flag}]" if action.nargs == 0
+                     else f"[{flag} <{action.dest}>]")
+    return " ".join(parts)
+
+
+parser = xams_ctl.build_parser()
+subparsers = next(a for a in parser._actions
+                  if isinstance(a, argparse._SubParsersAction))
+# `choices` preserves the order the verbs were added in, which is the order
+# somebody uses them in — start before stop, and the HV verbs together.
+verbs = list(subparsers.choices.items())
+helps = {choice.dest: choice.help for choice in subparsers._choices_actions}
+
+with mkdocs_gen_files.open("reference/cli.md", "w") as page:
+    page.write("# Command line\n\n")
+    page.write(
+        "Generated at build time by walking `xams_ctl.build_parser()`, so it "
+        "cannot disagree with the command it documents. Everything below is "
+        "also available as `xams-ctl <command> --help`.\n\n"
+        "Run it with the virtual environment's interpreter on the lab PC:\n\n"
+        "```\n.\\.venv\\Scripts\\python.exe -m xams_sc.cli.xams_ctl status\n"
+        "```\n\n"
+    )
+
+    _, globals_ = _arguments(parser)
+    page.write("## Everywhere\n\n| Option | Default | |\n|---|---|---|\n")
+    for action in globals_:
+        page.write(f"| `{action.option_strings[-1]}` | `{action.default}` "
+                   f"| {action.help or ''} |\n")
+    page.write("\n")
+
+    page.write("## Commands\n\n")
+    page.write("| Command | |\n|---|---|\n")
+    for name, _ in verbs:
+        page.write(f"| [`{name}`](#{name}) | {helps.get(name) or ''} |\n")
+    page.write("\n")
+
+    for name, sub_parser in verbs:
+        positional, optional = _arguments(sub_parser)
+        page.write(f"### `{name}`\n\n")
+        if helps.get(name):
+            page.write(f"{helps[name]}\n\n")
+        page.write(f"```\n{_usage(name, positional, optional)}\n```\n\n")
+        if positional or optional:
+            page.write("| Argument | | |\n|---|---|---|\n")
+            for action in positional:
+                required = "required" if action.nargs != "?" else "optional"
+                page.write(f"| `{action.dest}` | {required} "
+                           f"| {action.help or ''} |\n")
+            for action in optional:
+                flag = action.option_strings[-1]
+                kind = "flag" if action.nargs == 0 else "value"
+                page.write(f"| `{flag}` | {kind} | {action.help or ''} |\n")
+            page.write("\n")
+
+    page.write("## Exit codes\n\n")
+    page.write(
+        "Worth checking from a script or a scheduled task: these commands are "
+        "quiet about success and a failure that nobody reads is a failure "
+        "that did not happen.\n\n"
+    )
+    page.write("| Code | |\n|---|---|\n")
+    for code, meaning in EXIT_CODES:
+        page.write(f"| `{code}` | {meaning} |\n")
+    page.write("\n")
+
+mkdocs_gen_files.set_edit_path("reference/cli.md", "../src/xams_sc/cli/xams_ctl.py")
