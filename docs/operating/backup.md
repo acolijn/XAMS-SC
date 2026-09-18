@@ -9,15 +9,16 @@ reinstalling — a disk failure, a theft, a flood. The distinction matters,
 because [Installation](../install.md) covers the second case and is useless for
 the first.
 
-!!! info "Partly implemented, 18 September 2026"
+!!! success "Implemented 18 September 2026"
 
-    **Done:** the destination is settled and the vendor software is archived —
-    `/data/xenon/xams_slow_control/` on the Nikhef cluster, reached with an SSH
-    key from the lab PC. See [The NI driver](#the-ni-driver-the-part-with-a-clock-on-it).
+    `tools\backup.ps1` copies the irreplaceable data to
+    `/data/xenon/xams_slow_control/archive/` on the Nikhef cluster, nightly at
+    03:30 via a Scheduled Task, and publishes its result so a silent failure
+    becomes visible.
 
-    **Not done:** the nightly copy of the measurement archive, and the restore
-    rehearsal. Until the schedule exists, **the archive on the lab PC is still
-    the only copy.**
+    **Still outstanding: the restore rehearsal.** Nobody has pulled a day back
+    and replayed it. Until that is done the restore path is a claim, not a
+    fact — see [the warning below](#restoring).
 
 ## What is irreplaceable
 
@@ -106,14 +107,62 @@ able to read this and fix it without installing a toolchain.
 Use rsync if the link turns out to be flaky enough to want `--partial`. Not
 before.
 
-## The shape of it
+## How it runs
 
-Daily, not weekly. The effort is identical — one scheduled task — and the
-difference is whether the worst case costs you a day of the detector's history
-or a week.
+```powershell
+.\tools\backup.ps1              # copy what changed since the last run
+.\tools\backup.ps1 -Full        # everything, ignoring the stamp
+.\tools\backup.ps1 -WhatIf      # list what would go, send nothing
+```
 
-Push, never pull. Outbound from the lab PC goes through the firewall; inbound
-to it almost certainly does not.
+Registered as a Scheduled Task (once, from an **elevated** prompt):
+
+```powershell
+.\tools\install_backup_task.ps1 -RunNow
+```
+
+Daily, not weekly: the effort is identical and the difference is whether the
+worst case costs a day of the detector's history or a week. Push, never pull —
+outbound from the lab PC goes through the firewall; inbound almost certainly
+does not.
+
+**A Scheduled Task, not an NSSM service.** The services run as LocalSystem,
+whose profile is `C:\Windows\System32\config\systemprofile` — it would look
+for the SSH key there, not find it, and fail with `Permission denied
+(publickey)`: an error identical to a broken key, from a command that works
+perfectly by hand. The task runs as `localadmin`, which is where the key is.
+
+### What it does each night
+
+1. Lists files under `data/raw`, `data/events` and `data/quarantine` modified
+   since the last **successful** run, plus `data/fm101_total.json`.
+2. Checks there is room at the far end, and refuses rather than half-filling a
+   shared volume.
+3. Packs them, sends the archive, unpacks it, removes the staging file.
+4. **Verifies** the bytes arrived, then writes the stamp.
+5. Publishes the result, retained, to `xams/backup/status`.
+
+The stamp moves **only** after a verified success, so a failed night is
+repeated rather than skipped.
+
+### Three Windows traps, each of which cost a run
+
+**Binary cannot be piped between native commands in PowerShell 5.1.** The
+obvious `tar -cf - ... | ssh ... tar -xf -` is re-encoded as text and arrives
+corrupt: *"This does not look like a tar archive"*, with nothing at either end
+to say why. The tar is staged to a file and sent with `scp`.
+
+**`mosquitto_pub -m "<json>"` loses the quotes.** Windows argument parsing
+strips them, so the broker received `{detail:2 file(s), 14,5 MB,bytes:...}`,
+which is not JSON, and every reader of it failed. The payload is written to a
+file and sent with `-f`.
+
+**Verify against what was packed, not what was measured.** `data/raw/<today>`
+is being appended to *while the backup runs*, so it is already larger by the
+time `tar` reads it than when the file list was built. Comparing the
+destination against the earlier figure reports a mismatch on a perfectly good
+backup, every single night — and a check that cries wolf nightly is the one
+people learn to ignore. The comparison is against the tar's own listing.
 
 ```powershell
 # Sketch, not a working script. Copies anything written since the last
@@ -136,17 +185,37 @@ scp -i $key data\fm101_total.json $dest
 Run it from Task Scheduler, as a task that runs whether or not anyone is logged
 in.
 
-### Make a failed backup visible
+### Making a failed backup visible
 
 The classic backup story is discovering it stopped working three months ago.
-**Do not write a second monitoring system for this** — publish a heartbeat to
-MQTT at the end of a successful run, under a channel of its own, and a stale
-backup then raises a staleness alarm through the machinery that is already
-built, already tested, and already sends SMS.
+The result is therefore published **retained** to `xams/backup/status`, and
+read back in the two places already looked at daily:
 
-That is the whole argument for the bus in [the design
-specification](../DESIGN.md) §2, applied to something that was never in the
-original inventory.
+```
+  backup    ok, 0.0 h ago (2 file(s), 14,6 MB)
+  backup    OVERDUE - last success 41 hours ago
+  backup    NEVER REPORTED - the archive is on this PC only
+```
+
+and as a row in the *UPS & dashboards* card on the web UI overview.
+
+**Nothing published is reported as "never reported", never as "ok".** The
+absence of news is an absence, not good news — that is the exact shape of the
+three-months-dead backup.
+
+!!! warning "This does NOT reach SMS, and here is why"
+
+    The original plan was to publish a heartbeat as an ordinary channel and let
+    the existing staleness alarm do the work. **That cannot work as the alarm
+    engine stands:** `stale_after_seconds` is a single global default of 60 s,
+    with no per-channel override, so a nightly heartbeat would raise a major
+    alarm sixty seconds after every successful run.
+
+    Reaching SMS needs one of: a per-channel staleness override, or a
+    long-running service publishing "hours since last backup" as a channel with
+    an ordinary `high`/`hihi` threshold. The second is about fifteen lines and
+    reuses everything. Neither is done, so **a failed backup is visible but
+    will not wake anybody.**
 
 ### The key
 
