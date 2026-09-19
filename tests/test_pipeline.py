@@ -11,6 +11,7 @@ stack (see README, "Run it").
 """
 
 import json
+import statistics
 from pathlib import Path
 
 import pytest
@@ -127,6 +128,70 @@ class TestAveraging:
 
         published = [m for m in bus.measurements if m.channel == "pmain"][0]
         assert published.quality is not Quality.OK
+
+    def test_a_bitmask_is_stated_not_averaged(self, config, tmp_path):
+        """The bug this exists to prevent, in its exact shape.
+
+        CAEN bit 0 is ON and bit 1 is RAMP_UP, so the window in which a ramp
+        finishes holds mostly 3 and then 1. Six threes and four ones average
+        to 2.4, which int()s to 2 - RAMP_UP set and ON *clear* - so the HV
+        page read a channel that was energised and holding as not energised
+        at all, and went on offering "turn ON" for a channel already on.
+
+        The ratio matters and is why these numbers are what they are: any
+        mean landing in [2, 3) truncates to an even word and loses bit 0.
+        """
+        bus = RecordingBus()
+        svc = SimService(config, bus, lock_dir=tmp_path)
+
+        now = utcnow()
+        for word in (3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 1.0):
+            svc._accumulate([Measurement(t=now, channel="hv_nai_stat",
+                                         value=word, unit="bits", raw=word)])
+        svc._emit_window()
+
+        published = [m for m in bus.measurements
+                     if m.channel == "hv_nai_stat"][0]
+        assert published.value == 1.0, "the mean of a bitmask was published"
+        assert int(published.value) & 1, "decodes as not energised"
+        assert published.raw == 1.0
+        # The aggregate this replaced, spelled out: it is not merely a
+        # different number, it is a word that decodes to the opposite state.
+        assert not int(statistics.fmean([3, 3, 3, 3, 3, 3, 1, 1, 1, 1])) & 1
+
+    def test_a_bitmask_still_reports_a_bad_sample_in_its_window(self, config,
+                                                               tmp_path):
+        """Not averaging the value is not an excuse to stop judging quality: a
+        window with an unreadable sample in it was still not fully read."""
+        bus = RecordingBus()
+        svc = SimService(config, bus, lock_dir=tmp_path)
+
+        now = utcnow()
+        svc._accumulate([Measurement(t=now, channel="hv_nai_stat", value=None,
+                                     unit="bits", quality=Quality.ERROR)])
+        svc._accumulate([Measurement(t=now, channel="hv_nai_stat", value=1.0,
+                                     unit="bits", raw=1.0)])
+        svc._emit_window()
+
+        published = [m for m in bus.measurements
+                     if m.channel == "hv_nai_stat"][0]
+        assert published.value == 1.0
+        assert published.quality is not Quality.OK
+
+    def test_ordinary_channels_are_still_averaged(self, config, tmp_path):
+        """The bitmask rule is keyed on the unit and must not leak into the
+        quantities, where the mean is the whole point (§9.1)."""
+        bus = RecordingBus()
+        svc = SimService(config, bus, lock_dir=tmp_path)
+
+        now = utcnow()
+        for v in (1.0, 2.0, 3.0):
+            svc._accumulate([Measurement(t=now, channel="pmain", value=v,
+                                         unit="bar")])
+        svc._emit_window()
+
+        assert [m for m in bus.measurements
+                if m.channel == "pmain"][0].value == pytest.approx(2.0)
 
     def test_all_samples_bad_publishes_no_value(self, config, tmp_path):
         bus = RecordingBus()

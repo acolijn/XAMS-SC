@@ -668,6 +668,47 @@ class CaenService(BaseService):
             return None
         return channel, reader, int(channel.phys)
 
+    def _stat_channel_for(self, channel):
+        """The hv_stat channel watching the same physical output, or None.
+
+        Matched on device AND phys rather than by rewriting the name: the
+        naming convention is a convention, and config.py already guarantees
+        that one (device, phys) pair is used once per kind (§6.1).
+        """
+        for ch in self._channels:
+            if (ch.kind == "hv_stat" and ch.device == channel.device
+                    and int(ch.phys) == int(channel.phys)):
+                return ch
+        return None
+
+    def _publish_status_now(self, channel, word: int) -> None:
+        """Publish a status word read back from a write, out of cadence.
+
+        WHY THIS EXISTS. The poll reads every second and publishes every ten,
+        so a channel energised just after a publish stayed "not energised" on
+        the web page for most of the following ten seconds - the operator saw
+        nothing happen, and clicked the button again. By then the row may
+        have refreshed into "turn off", so the second click de-energised the
+        channel the first had just started. The read-back is already in hand
+        here and was already trusted enough to verify the write against; the
+        only thing missing was saying so.
+
+        The window is dropped for this channel deliberately. It holds samples
+        from BOTH sides of the switch, and _emit_window means them - a mean of
+        a bitmask is not a bitmask, and `int(0.4)` is 0, so that aggregate
+        would have published the channel as off again a few seconds after this
+        said it was on. Ten seconds of samples are lost at the instant of a
+        command; the ack and the audit record the transition exactly, and a
+        meaningless average is not worth keeping over that.
+        """
+        stat = self._stat_channel_for(channel)
+        if stat is None:
+            return
+        self._window.pop(stat.name, None)
+        self.bus.publish_measurement(
+            Measurement(t=utcnow(), channel=stat.name, value=float(word),
+                        unit=stat.unit, raw=float(word), quality=Quality.OK))
+
     def _handle_output(self, topic: str, payload: str) -> None:
         """Energise or de-energise a channel - the "turn ON HV" of section 10a.
 
@@ -763,6 +804,11 @@ class CaenService(BaseService):
         log.warning("output %s: %s -> %s%s, by %s", name,
                     "on" if was_on else "off", "on" if wanted_on else "off",
                     (" (%s)" % detail) if detail else "", actor)
+        # Before the ack, not after: the ack is what releases the web request,
+        # and the page it then renders must not be built from the state this
+        # command has just made obsolete.
+        if after is not None:
+            self._publish_status_now(channel, after)
         self.bus.publish_raw(ACK_HV_OUTPUT, json.dumps(
             {"ok": True, "channel": name, "on": wanted_on, "vset": vset,
              "detail": detail, "by": actor}, separators=(",", ":")))

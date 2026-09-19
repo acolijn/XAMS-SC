@@ -18,10 +18,12 @@ import json
 
 import pytest
 
-from xams_sc.bus import ACK_HV_VSET, TOPIC_AUDIT, TOPIC_HV_VSET
+from xams_sc.bus import (ACK_HV_OUTPUT, ACK_HV_VSET, TOPIC_AUDIT,
+                         TOPIC_HV_OUTPUT, TOPIC_HV_VSET)
 from xams_sc.config import load
 from xams_sc.devices.caen import CaenService
 from xams_sc.hv_status import BIT_DISABLED, BIT_ON
+from xams_sc.model import Measurement, Quality, utcnow
 
 ENABLED = 1 << BIT_ON
 DISABLED = 1 << BIT_DISABLED
@@ -30,6 +32,7 @@ DISABLED = 1 << BIT_DISABLED
 class RecordingBus:
     def __init__(self):
         self.published = []
+        self.measurements = []
 
     def publish_raw(self, topic, payload, retain=False):
         self.published.append((topic, json.loads(payload)))
@@ -39,7 +42,15 @@ class RecordingBus:
     def disconnect(self): pass
     def publish_state(self, s, st): pass
     def publish_heartbeat(self, s): pass
-    def publish_measurement(self, m): pass
+
+    def publish_measurement(self, m):
+        self.measurements.append(m)
+
+    def measured(self, channel):
+        for m in reversed(self.measurements):
+            if m.channel == channel:
+                return m
+        return None
 
     def last(self, topic):
         for t, p in reversed(self.published):
@@ -61,6 +72,7 @@ class FakeReader:
         self.answers = answers      # False: reads come back as None
         self.refusal = refusal      # why the board refused, as it reports it
         self.written = []
+        self.outputs = []
         self._lock = threading.RLock()
 
     def status(self, channel):
@@ -80,6 +92,15 @@ class FakeReader:
             return False, self.refusal
         if self.obey:
             self.vset = magnitude
+        return True, ""
+
+    def set_output(self, channel, on):
+        self.outputs.append(on)
+        if not self.accepts:
+            return False, self.refusal
+        if self.obey:
+            self.stat = (self.stat | (1 << BIT_ON)) if on else (
+                self.stat & ~(1 << BIT_ON))
         return True, ""
 
     def control_mode(self):
@@ -329,3 +350,85 @@ class TestWhatTheDriverCannotDo:
             for forbidden in ("MAXV", "RUP", "RDW", "TRIP", "ISET", "BDCTR"):
                 assert forbidden not in line, (
                     "a protection setting is written: %s" % line.strip())
+
+
+def energise(service, channel="hv_nai_vset", on=True, by="ap"):
+    service._handle_output(TOPIC_HV_OUTPUT, json.dumps(
+        {"channel": channel, "on": on, "by": by}))
+    return service.bus.last(ACK_HV_OUTPUT)
+
+
+class TestEnergisingSaysSoAtOnce:
+    """The read-back is published immediately, not left to the next poll.
+
+    The poll reads every second and publishes every ten, so before this the
+    web page went on showing a freshly energised channel as off for most of
+    the following ten seconds. The operator saw nothing happen and clicked
+    again - and by then the button had become "turn off".
+    """
+
+    @pytest.fixture
+    def service(self, tmp_path):
+        svc = CaenService(load(), RecordingBus(), simulate=False,
+                          lock_dir=tmp_path)
+        # stat 0: the front-panel switch is on, the output is NOT energised -
+        # which is exactly the state the turn ON button is offered in.
+        svc._readers = {"hv_1": FakeReader(stat=0),
+                        "hv_2": FakeReader(stat=0, vset=600.0)}
+        return svc
+
+    def test_the_status_word_is_published_without_waiting_for_the_poll(self, service):
+        assert energise(service)["ok"] is True
+        m = service.bus.measured("hv_nai_stat")
+        assert m is not None, "the page still had to wait for the next poll"
+        assert int(m.value) & (1 << BIT_ON), "published as not energised"
+
+    def test_it_is_published_as_a_good_reading_of_the_right_channel(self, service):
+        energise(service)
+        m = service.bus.measured("hv_nai_stat")
+        assert m.quality == Quality.OK
+        assert m.unit == "bits"
+        assert m.raw == m.value
+
+    def test_it_matches_what_the_board_now_reports(self, service):
+        energise(service)
+        assert service.bus.measured("hv_nai_stat").value == float(
+            service._readers["hv_2"].stat)
+
+    def test_the_straddling_window_is_dropped(self, service):
+        """A mean of a bitmask is not a bitmask.
+
+        _emit_window averages the window, so samples from both sides of the
+        switch average to a fraction, and int(0.4) is 0 - the page would have
+        gone back to "not energised" seconds after this said otherwise.
+        """
+        service._accumulate([Measurement(t=utcnow(), channel="hv_nai_stat",
+                                         value=0.0, unit="bits", raw=0.0,
+                                         quality=Quality.OK)] * 9)
+        energise(service)
+        assert "hv_nai_stat" not in service._window
+
+    def test_only_the_channel_commanded_is_republished(self, service):
+        energise(service)
+        assert service.bus.measured("hv_cathode_stat") is None
+
+    def test_turning_off_publishes_the_read_back_too(self, service):
+        service._readers["hv_2"].stat = 1 << BIT_ON
+        assert energise(service, on=False)["ok"] is True
+        m = service.bus.measured("hv_nai_stat")
+        assert m is not None and not int(m.value) & (1 << BIT_ON)
+
+    def test_a_board_refusal_publishes_no_status_at_all(self, service):
+        """Nothing changed, so nothing is claimed. A published word here would
+        be a fresh timestamp on an unchanged state, which reads as news."""
+        service._readers["hv_2"].accepts = False
+        assert energise(service)["ok"] is not True
+        assert service.bus.measured("hv_nai_stat") is None
+
+    def test_a_disabled_channel_is_refused_and_says_where_the_switch_is(self, service):
+        service._readers["hv_2"].stat = 1 << BIT_DISABLED
+        answer = energise(service)
+        assert answer["ok"] is not True
+        assert "front panel" in answer["reason"]
+        assert service.bus.measured("hv_nai_stat") is None
+

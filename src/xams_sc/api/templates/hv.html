@@ -203,6 +203,29 @@ function loadDefaults() {
 function clearBoxes() {
   document.querySelectorAll('.vset-box').forEach(function (b) { b.value = ''; });
 }
+
+// THE SECOND CLICK. Energising is a round trip - command, read-back, ack,
+// redirect - and until it came back the row was unchanged and the button
+// still said "turn ON", so an operator who saw nothing happen clicked it
+// again. That was the dangerous part: if the refresh landed in between, the
+// button under the cursor had become "turn off", and the second click
+// de-energised the channel the first had just started.
+//
+// Only the energise forms (out-*), never "apply setpoints": that one is
+// idempotent and re-sending it costs nothing.
+//
+// The button carries no name or value - the direction is a hidden field
+// inside the form (§10a) - so disabling it drops nothing from the POST. It
+// stays disabled until the response replaces the page, which is the whole
+// of the window being closed.
+document.addEventListener('submit', function (e) {
+  var form = e.target;
+  if (!form.id || form.id.lastIndexOf('out-', 0) !== 0) return;
+  var btn = document.querySelector('button[form="' + form.id + '"]');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'switching…';
+});
 </script>
 
 <div class="card">

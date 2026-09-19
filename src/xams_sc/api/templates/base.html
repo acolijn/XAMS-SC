@@ -6,15 +6,52 @@
 {% block refresh %}
 <noscript><meta http-equiv="refresh" content="10"></noscript>
 <script>
-/* The page reloads every 10 s — but NOT while somebody is typing into it.
-   A meta refresh cannot be cancelled once the page has been parsed, and it
-   would clear the name half-entered in the flow-reset form (§7.5) and throw
-   away the click that was about to follow. The meta is kept for no-script.
-   Vanilla, inline, no framework and no build step (§8.1). */
+/* The page reloads every 10 s — but NOT while it holds anything the operator
+   has entered and not yet sent. A meta refresh cannot be cancelled once the
+   page has been parsed, and it would clear the name half-entered in the
+   flow-reset form (§7.5) and throw away the click that was about to follow.
+   The meta is kept for no-script. Vanilla, inline, no framework and no build
+   step (§8.1).
+
+   Focus alone is the wrong signal, and was the original bug: "load defaults"
+   on the HV page (hv.html) writes the numbers from channels.yaml straight
+   into boxes that nobody is touching, so nothing ever took focus, the timer
+   ran, and the reload replaced the filled boxes with the empty ones the
+   server renders — the operator watched 600 V turn back into "set V" a few
+   seconds after asking for it.
+
+   So the question asked here is "does this page differ from what arrived?",
+   not "is the cursor in it?". defaultValue and defaultSelectedIndex are what
+   the server rendered, so a box filled by hand and a box filled by a button
+   are indistinguishable, which is the point — both are unsent operator
+   intent, and neither may be thrown away without a click. */
 (function () {
   var timer = null;
-  function start() { if (!timer) timer = setTimeout(function () {
-      location.reload(); }, 10000); }
+  function unsent() {
+    var els = document.querySelectorAll('input, textarea, select'), i, el;
+    for (i = 0; i < els.length; i++) {
+      el = els[i];
+      if (el.disabled || el.type === 'hidden') continue;
+      if (el.tagName === 'SELECT') {
+        if (el.selectedIndex !== el.defaultSelectedIndex) return true;
+      } else if (el.value !== el.defaultValue) return true;
+    }
+    return false;
+  }
+  function typing() {
+    var a = document.activeElement;
+    return !!(a && a.closest && a.closest('input, textarea, select, button'));
+  }
+  function tick() {
+    timer = null;
+    /* Deliberately reschedules rather than giving up: a box left filled and
+       forgotten must not freeze the page's numbers for the rest of the day
+       without the reload ever trying again. Clear or apply it and the very
+       next tick reloads. */
+    if (unsent() || typing()) { start(); return; }
+    location.reload();
+  }
+  function start() { if (!timer) timer = setTimeout(tick, 10000); }
   function stop() { clearTimeout(timer); timer = null; }
   document.addEventListener('focusin', function (e) {
     if (e.target.closest('input, textarea, select, button')) stop();
@@ -168,6 +205,12 @@ pre { margin:0; padding:.9rem; overflow-x:auto; font-size:.8rem; line-height:1.4
 .hv-btn.off:hover { color:var(--warn); border-color:var(--warn); }
 .hv-btn.apply { color:var(--text); border-color:var(--dim); }
 .hv-btn.apply:hover { color:var(--good); border-color:var(--good); }
+/* A command in flight. Deliberately not just greyed: the cursor changes and
+   the hover colours are cancelled, so the button stops inviting the second
+   click that used to de-energise what the first had started. */
+.hv-btn:disabled { color:var(--dim); opacity:.55; cursor:progress;
+  border-color:var(--line); }
+.hv-btn:disabled:hover { color:var(--dim); border-color:var(--line); }
 
 .flash { margin-top:.8rem; padding:.45rem .6rem; border-radius:3px;
          font-size:.82rem; line-height:1.45; }

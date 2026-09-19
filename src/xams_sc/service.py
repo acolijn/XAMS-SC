@@ -87,6 +87,9 @@ class BaseService:
     `log_interval_s`. The averaging is not merely data reduction — a mean of
     ten readings is less noisy than any single one, so what is stored is
     better than what is discarded.
+
+    That argument holds for quantities and fails completely for bitmasks,
+    which is what `BITMASK_UNIT` is for.
     """
 
     name = "base"
@@ -206,6 +209,20 @@ class BaseService:
             self._state = state
         self.bus.publish_state(self.name, state)
 
+    # A MEAN OF A BITMASK IS NOT A BITMASK. The CAEN status word is flags,
+    # not a quantity: bit 0 is ON and bit 1 is RAMP_UP, so a window straddling
+    # the end of a ramp averages 3, 3, 3, 1, 1, 1, 1 to about 2.1 - which
+    # int()s to 2, a word with RAMP_UP set and ON *clear*. The page then read
+    # a channel that was energised and holding as not energised at all, and
+    # the HV button went on offering "turn ON" for a channel already on, until
+    # the ramp ended and every sample in the window agreed again.
+    #
+    # Nothing here is specific to the CAEN: the rule is that a channel whose
+    # unit is this one carries flags, and flags are taken as they last came
+    # off the wire. The unit is declared in channels.yaml, so the rule is
+    # data, not a list of channel names to keep in step (§6.1).
+    BITMASK_UNIT = "bits"
+
     def _accumulate(self, batch: list[Measurement]) -> None:
         for m in batch:
             self._window.setdefault(m.channel, []).append(m)
@@ -235,6 +252,20 @@ class BaseService:
             values = [s.value for s in good]
             raws = [s.raw for s in good if s.raw is not None]
             quality = Quality.OK if len(good) == len(samples) else Quality.STALE
+
+            # Flags are stated, not averaged: the last reading is the current
+            # state, and the ones before it are history the archive already
+            # holds. Quality is still judged over the whole window, because a
+            # window with an unreadable sample in it is still a window that
+            # was not fully read.
+            if good[-1].unit == self.BITMASK_UNIT:
+                self.bus.publish_measurement(
+                    Measurement(
+                        t=good[-1].t, channel=channel, value=good[-1].value,
+                        unit=good[-1].unit, raw=good[-1].raw, quality=quality,
+                    )
+                )
+                continue
 
             self.bus.publish_measurement(
                 Measurement(
