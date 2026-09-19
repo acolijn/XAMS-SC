@@ -91,7 +91,14 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 4) `
     -MultipleInstances IgnoreNew
 
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+# The account comes from the token, not from $env:USERDOMAIN. On this
+# domain-joined PC that variable reads "ad" while localadmin is a *local*
+# account, so "$env:USERDOMAIN\$env:USERNAME" is "ad\localadmin", which does
+# not resolve and makes Register-ScheduledTask fail. GetCurrent().Name is
+# whatever Windows will actually accept.
+$RunAs = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+$principal = New-ScheduledTaskPrincipal -UserId $RunAs `
     -LogonType S4U -RunLevel Limited
 
 try {
@@ -111,7 +118,7 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
     Fail "Windows did not register '$TaskName', despite reporting no error."
     exit 1
 }
-Good "registered '$TaskName', daily at $At, as $env:USERDOMAIN\$env:USERNAME"
+Good "registered '$TaskName', daily at $At, as $RunAs"
 
 Say ""
 Say "It runs:  powershell -File $Script"
