@@ -385,14 +385,18 @@ Who receives alarm notifications. Separate from `alarms.yaml` because it changes
 
 ```yaml
 recipients:
-  - name: Auke-Pieter Colijn
+  - name: Alice Example
     phone: "+31..."
-    email: a.p.colijn@nikhef.nl
+    email: alice.example@example.org
     enabled: true
   - name: ...
     phone: "+31..."
     enabled: false        # temporarily off, without losing the number
 ```
+
+The real file is **gitignored**: it holds colleagues' names, addresses and
+mobile numbers. `config/recipients.example.yaml` is the template to copy, and
+the test suite uses that template rather than the real list.
 
 Everyone with `enabled: true` receives the notification. No shift roster, no escalation chain: the list is the list.
 
