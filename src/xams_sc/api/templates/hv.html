@@ -10,9 +10,7 @@
    the operator has filled in - which is what §10a asks for. Empty boxes are
    left alone, so one channel or eight is the same gesture. #}
 <form method="post" action="/hv/apply" id="setpoints"
-      onsubmit="return confirm('Apply the setpoints you have entered?
-
-Each channel that is energised will ramp to its new value at the board's own rate.');">
+      onsubmit="return confirm('Apply the setpoints you have entered?\n\nEach channel that is energised will ramp to its new value at the board’s own rate.');">
 {# STACKED, not side by side. The two supplies shared a row until the table
    grew a VSET column, a setpoint box and an energise button; eleven columns
    in half a window is narrower than the content deserves. Full width each,
@@ -191,9 +189,21 @@ Each channel that is energised will ramp to its new value at the board's own rat
    separate act from applying a voltage. #}
 {% for s in supplies %}{% for c in s.channels %}
 <form method="post" action="/hv/output" id="out-{{ c.vset_channel }}"
-      onsubmit="return confirm({{ ('Turn OFF ' ~ c.label ~ '?' ) if c.energised else ('Energise ' ~ c.label ~ '?
+      {# Two things had to be right here and neither was, so the most
+         consequential button on the site asked nothing before firing.
 
-It will ramp to its loaded setpoint.') | tojson }});">
+         SINGLE-quoted attribute, because `tojson` writes a DOUBLE-quoted JS
+         string: inside onsubmit="..." the first quote it emitted ended the
+         attribute and the rest of the message became stray markup. `tojson`
+         escapes the single quote (and <, > and &), so this is safe.
+
+         PARENTHESISED as a whole before the filter, because a filter binds
+         TIGHTER than the inline `if` in Jinja - without the outer brackets
+         the quoting applied to the else-branch alone and the turn-OFF text
+         went out bare, as confirm(Turn OFF pmt1?). #}
+      onsubmit='return confirm({{ (("Turn OFF " ~ c.label ~ "?")
+         if c.energised
+         else ("Energise " ~ c.label ~ "?\n\nIt will ramp to its loaded setpoint.")) | tojson }});'>
   <input type="hidden" name="channel" value="{{ c.vset_channel }}">
   <input type="hidden" name="on" value="{{ '0' if c.energised else '1' }}">
 </form>

@@ -17,8 +17,9 @@
   <div class="body">
     {% if not notify.known %}
     <div class="flash bad" style="margin:0 0 .9rem 0">
-      <strong>Unknown</strong> — the alarm engine has not said whether it would
-      notify anybody. It is not running, or has not finished starting.
+      <strong>Unknown</strong> — the alarm engine
+      has not said whether it would notify anybody.
+      It is not running, or has not finished starting.
       Unknown is not "on": a page that cannot see the switch must not draw it
       in the safe position.
     </div>
@@ -28,11 +29,7 @@
       Email and SMS go out to everyone enabled below.
     </div>
     <form method="post" action="/alarms/notify" style="display:inline"
-          onsubmit="return confirm('Turn ALL alarm notifications OFF?
-
-Alarms will still be evaluated and shown on this page, but nobody will be emailed or texted until you turn them back on.
-
-This is recorded with your name.');">
+          onsubmit="return confirm('Turn ALL alarm notifications OFF?\n\nAlarms will still be evaluated and shown on this page, but nobody will be emailed or texted until you turn them back on.\n\nThis is recorded with your name.');">
       <input type="hidden" name="enabled" value="0">
       <button type="submit" class="hv-btn off">disable all alarms</button>
     </form>
@@ -49,9 +46,7 @@ This is recorded with your name.');">
       It stays off until somebody turns it back on — a restart will not do it.
     </div>
     <form method="post" action="/alarms/notify" style="display:inline"
-          onsubmit="return confirm('Turn alarm notifications back ON?
-
-Anything still in alarm will notify on its next reading.');">
+          onsubmit="return confirm('Turn alarm notifications back ON?\n\nAnything still in alarm will notify on its next reading.');">
       <input type="hidden" name="enabled" value="1">
       <button type="submit" class="hv-btn apply">enable all alarms</button>
     </form>

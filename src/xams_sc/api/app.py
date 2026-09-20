@@ -29,6 +29,7 @@ it without installing a toolchain (§8.1).
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -274,6 +275,19 @@ def _audit(state, actor: str, action: str, target: str, old, new,
          "old": None if old is None else str(old),
          "new": None if new is None else str(new),
          "result": result, "detail": detail}, separators=(",", ":")))
+
+
+def _json_age(age_s: float) -> float | None:
+    """An age as JSON can carry it: a number, or `null` for "never".
+
+    A channel that has never reported has an age of infinity, which strict
+    JSON cannot express. `json.dumps` raises on it rather than writing
+    `Infinity`, so one silent channel used to take the entire `/api/state`
+    response down with it - the machine-readable view of the system failing
+    precisely when part of the system had stopped talking. `null` is how the
+    same "no reading yet" is already reported for a service heartbeat.
+    """
+    return None if age_s is None or not math.isfinite(age_s) else round(age_s, 1)
 
 
 # `setup_logging` keeps 5 rotated files per service; anything outside this
@@ -1003,7 +1017,14 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
             "faults": state.known_faults(),
             "channels": [
                 {"name": c.name, "value": c.value, "unit": c.unit,
-                 "quality": c.quality, "age_s": round(c.age_s, 1),
+                 "quality": c.quality,
+                 # `null`, not the infinity a never-reported channel carries
+                 # internally: strict JSON has no way to write it, and
+                 # emitting it raw made the WHOLE endpoint 500 the moment any
+                 # one channel went silent - the API falling over exactly
+                 # when something is wrong with the plant. `null` reads the
+                 # same as it does for a service with no heartbeat.
+                 "age_s": _json_age(c.age_s),
                  "alarm": c.alarm, "healthy": c.healthy}
                 for c in state.channels()],
         })

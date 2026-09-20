@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from xams_sc import config as config_module
 from xams_sc.api import app as app_module
+from xams_sc.model import iso, utcnow
 from xams_sc.config import (read_recipients, recipient_warnings,
                             validate_recipients, write_recipients)
 
@@ -311,11 +312,15 @@ def test_the_boxes_are_not_browser_default_white(client):
 def test_empty_spare_row_is_not_an_error(client, config_dir):
     """Saving without using the spare row must simply work."""
     http, _, _ = client
+    before = read_recipients(config_dir)
     response = http.post("/alarms/recipients",
-                         data=dict(rows(read_recipients(config_dir)), by="apc"),
+                         data=dict(rows(before), by="apc"),
                          follow_redirects=False)
     assert "saved" in response.headers["location"]
-    assert len(read_recipients(config_dir)) == 4
+    # Against the list that was there, not a number: this fixture copies the
+    # REAL recipients.yaml, and hard-coding its length made adding a colleague
+    # break the test suite.
+    assert len(read_recipients(config_dir)) == len(before)
 
 
 def test_disabling_everyone_warns_but_is_allowed(client, config_dir):
@@ -367,7 +372,9 @@ def test_removal_is_audited_with_what_was_lost(client, config_dir):
     line = [a for a in audits if "Example Person 3" in a]
     assert line, audits
     assert '"new":"removed"' in line[0]
-    assert "r.j.j.vabeek@student.hhs.nl" in line[0]
+    # Their address as the file actually had it. Hard-coding one meant the
+    # test failed when they changed jobs, which is not what it is watching.
+    assert people[index]["email"] in line[0]
 
 
 def test_an_unchanged_save_is_not_audited(client, config_dir):
@@ -450,13 +457,36 @@ def test_the_overview_says_running_when_they_are_on(client):
     assert "alarms disabled" not in text
 
 
+def all_well(app, bus):
+    """Every service beating and every channel fresh.
+
+    The badge reports the worst thing it can find, so a fixture where nothing
+    has reported yet says "N CHANNEL(S) NOT OK" and never gets as far as the
+    switch. To test what the badge says about the switch, everything else has
+    to be genuinely well first.
+    """
+    now = iso(utcnow())
+    for service in ("cdaq", "caen", "lakeshore", "ups", "derived"):
+        bus.handlers["xams/status/#"](
+            f"xams/status/{service}/heartbeat", now)
+    for ch in app.state.system.config.enabled_channels():
+        bus.handlers["xams/meas/#"](
+            f"xams/meas/{ch.name}",
+            json.dumps({"t": now, "ch": ch.name, "v": 1.0,
+                        "u": ch.unit, "q": "ok"}))
+
+
 def test_the_badge_never_says_all_ok_with_alarms_off(client):
     """"ALL OK" on a system nobody would be told about is the sentence this
     whole subsystem exists to prevent."""
     http, app, bus = client
+    all_well(app, bus)
+    assert http.get("/healthz").text == "ALL OK"      # the fixture is sound
+
     notify_status(bus, False)
-    assert "ALARMS DISABLED" in http.get("/").text
     assert http.get("/healthz").text == "OK — ALARMS DISABLED"
+    # The page says it in its own words, above everything else on it.
+    assert "ALARMS ARE DISABLED" in http.get("/").text
 
 
 def test_a_live_alarm_still_outranks_the_switch(client):
@@ -476,12 +506,39 @@ def test_api_state_carries_the_switch(client):
                                      "by": "apc", "at": "2026-09-20T10:00:00Z"}
 
 
+def test_api_state_survives_a_channel_that_has_never_reported(client):
+    """One silent channel must not take the whole endpoint down.
+
+    A channel with no reading carries an age of infinity, which strict JSON
+    cannot write - so `/api/state` raised and returned 500 for EVERY caller
+    the moment any one channel went quiet. The machine-readable view of the
+    system failed exactly when part of the system had stopped talking, which
+    is the same failure the pages are built to avoid. `null` is how a service
+    with no heartbeat already reports the same thing.
+    """
+    http, app, bus = client
+    silent = list(app.state.system.config.enabled_channels())[0].name
+
+    body = http.get("/api/state").json()          # nothing has reported yet
+    ages = {c["name"]: c["age_s"] for c in body["channels"]}
+    assert ages[silent] is None
+    assert all(age is None for age in ages.values())
+
+    all_well(app, bus)
+    body = http.get("/api/state").json()
+    assert all(isinstance(c["age_s"], float) for c in body["channels"])
+
+
 def test_switching_it_off_is_a_command_and_is_audited(client):
     """The UI asks over the bus and reports what came back - it does not
     decide for itself that the alarms are off."""
     http, _, bus = client
 
     def answer(topic, payload):
+        # Only the command. The handler audits on the same bus, and a fake
+        # service that tried to acknowledge the audit line died on it.
+        if topic != "xams/cmd/alarms/notify":
+            return
         request = json.loads(payload)
         bus.handlers["xams/ack/alarms/notify"](
             "xams/ack/alarms/notify",

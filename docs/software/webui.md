@@ -77,17 +77,28 @@ render from:
   "config": "89f5d1d",
   "services": {…},
   "alarms": […],
+  "notifications": {"known":true,"enabled":true,"by":"apc","at":"…"},
   "faults": […],
   "channels": [
     {"name":"tt301","value":-92.4,"unit":"C","quality":"ok",
-     "age_s":3.1,"alarm":null,"healthy":true}
+     "age_s":3.1,"alarm":null,"healthy":true},
+    {"name":"tt302","value":null,"unit":"C","quality":"no data",
+     "age_s":null,"alarm":null,"healthy":false}
   ]
 }
 ```
 
 `age_s` is how long ago the reading arrived, which is what makes a stale
-channel visible to a caller that has no clock of its own. `healthy` folds
-quality and age into the one boolean a dashboard usually wants.
+channel visible to a caller that has no clock of its own. It is **`null` for
+a channel that has never reported at all** — the same way a service with no
+heartbeat reports one — rather than a very large number, which a caller
+would have to know to treat specially. `healthy` folds quality and age into
+the one boolean a dashboard usually wants.
+
+`notifications` says whether an alarm would reach anybody (§4.4a).
+`enabled: null` with `known: false` means the alarm engine has not said, which
+is not the same as `true`: a caller deciding "is the plant being watched"
+must not read silence as a yes.
 
 ---
 
