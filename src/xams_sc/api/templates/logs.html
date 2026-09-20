@@ -6,6 +6,25 @@
    stamp below is for. #}
 {% block refresh %}{% endblock %}
 {% block content %}
+
+<style>
+/* Log colouring, in the same spirit as an editor's (§8.1). The severity
+   colours are the interface's own --warn and --bad, so a red ERROR here and
+   a red badge on the overview mean the same thing. The metadata every line
+   repeats - the timestamp, the service, the logger - is dimmed rather than
+   coloured: it is there to be checked, not read, and colouring it would
+   compete with the message that actually differs between lines. */
+.lg-time  { color:var(--dim); }
+.lg-svc   { color:#bc8cff; }              /* the service, the usual first question */
+.lg-name  { color:var(--dim); }
+.lg-debug { color:var(--dim); }
+.lg-info  { color:#58a6ff; }              /* blue, not green: INFO is not "good" */
+.lg-warn  { color:var(--warn); }
+.lg-error { color:var(--bad); }
+.lg-crit  { color:var(--bad); font-weight:700; }
+.lg-cont  { color:var(--dim); }           /* traceback bodies */
+</style>
+
 <div class="card">
   <h2>Service logs</h2>
   <div class="body">
@@ -27,6 +46,8 @@
       {% endfor %}
     {% endif %}
   </div>
-  <pre>{{ text }}</pre>
+  {# Already escaped span by span in `_colourise`, which is where the escaping
+     has to happen anyway to get the markup in at all. #}
+  <pre>{{ text|safe }}</pre>
 </div>
 {% endblock %}

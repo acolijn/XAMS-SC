@@ -506,6 +506,14 @@ This is the second place to look when a service is unhappy; the first is
 `xams-ctl status`. What the messages mean is in
 [Troubleshooting](troubleshooting.md).
 
+**The lines are coloured by level**, the way an editor colours a `.log` file:
+`WARNING` amber and `ERROR` red, in the same colours the overview uses for the
+same idea. An error colours its message as well as the level word, because a
+five-character word is easy to miss in eighty lines. Everything each line
+repeats — the timestamp, the service, the logger — is dimmed instead: it is
+there to be checked, not read. Traceback bodies are dimmed as one block, so
+the eye falls to the next timestamp rather than into the stack frames.
+
 **This page does not refresh itself**, and it is the only one that does not: a
 log that reloads while you are reading it takes the line away mid-sentence. It
 says when it was read, above the text — that stamp is the page's age, and

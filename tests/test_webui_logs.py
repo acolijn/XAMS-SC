@@ -155,3 +155,87 @@ class TestWhenThereIsNothingToShow:
 
         assert r.status_code == 200
         assert "no such log" in r.text
+
+
+class TestColouring:
+    """The colours, which exist so the eye finds the one bad line in eighty
+    (§8.1). The risk they bring is not cosmetic: colouring means putting
+    markup around text that arrived from a serial port, so the escaping is
+    what most of this class is about.
+    """
+
+    # The real format is `%(levelname)-8s` followed by a space, so the gap
+    # before `[caen]` differs per level. Written out rather than patched into
+    # LINE, so these read as the lines the handler actually writes.
+    WARN = "2026-09-18 13:27:01 WARNING  [caen] xams_sc.devices.caen: %s"
+    ERROR = "2026-09-18 13:27:01 ERROR    [caen] xams_sc.devices.caen: %s"
+
+    def test_the_level_is_marked_with_its_own_class(self, client, logs):
+        (logs / "caen.log").write_text(self.WARN % "link down",
+                                       encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert '<span class="lg-warn">WARNING</span>' in body
+
+    def test_an_error_colours_its_message_too(self, client, logs):
+        """A level word four characters wide is easy to miss; the sentence
+        beside it is not."""
+        (logs / "caen.log").write_text(self.ERROR % "port closed",
+                                       encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert '<span class="lg-error">port closed</span>' in body
+
+    def test_an_ordinary_message_is_left_in_the_body_colour(self, client, logs):
+        """If every line shouts, the one that matters stops standing out."""
+        (logs / "caen.log").write_text(LINE % (1, "connected"),
+                                       encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert "</span>: connected" in body
+
+    def test_markup_in_a_log_line_is_escaped(self, client, logs):
+        """A device reply is untrusted text. It reaches this page verbatim,
+        and one <script> in a CAEN error string must not run here."""
+        (logs / "caen.log").write_text(
+            LINE % (1, "reply <script>alert(1)</script> & done"),
+            encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert "<script>" not in body
+        assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; done" in body
+
+    def test_a_traceback_body_is_dimmed_as_one_block(self, client, logs):
+        (logs / "caen.log").write_text("\n".join([
+            self.ERROR % "read failed",
+            "Traceback (most recent call last):",
+        ]), encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert '<span class="lg-cont">Traceback (most recent call last):</span>' \
+            in body
+
+    def test_the_spacing_of_the_original_line_survives(self, client, logs):
+        """Read side by side with the real file, the columns must still line
+        up - the run of spaces after the level is captured, not assumed."""
+        (logs / "caen.log").write_text(LINE % (1, "connected"),
+                                       encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert '</span>     <span class="lg-svc">[caen]</span>' in body
+
+    def test_a_line_that_is_not_a_record_is_still_shown(self, client, logs):
+        """Anything the page cannot parse must still reach the reader. A log
+        it silently drops lines from is worse than no log."""
+        (logs / "caen.log").write_text("not a log record at all",
+                                       encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert "not a log record at all" in body

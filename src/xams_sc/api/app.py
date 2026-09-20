@@ -32,6 +32,7 @@ import logging
 import math
 import re
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -330,6 +331,63 @@ def _newest_first(lines: list[str]) -> list[str]:
         else:
             records[-1].append(line)
     return [line for record in reversed(records) for line in record]
+
+
+# One record's header, exactly as `setup_logging` writes it (service.py):
+#     2026-09-20 11:26:28,091 INFO     [sinks] xams_sc.sinks.pg_writer: text
+# The run of spaces between the fields is captured rather than assumed, so the
+# rendered line stays aligned with the file it came from - a log read side by
+# side with the real file must not shift under the reader.
+_HEADER = re.compile(
+    r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:,\d{3})?)"
+    r"(?P<gap1>\s+)(?P<level>[A-Z]+)(?P<gap2>\s+)"
+    r"(?P<service>\[[^\]]*\])(?P<gap3>\s*)"
+    r"(?P<logger>[\w.]+): (?P<message>.*)$")
+
+# A class per level rather than a colour per level: the palette belongs in the
+# stylesheet with every other colour in the interface (§8.1), not in here.
+_LEVEL_CLASS = {"DEBUG": "lg-debug", "INFO": "lg-info", "WARNING": "lg-warn",
+                "ERROR": "lg-error", "CRITICAL": "lg-crit"}
+
+
+def _colourise(text: str) -> str:
+    """The log as HTML, one span per field, for the Logs tab (§8.1).
+
+    Done here rather than in the browser so that it is testable like the rest
+    of the page, and so a reader with JavaScript off still gets the colours.
+
+    EVERY piece is escaped BEFORE any markup goes near it. A log line is not
+    trusted text: it carries device replies, exception strings and MQTT
+    payloads straight off the wire, and one `<script>` in a CAEN error string
+    would otherwise run on this page.
+    """
+    out = []
+    for line in text.splitlines():
+        match = _HEADER.match(line)
+        if not match:
+            # A traceback body, or any line that does not start a record.
+            # Dimmed as one block so the eye falls to the next timestamp
+            # instead of reading the stack frames first.
+            out.append('<span class="lg-cont">%s</span>' % escape(line))
+            continue
+        level = match.group("level")
+        cls = _LEVEL_CLASS.get(level, "lg-info")
+        # ERROR and CRITICAL colour the MESSAGE too, not just the level word.
+        # Everything else leaves it in the body colour: if every line shouts,
+        # the one that matters stops standing out.
+        message = escape(match.group("message"))
+        if level in ("ERROR", "CRITICAL"):
+            message = '<span class="%s">%s</span>' % (cls, message)
+        out.append(
+            '<span class="lg-time">%s</span>%s'
+            '<span class="%s">%s</span>%s'
+            '<span class="lg-svc">%s</span>%s'
+            '<span class="lg-name">%s</span>: %s'
+            % (escape(match.group("time")), match.group("gap1"),
+               cls, escape(level), match.group("gap2"),
+               escape(match.group("service")), match.group("gap3"),
+               escape(match.group("logger")), message))
+    return "\n".join(out)
 
 
 def _redirect_hv(error: str | None, ok: str | None = None):
@@ -997,7 +1055,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 text = f"could not read {path}: {exc}"
 
         return page(request, "logs.html", available=sorted(choices),
-                    selected=service, text=text, rotations=rotations,
+                    selected=service, text=_colourise(text), rotations=rotations,
                     older=older, lines=lines,
                     read_at=datetime.now().strftime("%H:%M:%S"))
 
