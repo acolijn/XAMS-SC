@@ -697,6 +697,73 @@ def cmd_hv_off(args) -> int:
     return _hv_output(args, False)
 
 
+def _set_notifications(args, enabled: bool) -> int:
+    """Throw the master alarm switch from a terminal (§4.4a).
+
+    Here as well as on the page for one reason: the way to get the alarms
+    back is not allowed to depend on the web UI being up. If the switch could
+    only be reached from a page, a web service that would not start would
+    leave the alarms off with no way to re-arm them but editing a file the
+    engine has already read.
+    """
+    from ..bus import ACK_NOTIFY, TOPIC_NOTIFY, Bus
+
+    who = args.by or os.environ.get("USERNAME") or "unknown"
+    acks = []
+
+    bus = Bus(client_id="xams-ctl-notify", host=args.broker, port=args.port)
+    bus.subscribe(ACK_NOTIFY, lambda t, p: acks.append(json.loads(p)))
+    bus.connect()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not bus.connected:
+        time.sleep(0.1)
+    if not bus.connected:
+        print("broker not reachable; nothing was sent")
+        bus.disconnect()
+        return 1
+    time.sleep(0.3)
+
+    bus.publish_raw(TOPIC_NOTIFY, json.dumps({"enabled": enabled, "by": who}))
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not acks:
+        time.sleep(0.2)
+    bus.disconnect()
+
+    if not acks:
+        print("NO ANSWER - is the alarms service running?")
+        print("Nothing was changed.")
+        return 1
+    ack = acks[-1]
+    if not ack.get("ok"):
+        print(f"refused: {ack.get('reason', 'no reason given')}")
+        return 1
+
+    if enabled:
+        print(f"alarm notifications are ON (by {who})")
+        still = ack.get("active") or []
+        if still:
+            print(f"  {len(still)} channel(s) still in alarm will notify on "
+                  f"their next reading:")
+            for name in still:
+                print(f"    {name}")
+    else:
+        print(f"alarm notifications are OFF (by {who})")
+        print("  Alarms are still evaluated, published and recorded.")
+        print("  NOBODY WILL BE TOLD about them until you run:")
+        print("    xams-ctl alarms-on --by <you>")
+    return 0
+
+
+def cmd_alarms_on(args) -> int:
+    """Turn alarm delivery back on for the whole system."""
+    return _set_notifications(args, True)
+
+
+def cmd_alarms_off(args) -> int:
+    """Stop delivering alarms to anybody. Evaluation carries on."""
+    return _set_notifications(args, False)
+
+
 def cmd_check(args) -> int:
     """Validate the configuration and print what it defines. No side effects."""
     try:
@@ -796,6 +863,17 @@ def build_parser() -> argparse.ArgumentParser:
                         help="one channel; default is every hv_vset channel")
     hv_off.add_argument("--by", help="who is doing this (recorded in audit)")
     hv_off.set_defaults(func=cmd_hv_off)
+
+    alarms_off = sub.add_parser(
+        "alarms-off",
+        help="stop delivering alarms to anybody (they are still evaluated)")
+    alarms_off.add_argument("--by", help="who is doing this (recorded in audit)")
+    alarms_off.set_defaults(func=cmd_alarms_off)
+
+    alarms_on = sub.add_parser("alarms-on",
+                               help="deliver alarms again")
+    alarms_on.add_argument("--by", help="who is doing this (recorded in audit)")
+    alarms_on.set_defaults(func=cmd_alarms_on)
     return p
 
 

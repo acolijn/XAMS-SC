@@ -2,6 +2,19 @@
 {% block title %}Overview{% endblock %}
 {% block content %}
 
+{# Above the alarms, because it changes what they mean (§4.4a). Shown here
+   whether or not anything is firing: the dangerous moment is the quiet one,
+   when the page looks well and nothing would be sent if it stopped being. #}
+{% if notify.known and not notify.enabled %}
+<div class="flash bad" style="margin:0 0 1rem 0">
+  <strong>ALARMS ARE DISABLED — nobody is being told.</strong>
+  Alarms are still evaluated, shown and recorded; no email or SMS is sent.
+  {% if notify.by %}Switched off by <strong>{{ notify.by }}</strong>{% endif %}
+  {%- if notify.at %}, {{ notify.at }}{% endif %}.
+  <a href="/alarms">Turn them back on</a>.
+</div>
+{% endif %}
+
 {% if alarms %}
 <div class="card">
   <h2>Active alarms</h2>
@@ -34,11 +47,18 @@
       {% for s in services %}
       <tr>
         <td>
-          {% if not s.expects_heartbeat %}<span class="dot off"></span>
+          {% if s.name == 'alarms' and notify.known and not notify.enabled %}
+          <span class="dot bad"></span>
+          {% elif not s.expects_heartbeat %}<span class="dot off"></span>
           {% elif s.healthy %}<span class="dot good"></span>
           {% else %}<span class="dot bad"></span>{% endif %}{{ s.name }}
         </td>
-        <td class="dim">{{ s.state }}</td>
+        {# The alarms row says what the engine is DOING, not merely that
+           its process is up. "running" beside a switched-off engine is true
+           and useless (§4.4a). #}
+        {% if s.name == 'alarms' and notify.known and not notify.enabled %}
+        <td class="bad"><strong>alarms disabled</strong></td>
+        {% else %}<td class="dim">{{ s.state }}</td>{% endif %}
         <td class="num dim">
           {% if s.age_s is not none %}{{ '%.0f'|format(s.age_s) }}s ago
           {% elif not s.expects_heartbeat %}no heartbeat

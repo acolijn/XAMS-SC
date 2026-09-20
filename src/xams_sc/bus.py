@@ -73,6 +73,19 @@ ACK_HV_VSET = "xams/ack/caen/vset"
 TOPIC_HV_OUTPUT = "xams/cmd/caen/output"
 ACK_HV_OUTPUT = "xams/ack/caen/output"
 
+# THE MASTER NOTIFICATION SWITCH (§4.4a). Turns alarm DELIVERY off and on for
+# the whole system - the engine keeps evaluating, publishing and recording,
+# and simply stops waking people up. It exists because the slow control runs
+# when the plant does not, and a fortnight of "the cryostat is warm" at three
+# in the morning teaches people to ignore the one that matters.
+#
+# The status is RETAINED, so every page shows it from the moment it connects
+# and no page can be looking at a system whose alarms are off without saying
+# so.
+TOPIC_NOTIFY = "xams/cmd/alarms/notify"
+ACK_NOTIFY = "xams/ack/alarms/notify"
+STATUS_NOTIFY = "xams/status/notify"
+
 
 class Bus:
     """A thin wrapper over paho-mqtt with an outage buffer.

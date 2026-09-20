@@ -40,9 +40,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
-                   ACK_LS_SETPOINT, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
+                   ACK_LS_SETPOINT, ACK_NOTIFY, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
                    TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
-                   TOPIC_RELOAD, Bus)
+                   TOPIC_NOTIFY, TOPIC_RELOAD, Bus)
 from ..config import (LOG_DIR, ConfigError, load, read_hv_defaults,
                       read_recipients, recipient_warnings,
                       validate_recipients, write_hv_defaults,
@@ -364,6 +364,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         return templates.TemplateResponse(request, name, {
             "state": state, "config": state.config, "overall": status,
             "overall_class": css, "alarms": state.active_alarms(),
+            # Site-wide (§4.4a): a page must never be able to show a healthy
+            # system without showing that its alarms are switched off.
+            "notify": state.notifications(),
             # Site-wide: the operator identifies the session, not one
             # instrument, and the HV control surface will want the same name
             # without setting it again (section 10 rule 5).
@@ -877,6 +880,51 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         return RedirectResponse("/alarms?saved=" + quote(note),
                                 status_code=303)
 
+    @app.post("/alarms/notify")
+    def alarms_notify(request: Request, enabled: str = Form(""),
+                      by: str = Form("")):
+        """The master switch: turn alarm DELIVERY off or on (§4.4a).
+
+        **This is the most dangerous control on the site**, and it is here
+        because the alternative is worse. The slow control runs when the plant
+        does not, and a fortnight of "the cryostat is warm" at three in the
+        morning is how an operator learns to ignore the message that matters.
+        Stopping that properly is a switch somebody threw on purpose, with
+        their name on it - not a recipient list quietly emptied, not a service
+        stopped, and not a threshold widened until it never fires again.
+
+        What it does NOT do is make the system look well. The engine still
+        evaluates, the pages still show every active alarm, the history is
+        unbroken, and the badge at the top of every page says the alarms are
+        off for as long as they are.
+        """
+        from urllib.parse import quote
+        who = operator_of(request, by)
+        wanted = enabled.strip().lower() in ("1", "true", "on", "yes")
+        answer = state.command(TOPIC_NOTIFY, ACK_NOTIFY,
+                               {"enabled": wanted, "by": who})
+        if not answer.get("ok"):
+            return RedirectResponse(
+                "/alarms?error=" + quote(str(answer.get("reason", "refused"))),
+                status_code=303)
+
+        _audit(state, who, "alarm_notifications", "all",
+               "on" if answer.get("was") else "off", "on" if wanted else "off")
+        log.critical("ALARM NOTIFICATIONS %s by %s",
+                     "ON" if wanted else "OFF", who)
+        if wanted:
+            still = answer.get("active") or []
+            note = "alarm notifications are ON"
+            if still:
+                note += (" - %d channel(s) still in alarm will notify on "
+                         "their next reading: %s"
+                         % (len(still), ", ".join(still)))
+        else:
+            note = ("WARNING: alarm notifications are OFF - alarms are still "
+                    "evaluated and shown here, but nobody is told")
+        return RedirectResponse("/alarms?saved=" + quote(note),
+                                status_code=303)
+
     @app.get("/mimic", response_class=HTMLResponse)
     def mimic(request: Request):
         """The P&ID with live values on it (§8.2).
@@ -948,6 +996,10 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
             "config": state.config.config_hash,
             "services": state.services(),
             "alarms": state.active_alarms(),
+            # Whether anybody would be told (§4.4a). A caller polling this to
+            # decide "is the plant being watched" needs the switch as much as
+            # it needs the alarms; `enabled: null` is the engine not saying.
+            "notifications": state.notifications(),
             "faults": state.known_faults(),
             "channels": [
                 {"name": c.name, "value": c.value, "unit": c.unit,

@@ -18,6 +18,7 @@ mid-edit far more often than it is a mistake, and one of them must not hold the
 rest of the list hostage.
 """
 
+import json
 import shutil
 
 import pytest
@@ -36,6 +37,10 @@ class FakeBus:
     def __init__(self):
         self.published = []
         self.handlers = {}
+        # Set by a test that wants to play the service on the other end:
+        # called with every published command, so an ack can be fed back the
+        # way a running service would.
+        self.on_publish = None
 
     def subscribe(self, topic, handler):
         self.handlers[topic] = handler
@@ -48,6 +53,8 @@ class FakeBus:
 
     def publish_raw(self, topic, payload, retain=False):
         self.published.append((topic, payload))
+        if self.on_publish is not None:
+            self.on_publish(topic, payload)
 
 
 class StubDrift:
@@ -382,3 +389,122 @@ def test_the_reload_notices_a_ticked_checkbox(client):
     http, _, _ = client
     script = http.get("/alarms").text
     assert "defaultChecked" in script
+
+
+# ------------------------------------------------- the master switch (§4.4a)
+#
+# One button that stops every alarm reaching anybody. It exists because the
+# slow control runs when the plant does not, and the ways of getting that
+# quiet WITHOUT a switch - stop the service, empty the recipient list, widen
+# a threshold - all leave a system that looks armed and is not.
+#
+# So what is tested here is mostly the saying-so.
+
+def notify_status(bus, enabled, by="apc", at="2026-09-20T10:00:00Z"):
+    """What the alarm engine publishes, retained, about the switch."""
+    bus.handlers["xams/status/#"](
+        "xams/status/notify",
+        json.dumps({"enabled": enabled, "by": by, "at": at}))
+
+
+def test_unknown_until_the_engine_says(client):
+    """Nothing published is unknown, never "on" (§12)."""
+    http, _, _ = client
+    text = http.get("/alarms").text
+    assert "has not said whether it would notify" in text
+    assert "disable all alarms" not in text
+
+
+def test_the_button_is_offered_when_alarms_are_on(client):
+    http, _, bus = client
+    notify_status(bus, True)
+    text = http.get("/alarms").text
+    assert "disable all alarms" in text
+    assert "Alarms are notifying" in text
+
+
+def test_the_alarms_page_shouts_when_they_are_off(client):
+    http, _, bus = client
+    notify_status(bus, False)
+    text = http.get("/alarms").text
+    assert "ALARMS ARE DISABLED" in text
+    assert "enable all alarms" in text
+    assert "apc" in text
+
+
+def test_the_overview_says_alarms_disabled_not_running(client):
+    """The services row must say what the engine is DOING (§4.4a)."""
+    http, _, bus = client
+    bus.handlers["xams/status/#"]("xams/status/alarms/state", "running")
+    notify_status(bus, False)
+    text = http.get("/").text
+    assert "alarms disabled" in text
+    assert "ALARMS ARE DISABLED" in text
+
+
+def test_the_overview_says_running_when_they_are_on(client):
+    http, _, bus = client
+    bus.handlers["xams/status/#"]("xams/status/alarms/state", "running")
+    notify_status(bus, True)
+    text = http.get("/").text
+    assert "alarms disabled" not in text
+
+
+def test_the_badge_never_says_all_ok_with_alarms_off(client):
+    """"ALL OK" on a system nobody would be told about is the sentence this
+    whole subsystem exists to prevent."""
+    http, app, bus = client
+    notify_status(bus, False)
+    assert "ALARMS DISABLED" in http.get("/").text
+    assert http.get("/healthz").text == "OK — ALARMS DISABLED"
+
+
+def test_a_live_alarm_still_outranks_the_switch(client):
+    http, _, bus = client
+    notify_status(bus, False)
+    bus.handlers["xams/alarm/#"](
+        "xams/alarm/pmain",
+        '{"state":"major","threshold":"hihi","value":2.5}')
+    assert "MAJOR ALARM" in http.get("/healthz").text
+
+
+def test_api_state_carries_the_switch(client):
+    http, _, bus = client
+    notify_status(bus, False)
+    body = http.get("/api/state").json()
+    assert body["notifications"] == {"known": True, "enabled": False,
+                                     "by": "apc", "at": "2026-09-20T10:00:00Z"}
+
+
+def test_switching_it_off_is_a_command_and_is_audited(client):
+    """The UI asks over the bus and reports what came back - it does not
+    decide for itself that the alarms are off."""
+    http, _, bus = client
+
+    def answer(topic, payload):
+        request = json.loads(payload)
+        bus.handlers["xams/ack/alarms/notify"](
+            "xams/ack/alarms/notify",
+            json.dumps({"ok": True, "enabled": request["enabled"],
+                        "was": True, "active": ["pmain"],
+                        "by": request["by"]}))
+
+    bus.on_publish = answer
+    response = http.post("/alarms/notify", data={"enabled": "0", "by": "apc"},
+                         follow_redirects=False)
+    assert response.status_code == 303
+    assert "nobody%20is%20told" in response.headers["location"]
+
+    audits = [p for topic, p in bus.published if topic == "xams/audit"]
+    assert any('"action":"alarm_notifications"' in a and '"new":"off"' in a
+               and '"actor":"apc"' in a for a in audits)
+
+
+def test_a_silent_engine_is_reported_as_a_refusal(client):
+    """No ack means it did not happen, and the page must not claim it did."""
+    http, app, _ = client
+    app.state.system.command = lambda *a, **kw: {
+        "ok": False, "reason": "the alarms service did not answer"}
+    response = http.post("/alarms/notify", data={"enabled": "0", "by": "apc"},
+                         follow_redirects=False)
+    assert "error" in response.headers["location"]

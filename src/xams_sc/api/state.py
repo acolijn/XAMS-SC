@@ -18,8 +18,8 @@ import time
 from dataclasses import dataclass
 
 from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE, ACK_LS_SETPOINT,
-                   TOPIC_ALARM, TOPIC_BACKUP, TOPIC_FLOW_RESET, TOPIC_MEAS,
-                   TOPIC_RELOAD, TOPIC_STATUS, Bus)
+                   ACK_NOTIFY, TOPIC_ALARM, TOPIC_BACKUP, TOPIC_FLOW_RESET,
+                   TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -87,6 +87,7 @@ class SystemState:
         self._acks: dict[str, dict] = {}
         self._backup: dict | None = None
         self._limits: dict | None = None
+        self._notify: dict | None = None
         self.started = utcnow()
 
     # ---------------------------------------------------------------- inputs
@@ -110,6 +111,17 @@ class SystemState:
         # rather than on its own subscription, because it arrives on the same
         # wildcard and falling through the length check is how it went
         # unnoticed until the Alarms page needed it (§11).
+        # `xams/status/notify` is the master alarm switch (§4.4a), and like
+        # `limits` it belongs to the engine as a whole rather than to a
+        # service, so it is three parts and handled before the length check.
+        if len(parts) == 3 and parts[2] == "notify":
+            try:
+                loaded = json.loads(payload)
+            except ValueError:
+                return
+            with self._lock:
+                self._notify = loaded if isinstance(loaded, dict) else None
+            return
         if len(parts) == 3 and parts[2] == "limits":
             try:
                 loaded = json.loads(payload)
@@ -294,6 +306,7 @@ class SystemState:
         self.bus.subscribe(ACK_LS_RANGE, self._on_ack)
         self.bus.subscribe(ACK_HV_VSET, self._on_ack)
         self.bus.subscribe(ACK_HV_OUTPUT, self._on_ack)
+        self.bus.subscribe(ACK_NOTIFY, self._on_ack)
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)
         self.bus.subscribe(f"{TOPIC_ALARM}/#", self._on_alarm)
@@ -378,6 +391,22 @@ class SystemState:
         with self._lock:
             return None if self._limits is None else dict(self._limits)
 
+    def notifications(self) -> dict:
+        """Whether anybody would be told about an alarm (§4.4a).
+
+        Three states, and the third is the point: `on`, `off`, and **unknown**
+        when the engine has published nothing. Unknown is not on. A page that
+        cannot see the switch must not draw it in the safe position - that is
+        precisely how somebody comes to believe the alarms are armed.
+        """
+        with self._lock:
+            data = None if self._notify is None else dict(self._notify)
+        if data is None:
+            return {"known": False, "enabled": None, "by": "", "at": ""}
+        return {"known": True, "enabled": bool(data.get("enabled", True)),
+                "by": str(data.get("by") or ""),
+                "at": str(data.get("at") or "")}
+
     def unhealthy_channels(self) -> list[ChannelView]:
         return [c for c in self.channels() if not c.healthy]
 
@@ -433,4 +462,9 @@ class SystemState:
             return (f"{len(broken)} SERVICE(S) NOT REPORTING", "bad")
         if self.unhealthy_channels():
             return (f"{len(self.unhealthy_channels())} CHANNEL(S) NOT OK", "warn")
+        # Last, and deliberately not first: a live alarm outranks it. But
+        # "ALL OK" on a system whose alarms cannot reach anybody is the exact
+        # sentence this whole subsystem exists to prevent (§4.4a).
+        if self.notifications().get("enabled") is False:
+            return ("OK — ALARMS DISABLED", "warn")
         return ("ALL OK", "good")

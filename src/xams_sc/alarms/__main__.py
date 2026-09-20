@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from ..bus import Bus
+from ..bus import ACK_NOTIFY, TOPIC_NOTIFY, Bus
 from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
 from ..model import ServiceState
 from ..service import SingleInstance, setup_logging
@@ -126,12 +126,47 @@ def main(argv=None) -> int:
                         json.dumps({"service": "alarms", "applied": True,
                                     "config": new_config.config_hash}))
 
+    def handle_notify(topic: str, payload: str) -> None:
+        """The master switch, from the web UI or the CLI (§4.4a).
+
+        Answered like any other command - the page that asked must never
+        report a change it cannot confirm happened.
+        """
+        try:
+            request = json.loads(payload)
+            wanted = bool(request["enabled"])
+        except (ValueError, KeyError, TypeError):
+            log.error("notify command ignored, malformed: %r", payload)
+            bus.publish_raw(ACK_NOTIFY, json.dumps(
+                {"ok": False, "reason": "malformed command"}))
+            return
+        result = engine.set_notifications(wanted, str(request.get("by") or ""))
+        # Audited on the same topic as every other consequential change, so
+        # it is in the JSONL archive whether or not the database is up.
+        bus.publish_raw("xams/audit", json.dumps({
+            "t": result.get("at") or "", "actor": result.get("by") or "",
+            "action": "alarm_notifications",
+            "target": "all", "old": "on" if result["was"] else "off",
+            "new": "on" if result["enabled"] else "off",
+        }, separators=(",", ":")))
+        bus.publish_raw(ACK_NOTIFY, json.dumps(result, separators=(",", ":")))
+
     bus.subscribe("xams/cmd/all/reload", handle_reload)
+    bus.subscribe(TOPIC_NOTIFY, handle_notify)
 
     bus.connect()
     bus.publish_state("alarms", ServiceState.RUNNING)
     log.info("alarm engine running (stale after %.0fs, repeat every %.0f min)",
              engine.stale_after, engine.min_repeat_s / 60)
+    # Said at every start, because a switch thrown a fortnight ago and
+    # restored from a file is exactly the one nobody remembers (§4.4a).
+    engine.publish_notifications()
+    if not engine.notifications_enabled:
+        log.critical("ALARM NOTIFICATIONS ARE SWITCHED OFF (by %s, %s). "
+                     "Alarms are evaluated and recorded, and NOBODY WILL BE "
+                     "TOLD. Turn them back on from /alarms.",
+                     engine.notify_changed_by or "somebody",
+                     engine.notify_changed_at or "at an unrecorded time")
 
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -145,8 +180,15 @@ def main(argv=None) -> int:
             stop.wait(30)
             active = engine.active()
             if active:
-                log.info("%d active alarm(s): %s", len(active),
-                         ", ".join(f"{s.channel}={s.state}" for s in active))
+                # Which way the switch is sits next to the list, because this
+                # is the line somebody greps during an incident, and "what is
+                # wrong" and "is anybody being told" are one question (§4.4a).
+                log.log(logging.CRITICAL if not engine.notifications_enabled
+                        else logging.INFO,
+                        "%d active alarm(s): %s%s", len(active),
+                        ", ".join(f"{s.channel}={s.state}" for s in active),
+                        "" if engine.notifications_enabled
+                        else " - NOTIFICATIONS ARE OFF, nobody is being told")
     finally:
         log.info("shutting down; %d flight-recorder dump(s) this run",
                  recorder.dumps)

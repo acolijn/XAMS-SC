@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
-from ..bus import TOPIC_ALARM, TOPIC_MEAS, Bus
+from ..bus import STATUS_NOTIFY, TOPIC_ALARM, TOPIC_MEAS, Bus
 from ..model import Measurement, Quality, iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -88,10 +90,19 @@ class AlarmEngine:
     touching alarm logic (§11).
     """
 
-    def __init__(self, bus: Bus, config, notifier=None, on_alarm=None):
+    def __init__(self, bus: Bus, config, notifier=None, on_alarm=None,
+                 notify_state_path: Path | str = "data/alarm_notify.json"):
         self.bus = bus
         self.config = config
         self.notifier = notifier
+        # THE MASTER SWITCH (§4.4a). Evaluation is unaffected by it: what it
+        # turns off is delivery, so the pages, the history and the flight
+        # recorder all carry on telling the truth while nobody is woken up.
+        self.notify_state_path = Path(notify_state_path)
+        self.notifications_enabled = True
+        self.notify_changed_by = ""
+        self.notify_changed_at = ""
+        self._restore_notifications()
         # Called when an alarm is raised — the flight recorder subscribes here
         # so the dump happens at the moment of the alarm (§9.1).
         self.on_alarm = on_alarm
@@ -231,6 +242,21 @@ class AlarmEngine:
         self.bus.publish_raw(f"{TOPIC_ALARM}/{state.channel}", payload, retain=True)
 
     def _notify(self, state: ChannelState, value: float | None) -> None:
+        # THE MASTER SWITCH, checked here rather than around the evaluation
+        # (§4.4a). Everything above this line has already happened: the state
+        # is published, the history has it, the flight recorder has dumped.
+        # Only the waking-somebody-up is skipped.
+        #
+        # `last_notified` is deliberately NOT stamped while off. It is the
+        # clock for the repeat, so leaving it stale means that the moment
+        # alarms are switched back on, everything still wrong announces itself
+        # on its next reading instead of waiting out the repeat interval in
+        # silence. Coming back on must not be quiet.
+        if not self.notifications_enabled:
+            log.warning("NOT notifying for %s (%s): alarm notifications are "
+                        "switched OFF, by %s", state.channel, state.state,
+                        self.notify_changed_by or "somebody")
+            return
         state.last_notified = time.monotonic()
         if self.notifier is None:
             return
@@ -359,6 +385,90 @@ class AlarmEngine:
 
     # ------------------------------------------------------------- operations
 
+    # --------------------------------------------- the master switch (§4.4a)
+
+    def _restore_notifications(self) -> None:
+        """Read the switch back at startup. Absent means ON.
+
+        **A restart does not re-arm the alarms.** It is the more dangerous of
+        the two possible defaults and it is still the right one: the operator
+        who switched delivery off did not ask for it back, and a service that
+        quietly re-armed itself on a restart nobody noticed would send the
+        3am message the switch was thrown to prevent. It is instead shouted
+        about in the log at every start, on every page, and in the status
+        topic, so "off" is never a state the system is quietly in.
+        """
+        try:
+            data = json.loads(self.notify_state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        self.notifications_enabled = bool(data.get("enabled", True))
+        self.notify_changed_by = str(data.get("by") or "")
+        self.notify_changed_at = str(data.get("at") or "")
+
+    def _save_notifications(self) -> None:
+        """Persist the switch, atomically, beside the other runtime state."""
+        payload = {"enabled": self.notifications_enabled,
+                   "by": self.notify_changed_by, "at": self.notify_changed_at}
+        try:
+            self.notify_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.notify_state_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(tmp, self.notify_state_path)
+        except OSError:
+            # Not fatal, and not silent: the switch is in force for this
+            # process either way, and the retained topic carries it to the
+            # pages. What is lost is only that it survives a restart.
+            log.exception("could not persist the notification switch to %s",
+                          self.notify_state_path)
+
+    def publish_notifications(self) -> None:
+        """Say, retained, whether anybody would be told (§4.4a).
+
+        Retained because a page that connects later must not have to wait for
+        the next change to find out that the alarms are off. There is no
+        "unknown" here - the absence of this topic is what unknown looks like,
+        and the pages render that as unknown rather than as enabled.
+        """
+        self.bus.publish_raw(STATUS_NOTIFY, json.dumps({
+            "enabled": self.notifications_enabled,
+            "by": self.notify_changed_by,
+            "at": self.notify_changed_at,
+        }, separators=(",", ":")), retain=True)
+
+    def set_notifications(self, enabled: bool, by: str) -> dict:
+        """Turn alarm delivery off or on for the whole system.
+
+        Returns what happened, for the acknowledgement. Switching to the state
+        it is already in is reported as ok and changes nothing, so a double
+        click is harmless.
+        """
+        was = self.notifications_enabled
+        with self._lock:
+            self.notifications_enabled = bool(enabled)
+            self.notify_changed_by = by or "unknown"
+            self.notify_changed_at = iso(utcnow())
+            active = [s.channel for s in self._states.values()
+                      if s.state != "ok"]
+        self._save_notifications()
+        self.publish_notifications()
+
+        if enabled:
+            log.warning("ALARM NOTIFICATIONS SWITCHED ON by %s%s", by,
+                        (" - %d channel(s) still in alarm will announce "
+                         "themselves on their next reading: %s"
+                         % (len(active), ", ".join(sorted(active))))
+                        if active else "")
+        else:
+            log.critical("ALARM NOTIFICATIONS SWITCHED OFF by %s. Alarms are "
+                         "still evaluated and recorded; NOBODY WILL BE TOLD "
+                         "about them until this is switched back on.", by)
+        return {"ok": True, "enabled": self.notifications_enabled,
+                "was": was, "active": sorted(active), "by": by,
+                "at": self.notify_changed_at}
+
     def acknowledge(self, channel: str) -> bool:
         """Stop the repeating notification. The condition stays active.
 
@@ -398,6 +508,7 @@ class AlarmEngine:
 
         self.bus.subscribe(f"{TOPIC_MEAS}/#", handler)
         self._publish_limits()
+        self.publish_notifications()
 
         def pump():
             while not self._stop.is_set():

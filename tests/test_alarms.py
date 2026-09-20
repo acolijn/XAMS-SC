@@ -6,6 +6,8 @@ integrator surviving a restart without losing its total.
 """
 
 import json
+import pathlib
+import tempfile
 import time
 
 import pytest
@@ -52,7 +54,7 @@ class RecordingNotifier:
         return {"email": 1}
 
 
-def engine_with(thresholds, **defaults):
+def engine_with(thresholds, notify_state=None, **defaults):
     cfg = load()
     cfg.alarms = {
         "defaults": {"hysteresis": 0.02, "min_repeat_minutes": 15,
@@ -61,7 +63,20 @@ def engine_with(thresholds, **defaults):
         "staleness": {"severity": "major", "notify": ["email"]},
     }
     bus, notifier = FakeBus(), RecordingNotifier()
-    return AlarmEngine(bus, cfg, notifier=notifier), bus, notifier
+    # ALWAYS an isolated path for the master switch (§4.4a). The default is
+    # `data/alarm_notify.json` in the working directory, and an engine built
+    # in a checkout where somebody has alarms switched off would start every
+    # test with notifications disabled - silently turning the notification
+    # assertions below into assertions about nothing.
+    engine = AlarmEngine(
+        bus, cfg, notifier=notifier,
+        notify_state_path=notify_state or (_ISOLATED / "alarm_notify.json"))
+    return engine, bus, notifier
+
+
+# A directory no test writes to, so the switch always starts in its default
+# position (on) unless a test says otherwise.
+_ISOLATED = pathlib.Path(tempfile.gettempdir()) / "xams-tests-no-such-dir"
 
 
 def reading(channel, value, quality=Quality.OK):
@@ -325,3 +340,129 @@ class TestNotifier:
         # No secrets configured at all: must return cleanly, not raise.
         result = notifier.send("test", ["sms", "email"])
         assert result["sms"] == 0 and result["email"] == 0
+
+
+class TestTheMasterSwitch:
+    """Turning alarm delivery off for the whole system. See DESIGN.md §4.4a.
+
+    The dangerous control, and the reason it is allowed to exist: the slow
+    control runs when the plant does not, and a fortnight of 3am messages
+    about a cryostat nobody is cooling is how an operator learns to ignore the
+    one that matters. The alternative ways of getting that quiet — stopping
+    the service, emptying the recipient list, widening a threshold — all leave
+    the system looking armed when it is not.
+
+    So the rule this class exists to hold: **it stops delivery and nothing
+    else.** Evaluation, publication, the recorded history and the flight
+    recorder all carry on, and the system says loudly that it is off.
+    """
+
+    THRESHOLDS = {"pmain": {
+        "hihi": {"value": 2.0, "severity": "major", "notify": ["sms", "email"]},
+    }}
+
+    def test_nobody_is_notified_while_it_is_off(self, tmp_path):
+        engine, _, notifier = engine_with(
+            self.THRESHOLDS, notify_state=tmp_path / "notify.json")
+        engine.set_notifications(False, "apc")
+        engine.on_measurement(reading("pmain", 2.5))
+        assert notifier.sent == []
+
+    def test_the_alarm_still_happens(self, tmp_path):
+        """Off is not blind. The page, the history and the plots must not
+        lose an alarm because nobody was woken up for it."""
+        engine, bus, _ = engine_with(
+            self.THRESHOLDS, notify_state=tmp_path / "notify.json")
+        engine.set_notifications(False, "apc")
+        engine.on_measurement(reading("pmain", 2.5))
+
+        active = engine.active()
+        assert len(active) == 1
+        assert active[0].state == "major" and active[0].threshold == "hihi"
+        published = [json.loads(p) for t, p in bus.published
+                     if t == "xams/alarm/pmain"]
+        assert published and published[-1]["state"] == "major"
+
+    def test_the_flight_recorder_still_dumps(self, tmp_path):
+        """The data around an alarm is worth most when nobody was told."""
+        dumps = []
+        cfg = load()
+        cfg.alarms = {"defaults": {}, "channels": self.THRESHOLDS,
+                      "staleness": {}}
+        engine = AlarmEngine(
+            FakeBus(), cfg, notifier=RecordingNotifier(),
+            on_alarm=lambda c, s, t: dumps.append((c, s, t)),
+            notify_state_path=tmp_path / "notify.json")
+        engine.set_notifications(False, "apc")
+        engine.on_measurement(reading("pmain", 2.5))
+        assert dumps == [("pmain", "major", "hihi")]
+
+    def test_turning_it_back_on_does_not_stay_quiet(self, tmp_path):
+        """Whatever is still wrong announces itself on its next reading.
+
+        `last_notified` is not stamped while the switch is off, so the repeat
+        interval is not silently waited out in the dark.
+        """
+        engine, _, notifier = engine_with(
+            self.THRESHOLDS, notify_state=tmp_path / "notify.json")
+        engine.set_notifications(False, "apc")
+        engine.on_measurement(reading("pmain", 2.5))
+        assert notifier.sent == []
+
+        engine.set_notifications(True, "apc")
+        engine.on_measurement(reading("pmain", 2.6))
+        assert len(notifier.sent) == 1
+
+    def test_it_says_what_is_still_wrong_when_switched_on(self, tmp_path):
+        engine, _, _ = engine_with(
+            self.THRESHOLDS, notify_state=tmp_path / "notify.json")
+        engine.set_notifications(False, "apc")
+        engine.on_measurement(reading("pmain", 2.5))
+        assert engine.set_notifications(True, "apc")["active"] == ["pmain"]
+
+    def test_the_switch_is_published_retained(self, tmp_path):
+        """A page connecting later must see it without waiting for a change."""
+        engine, bus, _ = engine_with(
+            self.THRESHOLDS, notify_state=tmp_path / "notify.json")
+        engine.set_notifications(False, "apc")
+        payloads = [json.loads(p) for t, p in bus.published
+                    if t == "xams/status/notify"]
+        assert payloads[-1]["enabled"] is False
+        assert payloads[-1]["by"] == "apc"
+        assert payloads[-1]["at"]
+
+    def test_a_restart_does_not_re_arm_the_alarms(self, tmp_path):
+        """The more dangerous default, and the right one.
+
+        Nobody asked for them back. A service that quietly re-armed on a
+        restart would send the 3am message the switch was thrown to stop.
+        """
+        path = tmp_path / "notify.json"
+        engine, _, _ = engine_with(self.THRESHOLDS, notify_state=path)
+        engine.set_notifications(False, "apc")
+
+        restarted, _, notifier = engine_with(self.THRESHOLDS, notify_state=path)
+        assert restarted.notifications_enabled is False
+        assert restarted.notify_changed_by == "apc"
+        restarted.on_measurement(reading("pmain", 2.5))
+        assert notifier.sent == []
+
+    def test_a_missing_file_means_alarms_are_on(self, tmp_path):
+        engine, _, _ = engine_with(self.THRESHOLDS,
+                                   notify_state=tmp_path / "never-written.json")
+        assert engine.notifications_enabled is True
+
+    def test_an_unreadable_file_means_alarms_are_on(self, tmp_path):
+        """Garbage on disk must not be able to disarm the alarms."""
+        path = tmp_path / "notify.json"
+        path.write_text("{not json", encoding="utf-8")
+        engine, _, _ = engine_with(self.THRESHOLDS, notify_state=path)
+        assert engine.notifications_enabled is True
+
+    def test_switching_to_the_state_it_is_in_is_harmless(self, tmp_path):
+        engine, _, _ = engine_with(self.THRESHOLDS,
+                                   notify_state=tmp_path / "notify.json")
+        first = engine.set_notifications(False, "apc")
+        second = engine.set_notifications(False, "apc")
+        assert first["was"] is True and second["was"] is False
+        assert second["ok"] and engine.notifications_enabled is False
