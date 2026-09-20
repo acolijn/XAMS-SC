@@ -105,6 +105,9 @@ class CaenChannelReader:
         # 2026, a setpoint read back as the heater percentage. Reentrant, so a
         # command can hold it across write-then-read-back.
         self._lock = threading.RLock()
+        # Evidence that the reply stream has slipped out of step. See _talk.
+        self._stale_events = 0
+        self._stale_last_log = 0.0
 
     # ----------------------------------------------------------------- serial
 
@@ -126,24 +129,85 @@ class CaenChannelReader:
 
         Shared by MON and SET: the framing, the lock and the retry are
         identical, and two copies of them would drift.
+
+        **A reply carries no echo of PAR or CH.** `#BD:00,CMD:OK,VAL:135.0`
+        could be the answer to any query on any channel, so question and
+        answer are matched by arrival order and nothing else. That holds as
+        long as every command gets its reply before the next one is sent. It
+        stops holding the moment one answer arrives late: the flush below
+        cannot discard a reply still on the wire, so it lands in the next
+        read, and from then on every value is attributed to the wrong
+        channel - plausibly, and silently. That is why `stale` is measured
+        and reported rather than quietly thrown away.
         """
         if self._serial is None:
             return None
         with self._lock:
+            # Bytes already waiting BEFORE we write are a reply nobody read.
+            # On a healthy link this is always zero.
+            #
+            # In its OWN try, outside the one below, and deliberately so: this
+            # is a diagnostic, and a diagnostic that can turn a working read
+            # into "the supply did not answer" is worse than no diagnostic.
+            # `in_waiting` is a pyserial property that talks to the driver and
+            # can raise on a port that is going away - which is exactly when
+            # the reading underneath it still matters.
             try:
+                stale = self._serial.in_waiting
+            except Exception:
+                stale = 0
+            try:
+                started = time.monotonic()
                 self._serial.reset_input_buffer()
                 self._serial.write((cmd + "\r\n").encode("ascii"))
                 time.sleep(0.05)
                 raw = self._serial.read_until(b"\r\n", 200).decode(
                     "ascii", errors="replace")
+                retried = False
                 if not raw.strip():
                     # Some firmware answers slowly; one short retry.
+                    retried = True
                     time.sleep(0.15)
                     raw = self._serial.read(200).decode("ascii", errors="replace")
             except Exception as exc:
                 log.debug("%s: %s raised %s", self.device_id, cmd, exc)
                 return None
+
+        if stale:
+            self._note_stale(stale, cmd)
+        # Every exchange, with its timing. Off unless the service is started
+        # with --log-level DEBUG, and the formatting is not done until then.
+        log.debug("%s: %s -> %r [%.0f ms%s%s]", self.device_id, cmd,
+                  raw.strip(), (time.monotonic() - started) * 1000.0,
+                  ", retried" if retried else "",
+                  ", %d stale bytes discarded" % stale if stale else "")
         return raw
+
+    def _note_stale(self, count: int, cmd: str) -> None:
+        """Report discarded bytes, loudly the first time and then rarely.
+
+        WARNING rather than DEBUG because this is not housekeeping: bytes in
+        the buffer before a command is sent mean an earlier reply was never
+        collected, and with no PAR or CH to match on, every subsequent value
+        on this supply may belong to a different channel than the one it is
+        filed under. A reading that is wrong looks exactly like a reading
+        that is right.
+
+        Rate-limited because a link that has slipped does it many times a
+        second, and a warning repeated thirty times a second is a warning
+        nobody reads.
+        """
+        self._stale_events += 1
+        now = time.monotonic()
+        if now - self._stale_last_log < 60.0:
+            return
+        self._stale_last_log = now
+        log.warning(
+            "%s: %d unread byte(s) in the buffer before %s - an earlier reply "
+            "was never collected. Replies carry no channel or parameter, so "
+            "readings on this supply may be attributed to the wrong channel. "
+            "%d occurrence(s) so far.",
+            self.device_id, count, cmd.split(",PAR:")[-1], self._stale_events)
 
     def _command(self, par: str, channel: int | None = None) -> str | None:
         """Read one parameter with CMD:MON, returning its VAL."""

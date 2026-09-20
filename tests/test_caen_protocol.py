@@ -180,3 +180,106 @@ class TestOnlyVsetIsEverWritten:
         source = inspect.getsource(CaenChannelReader._command)
         assert "CMD:MON" in source
         assert "CMD:SET" not in source
+
+
+class TestTalk:
+    """`_talk` itself, which until 20 September 2026 had no test at all.
+
+    Everything else in this file tests the parsing of a reply that has
+    already arrived. `_talk` is what decides WHICH reply that is — and since
+    a DT1470ET answer carries no `PAR` and no `CH`, that decision rests
+    entirely on the exchange staying in step. It is the most load-bearing
+    function in the driver and it was the least covered.
+    """
+
+    class FakePort:
+        """Just enough serial.Serial, with a settable backlog."""
+
+        def __init__(self, replies, waiting=0, raises_in_waiting=False):
+            self.replies = list(replies)
+            self.written = []
+            self.flushed = 0
+            self._waiting = waiting
+            self._raises = raises_in_waiting
+
+        @property
+        def in_waiting(self):
+            if self._raises:
+                raise OSError("port is going away")
+            return self._waiting
+
+        def reset_input_buffer(self):
+            self.flushed += 1
+
+        def write(self, data):
+            self.written.append(data)
+
+        def read_until(self, *_a, **_kw):
+            return self.replies.pop(0) if self.replies else b""
+
+        def read(self, *_a, **_kw):
+            return self.replies.pop(0) if self.replies else b""
+
+    def reader(self, port):
+        from xams_sc.devices.caen import CaenChannelReader
+        r = CaenChannelReader("hv_1", "COM9", 0, 9600, "DT1470ET", "19198")
+        r._serial = port
+        return r
+
+    def test_returns_the_reply(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        port = self.FakePort([b"#BD:00,CMD:OK,VAL:0700.0\r\n"])
+        assert _decode(self.reader(port)._talk("$BD:0,CMD:MON,PAR:VSET,CH:0")) \
+            == "0700.0"
+        assert port.written == [b"$BD:0,CMD:MON,PAR:VSET,CH:0\r\n"]
+
+    def test_a_backlog_never_costs_the_reading(self, monkeypatch):
+        """THE POINT OF THE DIAGNOSTIC: it observes, it does not interfere.
+
+        Bytes already waiting mean the stream has slipped, and that is worth
+        a warning — but the exchange underneath must still return its value.
+        """
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        port = self.FakePort([b"#BD:00,CMD:OK,VAL:0135.0\r\n"], waiting=26)
+        r = self.reader(port)
+        assert _decode(r._talk("$BD:0,CMD:MON,PAR:VSET,CH:0")) == "0135.0"
+        assert r._stale_events == 1
+
+    def test_in_waiting_may_fail_without_losing_the_reading(self, monkeypatch):
+        """A diagnostic that can break acquisition is worse than none.
+
+        `in_waiting` talks to the driver and can raise on a port that is on
+        its way out — which is precisely when the reading still matters.
+        """
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        port = self.FakePort([b"#BD:00,CMD:OK,VAL:0700.0\r\n"],
+                             raises_in_waiting=True)
+        r = self.reader(port)
+        assert _decode(r._talk("$BD:0,CMD:MON,PAR:VSET,CH:0")) == "0700.0"
+        assert r._stale_events == 0
+
+    def test_a_silent_port_is_a_read_failure(self, monkeypatch):
+        """Never a substituted value (§7.2) — after the one short retry."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        port = self.FakePort([])
+        assert _decode(self.reader(port)._talk("$BD:0,CMD:MON,PAR:VSET,CH:0")) \
+            is None
+
+    def test_the_retry_is_used_when_the_first_read_is_empty(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        port = self.FakePort([b"", b"#BD:00,CMD:OK,VAL:0200.0\r\n"])
+        assert _decode(self.reader(port)._talk("$BD:0,CMD:MON,PAR:VSET,CH:0")) \
+            == "0200.0"
+
+    def test_the_stale_warning_is_rate_limited(self, monkeypatch):
+        """A link that has slipped does it many times a second."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        warnings = []
+        monkeypatch.setattr("xams_sc.devices.caen.log.warning",
+                            lambda *a, **kw: warnings.append(a))
+        port = self.FakePort([b"#BD:00,CMD:OK,VAL:1\r\n"] * 5, waiting=26)
+        r = self.reader(port)
+        for _ in range(5):
+            r._talk("$BD:0,CMD:MON,PAR:VSET,CH:0")
+        assert r._stale_events == 5
+        assert len(warnings) == 1
