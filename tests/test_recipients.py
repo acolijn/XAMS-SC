@@ -565,3 +565,84 @@ def test_a_silent_engine_is_reported_as_a_refusal(client):
     response = http.post("/alarms/notify", data={"enabled": "0", "by": "apc"},
                          follow_redirects=False)
     assert "error" in response.headers["location"]
+
+
+# ------------------------------------------- the "acting as" suggestions
+
+def test_the_operator_box_offers_the_recipients(client):
+    """The names are typed a few times a day and end up in the audit trail,
+    where `apc`, `AP Colijn` and `Auke-Pieter Colijn` are three people."""
+    http, _, _ = client
+    text = http.get("/").text
+    assert 'list="operators"' in text
+    assert '<option value="Example Person 4">' in text
+
+
+def test_the_suggestions_are_on_every_page(client):
+    http, _, _ = client
+    for path in ("/", "/status", "/hv", "/alarms", "/logs"):
+        assert '<option value="Example Person 4">' in http.get(path).text, (
+            "%s offers no names under 'acting as'" % path)
+
+
+def test_a_disabled_recipient_is_still_offered(client, config_dir):
+    """Disabled means "do not notify me", which is usually somebody away -
+    exactly when a colleague is the one at the keyboard."""
+    http, _, _ = client
+    people = read_recipients(config_dir)
+    for p in people:
+        if p["name"] == "Example Person 4":
+            p["enabled"] = False
+    http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
+              follow_redirects=False)
+
+    assert '<option value="Example Person 4">' in http.get("/").text
+
+
+def test_a_name_that_is_not_offered_is_still_accepted(client, config_dir):
+    """The heart of it being a datalist and not a select. A student on shift
+    is not an alarm recipient, and the alternative to typing their own name
+    is picking a colleague's - which puts the WRONG name in the audit trail,
+    worse than no name at all."""
+    http, _, bus = client
+    http.post("/operator", data={"operator": "Visiting Student"})
+
+    people = read_recipients(config_dir)
+    people[0]["phone"] = "+31000000000"
+    http.post("/alarms/recipients", data=rows(people),   # no `by` on the form
+              follow_redirects=False)
+
+    audits = [p for topic, p in bus.published if topic == "xams/audit"]
+    assert any('"actor":"Visiting Student"' in a for a in audits)
+
+
+def test_the_names_follow_an_edit_without_a_restart(client, config_dir):
+    """The list is cached on the file's timestamp, because it renders in the
+    header of pages that reload every ten seconds. A cache that outlived an
+    edit made on /alarms would be a stale list nobody could explain."""
+    http, _, _ = client
+    assert "Ada Lovelace" not in http.get("/").text
+
+    people = read_recipients(config_dir)
+    data = rows(people)
+    data[f"name-{len(people)}"] = "Ada Lovelace"
+    data[f"email-{len(people)}"] = "ada@nikhef.nl"
+    data[f"enabled-{len(people)}"] = "on"
+    http.post("/alarms/recipients", data=dict(data, by="apc"),
+              follow_redirects=False)
+
+    assert '<option value="Ada Lovelace">' in http.get("/").text
+
+
+def test_no_recipient_file_leaves_the_box_working(client, config_dir):
+    """Nothing to suggest is not a broken header: it is a plain text field,
+    which is what it was before any of this."""
+    http, _, _ = client
+    (config_dir / "recipients.yaml").unlink()
+
+    text = http.get("/").text
+    # Scoped to the datalist: the page has other <select>s of its own.
+    offered = text.split('<datalist id="operators">')[1].split("</datalist>")[0]
+
+    assert "<option" not in offered
+    assert 'list="operators"' in text and 'name="operator"' in text

@@ -259,10 +259,21 @@ a { color:#79b8ff; }
   <form method="post" action="/operator" class="operator">
     <input type="hidden" name="next" value="{{ request.url.path }}">
     <label for="op">acting as</label>
-    <input type="text" id="op" name="operator" maxlength="40"
+    {# A datalist, NOT a select: the names are the alarm recipients, and
+       somebody can be at the keyboard without being on that list - a student
+       on shift, a technician swapping a pump. Typing over the suggestions has
+       to stay possible, because the alternative is that such a person picks a
+       colleague's name and the audit trail records the wrong one. It also
+       keeps this honest: the operator is a cookie, not a login, and a closed
+       list of five staff names would imply the system knows who you are.
+       Degrades to today's plain field wherever `datalist` is ignored. #}
+    <input type="text" id="op" name="operator" maxlength="40" list="operators"
            value="{{ operator }}" placeholder="not set"
            class="{{ '' if operator else 'unset' }}"
            aria-label="who is operating; recorded with every command">
+    <datalist id="operators">
+      {% for name in operators %}<option value="{{ name }}">{% endfor %}
+    </datalist>
     <button type="submit" title="Remembered in this browser and recorded with
 every command you send">set</button>
   </form>

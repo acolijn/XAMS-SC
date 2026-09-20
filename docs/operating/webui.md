@@ -67,6 +67,16 @@ Every command is recorded with a name (§10 rule 5). Set it once in the header;
 it is kept in a cookie in this browser and attached to everything you send, so
 it never has to be retyped before an action.
 
+**The box suggests the alarm recipients**, so the regulars are one click and
+one spelling — `apc`, `AP Colijn` and `Auke-Pieter Colijn` are three different
+people to anything that reads the audit trail later. Everybody on the list is
+offered, whether their **Notify** is on or off: off usually means somebody is
+away, which is exactly when a colleague is the one operating. **The suggestions
+are not a closed list** — type any name over them. Somebody can be at the
+keyboard without being an alarm recipient, and the one thing that must not
+happen is a student on shift picking a colleague's name from a menu because
+their own was not in it.
+
 **It is taken on trust.** There is no login on this interface, so the name is
 whatever was typed. Left empty, a command records `webui (unnamed)` rather than
 a blank. Weak attribution recorded honestly beats an anonymous change, and it

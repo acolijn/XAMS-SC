@@ -32,6 +32,7 @@ import logging
 import math
 import re
 from datetime import datetime
+from functools import lru_cache
 from html import escape
 from pathlib import Path
 
@@ -46,7 +47,7 @@ from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
                    TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
                    TOPIC_NOTIFY, TOPIC_RELOAD, Bus)
 from ..config import (LOG_DIR, ConfigError, load, read_hv_defaults,
-                      read_recipients, recipient_warnings,
+                      read_recipients, recipient_warnings, recipients_path,
                       validate_recipients, write_hv_defaults,
                       write_recipients)
 from ..hv_status import (describe_status, is_disabled, is_energised,
@@ -134,6 +135,55 @@ def operator_of(request: Request, submitted: str = "") -> str:
     if not name:
         name = (request.cookies.get(OPERATOR_COOKIE) or "").strip()
     return name or "webui (unnamed)"
+
+
+@lru_cache(maxsize=8)
+def _operator_names(config_dir: str, stamp: int) -> tuple[str, ...]:
+    """The parse behind `operator_names`, kept off the render path.
+
+    Keyed on the directory as well as the timestamp: the tests point
+    CONFIG_DIR at a directory of their own, and a cache keyed on the
+    timestamp alone would hand one test another's names.
+    """
+    return tuple(
+        name for name in
+        (str(person.get("name", "")).strip()
+         for person in read_recipients(config_dir))
+        if name)
+
+
+def operator_names() -> list[str]:
+    """The names the "acting as" box SUGGESTS: everyone on the recipient list.
+
+    Suggestions, not a closed list, and the box stays a text field. The
+    recipient list answers "who is told when an alarm fires", which is not
+    the same question as "who is at the keyboard": a student on a measurement
+    shift or a technician swapping a pump belongs in the audit trail without
+    belonging in the SMS list. Offering only these five would push such a
+    person into picking somebody else's name, and a plausible wrong name in
+    the audit trail is worse than the `webui (unnamed)` they get for typing
+    nothing. What this does buy is one spelling per person: `apc`,
+    `AP Colijn` and `Auke-Pieter Colijn` are three different people to
+    anything that reads the audit topic later.
+
+    Everyone is offered, `enabled` or not. Disabled means "do not notify me",
+    which is usually somebody away for a week - exactly when a colleague is
+    the one operating.
+
+    Read from the file, not from `state.config`: it is edited on /alarms and
+    the names must follow without a restart, the same way the alarm engine
+    picks the list up at send time. Cached on the file's timestamp because
+    this renders in the header of every page and most pages reload every
+    10 s.
+    """
+    path = recipients_path()
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        # No file, or one that cannot be read: nothing to suggest. The box
+        # is a text field and keeps working with no list behind it.
+        return []
+    return list(_operator_names(str(path.parent), stamp))
 
 
 def _remember(response, name: str):
@@ -468,6 +518,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
             # instrument, and the HV control surface will want the same name
             # without setting it again (section 10 rule 5).
             "operator": request.cookies.get(OPERATOR_COOKIE, ""),
+            # The names that box offers. Suggestions only - see
+            # `operator_names`.
+            "operators": operator_names(),
             # Read once here rather than hardcoded per template (§8.2a): the
             # footer link and the mimic popup must never be able to disagree.
             "grafana_url": grafana_base_url(),
