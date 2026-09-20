@@ -34,6 +34,15 @@
       if (el.disabled || el.type === 'hidden') continue;
       if (el.tagName === 'SELECT') {
         if (el.selectedIndex !== el.defaultSelectedIndex) return true;
+      } else if (el.type === 'checkbox' || el.type === 'radio') {
+        /* A checkbox's VALUE is "on" whether it is ticked or not, so the
+           comparison below cannot see it and the reload would throw the tick
+           away after ten seconds. `checked` against `defaultChecked` is the
+           same question this function asks everywhere else: does this differ
+           from what the server sent? Without it, ticking "remove" for a
+           recipient and then looking away loses it silently — the same class
+           of bug as the HV boxes above, and just as quiet. */
+        if (el.checked !== el.defaultChecked) return true;
       } else if (el.value !== el.defaultValue) return true;
     }
     return false;
@@ -248,6 +257,11 @@ every command you send">set</button>
   <a href="/status" class="{{ 'on' if page == '/status' }}">Channels</a>
   <a href="/mimic"  class="{{ 'on' if page == '/mimic' }}">P&amp;I</a>
   <a href="/hv"     class="{{ 'on' if page == '/hv' }}">High voltage</a>
+  {# Alarms sits after High voltage and before Logs: it is about the plant,
+     not about the machine. The recipient list lives on it rather than in this
+     bar, because it is a setting touched a few times a year and the bar is
+     things you look at. #}
+  <a href="/alarms" class="{{ 'on' if page == '/alarms' }}">Alarms</a>
   <a href="/logs"   class="{{ 'on' if page == '/logs' }}">Logs</a>
   <a href="http://127.0.0.1:3000" target="_blank">Grafana &nearr;</a>
   <a href="/manual" target="_blank">Manual &nearr;</a>

@@ -102,9 +102,10 @@ looks; they are tests of what would make it misleading.
 1. **Check `logs/alarms.log`** for `email to ... failed:`. Delivery failures
    are logged and never raised — a gateway being down must not stop the engine
    evaluating the next reading.
-2. **Check `recipients.yaml`** — only entries with `enabled: true` *and* an
+2. **Check the recipient list** on the [Alarms page](webui.md#who-is-notified),
+   or `recipients.yaml` directly — only entries with **Notify** on *and* an
    email address are used. An empty list logs
-   `ALARM NOT DELIVERED: no enabled recipients`.
+   `ALARM NOT DELIVERED: no enabled recipients`, and the page says so in red.
 3. **Test the relay** without sending anything:
 
     ```powershell

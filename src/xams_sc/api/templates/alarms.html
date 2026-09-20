@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Alarms{% endblock %}
+{% block content %}
+
+{% if saved %}<div class="flash {{ 'bad' if 'WARNING' in saved else 'good' }}"
+     style="margin:0 0 1rem 0">{{ saved }}</div>{% endif %}
+{% if error %}<div class="flash bad" style="margin:0 0 1rem 0">
+  <strong>Refused — the list was not changed.</strong> {{ error }}</div>{% endif %}
+
+{# The alarm chain, top to bottom: what fired, what would fire, who is told. #}
+
+<div class="card">
+  <h2>Active alarms</h2>
+  {% if active %}
+  <table>
+    <tr><th>Channel</th><th>State</th><th>Threshold</th>
+        <th class="num">Value</th><th></th></tr>
+    {% for a in active %}
+    <tr>
+      <td><span class="dot {{ 'bad' if a.state != 'minor' else 'warn' }}"></span>{{ a.channel }}
+          {% if a.description %}<span class="dim"> — {{ a.description }}</span>{% endif %}</td>
+      <td class="{{ 'bad' if a.state != 'minor' else 'warn' }}">{{ a.state }}</td>
+      <td class="dim">{{ a.threshold or '—' }}</td>
+      <td class="num">{% if a.value is not none %}{{ '%.3f'|format(a.value) }}{% else %}—{% endif %}</td>
+      <td class="dim">{{ 'acknowledged' if a.acknowledged else '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="body dim">Nothing is alarming.</div>
+  {% endif %}
+  <div class="note">
+    History is in <a href="http://127.0.0.1:3000" target="_blank">Grafana</a>:
+    alarm state is stored like any other record, so the plots have it without
+    this page querying a database (§11).
+  </div>
+</div>
+
+<div class="card" style="margin-top:1.2rem">
+  <h2>Thresholds in force</h2>
+  {% if not limits.known %}
+  <div class="body">
+    <span class="warn">Unknown</span> — the alarm engine has not published its
+    thresholds. It is not running, or has not finished starting.
+    <div class="note">
+      Unknown is not the same as none. A page that cannot see must not report
+      that it looked and found nothing (§12).
+    </div>
+  </div>
+  {% elif not limits.rows %}
+  <div class="body">
+    <span class="bad">No physics thresholds are configured.</span> Staleness
+    and bad-quality alarms still work, but no channel has a
+    <code>lolo</code>, <code>low</code>, <code>high</code> or
+    <code>hihi</code> limit.
+  </div>
+  {% else %}
+  <table class="channels">
+    <tr>
+      <th>Channel</th><th>What it is</th>
+      <th class="num">lolo</th><th class="num">low</th>
+      <th class="num">high</th><th class="num">hihi</th>
+    </tr>
+    {% for r in limits.rows %}
+    <tr>
+      <td><code>{{ r.channel }}</code></td>
+      <td class="dim">{{ r.description or '—' }}{% if r.unit %}
+        <span class="dim">({{ r.unit }})</span>{% endif %}</td>
+      {% for name, value in r.levels %}
+      <td class="num {{ 'dim' if value is none }}">{{ '%g'|format(value) if value is not none else '—' }}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <div class="note">
+    <strong>What the engine actually loaded</strong>, read from the bus rather
+    than from <code>alarms.yaml</code> — so this shows what is in force, not
+    what the file says it should be. The risk worth guarding against is
+    believing a threshold is 2.0 when it is 20 (§11).
+    Change one by editing <code>alarms.yaml</code>, committing, and
+    <code>xams-ctl reload</code>: a threshold is an engineering decision and
+    keeps its review.
+  </div>
+</div>
+
+<div class="card" style="margin-top:1.2rem">
+  <h2>Who is notified</h2>
+  <div class="body">
+    {% if not enabled_count %}
+    <div class="flash bad" style="margin:0 0 .9rem 0">
+      <strong>Nobody is enabled — alarms reach nobody.</strong>
+      The alarm engine raises its own low-severity alarm about this, so it is
+      found on a quiet afternoon rather than during an incident (§4.4).
+    </div>
+    {% endif %}
+
+    <form method="post" action="/alarms/recipients"
+          onsubmit="return confirm('Save the recipient list?\n\nThis changes who is notified when something goes wrong.');">
+    <table class="channels">
+      <colgroup>
+        <col><col><col style="width:11rem">
+        <col style="width:5rem"><col style="width:5rem">
+      </colgroup>
+      <tr>
+        <th>Name</th><th>Email</th><th>Phone</th>
+        <th>Notify</th><th>Remove</th>
+      </tr>
+      {% for p in people %}
+      <tr>
+        <td><input type="text" name="name-{{ loop.index0 }}"
+                   value="{{ p.name or '' }}" style="width:95%" autocomplete="off"></td>
+        <td><input type="text" name="email-{{ loop.index0 }}"
+                   value="{{ p.email or '' }}" style="width:95%" autocomplete="off"></td>
+        <td><input type="text" name="phone-{{ loop.index0 }}"
+                   value="{{ p.phone or '' }}" style="width:95%" autocomplete="off"></td>
+        <td><input type="checkbox" name="enabled-{{ loop.index0 }}"
+                   {{ 'checked' if p.enabled }}></td>
+        <td><input type="checkbox" name="remove-{{ loop.index0 }}"></td>
+      </tr>
+      {% endfor %}
+      {# One spare row, so adding somebody needs no separate form and no
+         second gesture. Blank rows are dropped on save. #}
+      <tr>
+        <td><input type="text" name="name-{{ people|length }}"
+                   placeholder="add somebody…" style="width:95%" autocomplete="off"></td>
+        <td><input type="text" name="email-{{ people|length }}"
+                   style="width:95%" autocomplete="off"></td>
+        <td><input type="text" name="phone-{{ people|length }}"
+                   style="width:95%" autocomplete="off"></td>
+        <td><input type="checkbox" name="enabled-{{ people|length }}" checked></td>
+        <td></td>
+      </tr>
+    </table>
+
+    <div style="margin-top:.9rem">
+      <button type="submit" class="hv-btn apply">Save recipients</button>
+    </div>
+
+    <div class="dim" style="font-size:.8rem;margin-top:.9rem">
+      <strong>Applies to the next alarm</strong> — no restart, no
+      <code>xams-ctl reload</code>: the engine reads the list when it sends.
+      <br>
+      <strong>An empty phone is not a mistake.</strong> It means do not SMS
+      this person; they are notified by email alone. Somebody with neither an
+      email nor a phone is refused, because they would be on the list and hear
+      nothing. A phone number needs its country code, <code>+31…</code>.
+      <br>
+      <strong>Notify</strong> off keeps somebody on the list without
+      notifying them — for a holiday, without losing the number.
+      <strong>Remove</strong> takes effect on save, not on click. Either way
+      the change is
+      <a href="/manual/software/storage/" target="_blank">audited</a>, so it
+      stays recoverable who would have been told when a given alarm fired.
+    </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

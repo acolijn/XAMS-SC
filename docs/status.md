@@ -14,7 +14,7 @@ the next before the current one passes.
 | 4 | Scaling and history import | **done** |
 | 5 | Lake Shore + CAEN monitoring | **done** |
 | 6 | UPS, alarms, flow integrator | **done** — email delivery finally works (18 Sep) |
-| 7 | Web UI and P&ID mimic | **mostly done** — no `/recipients` page, no Python client |
+| 7 | Web UI and P&ID mimic | **mostly done** — no Python client |
 
 | 8 | Control path | **in progress** — Lake Shore and HV both writable from the UI and the CLI; the shared staged plan of §10a is not built |
 | 9 | Procedures | not started |
@@ -38,6 +38,12 @@ from `xams-ctl hv-set`, `hv-standby`, `hv-on` and `hv-off`.
 | 3 | The plan (staged setpoints, applied as one action) | **partly** — staged in the page, not on the bus |
 | 4 | The UI for it | **done, 18 Sep** |
 | 5 | Editing the default setpoints from `/hv/defaults` (§4.6) | **done, 20 Sep** |
+
+**The alarms page, 20 September 2026.** `/alarms` shows the alarm chain end to
+end: what has fired, the thresholds the engine actually loaded (§11 — published
+since the engine was written and displayed nowhere until now), and the
+recipient list, which is editable there. Add, remove, and *Notify* on or off;
+it applies to the next alarm with no restart.
 
 **Defaults are editable from the web UI since 20 September 2026.** This is an
 R&D setup and the operating point moves, so the values *Load defaults* offers

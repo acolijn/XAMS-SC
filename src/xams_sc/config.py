@@ -433,3 +433,116 @@ def write_hv_defaults(values: dict[str, float], by: str,
 def _utcnow_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+# ----------------------------------------------------------------- recipients
+#
+# Who receives alarm notifications (§4.4). Edited from /alarms, and read by the
+# alarm engine at SEND time rather than at startup - so a change applies to the
+# next notification, with no restart and no reload.
+#
+# The list is the list: everyone with `enabled: true` is notified. No shift
+# roster and no escalation chain, which is a deliberate absence rather than a
+# missing feature.
+
+RECIPIENTS_FILE = "recipients.yaml"
+
+_RECIPIENTS_HEADER = """\
+# Who receives alarm notifications. See DESIGN.md 4.4.
+#
+# Edited from the web UI (/alarms) and applied without restarting anything:
+# the alarm engine reads this file at send time. Editing it by hand works
+# equally well and has the same effect.
+#
+# Everyone with `enabled: true` receives the notification. No shift roster,
+# no escalation chain: the list is the list.
+#
+# An empty phone is not a mistake - it means "do not SMS this person", and
+# they are notified by email alone. Somebody with NEITHER an email nor a
+# phone is refused, because they would be on the list and hear nothing.
+#
+# An empty list is a warning - if every recipient is disabled, alarms reach
+# nobody, and the engine raises a low-severity alarm saying so.
+
+"""
+
+
+def recipients_path(config_dir: Path | str | None = None) -> Path:
+    return (Path(config_dir) if config_dir else CONFIG_DIR) / RECIPIENTS_FILE
+
+
+def read_recipients(config_dir: Path | str | None = None) -> list[dict]:
+    """The recipient list, or empty if there is no file.
+
+    Never raises on an absent file: alarms with nobody to notify is a
+    condition the engine warns about (§4.4), not a reason to refuse to start.
+    """
+    path = recipients_path(config_dir)
+    if not path.exists():
+        return []
+    data = _read(path)
+    people = (data or {}).get("recipients") or []
+    return [dict(person) for person in people if isinstance(person, dict)]
+
+
+def validate_recipients(people: list[dict]) -> list[str]:
+    """Problems with a proposed recipient list, as sentences. Empty is fine.
+
+    Deliberately NOT a schema check on the file at load time. The engine must
+    keep running on a list it finds odd - refusing to start because somebody
+    mistyped an address would take the alarms down to protect the alarms.
+    This is checked where a change is MADE, which is the page.
+    """
+    problems = []
+    seen = set()
+    for i, person in enumerate(people, start=1):
+        name = (person.get("name") or "").strip()
+        email = (person.get("email") or "").strip()
+        phone = (person.get("phone") or "").strip()
+        where = f"row {i}" if not name else name
+        if not name:
+            problems.append(f"{where}: no name")
+        if not email and not phone:
+            # The silent-failure case: on the list, notified by nothing.
+            problems.append(
+                f"{where}: needs an email or a phone, or they are on the "
+                f"list and hear nothing")
+        if email and ("@" not in email or email.startswith("@")
+                      or email.endswith("@")):
+            problems.append(f"{where}: {email!r} is not an email address")
+        if phone and not phone.startswith("+"):
+            # The gateway wants international form. A number that looks right
+            # to a Dutch reader and is refused at 3am is worse than one
+            # refused here.
+            problems.append(
+                f"{where}: {phone!r} must start with + and a country code")
+        key = name.casefold()
+        if key and key in seen:
+            problems.append(f"{name}: listed twice")
+        seen.add(key)
+    return problems
+
+
+def write_recipients(people: list[dict], by: str,
+                     config_dir: Path | str | None = None) -> None:
+    """Write recipients.yaml atomically, keeping the explanatory header.
+
+    `yaml.safe_dump` of the list alone would drop the header, and this file is
+    meant to stay hand-editable - so the prose is prepended every time rather
+    than being something a save quietly eats.
+    """
+    path = recipients_path(config_dir)
+    rows = []
+    for person in people:
+        rows.append({
+            "name": (person.get("name") or "").strip(),
+            "email": (person.get("email") or "").strip(),
+            "phone": (person.get("phone") or "").strip(),
+            "enabled": bool(person.get("enabled")),
+        })
+    text = _RECIPIENTS_HEADER + yaml.safe_dump(
+        {"recipients": rows}, sort_keys=False, default_flow_style=False,
+        allow_unicode=True)
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)

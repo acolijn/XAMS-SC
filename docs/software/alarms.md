@@ -145,8 +145,9 @@ notifier reports how many deliveries succeeded per channel, so "nobody was
 told" is distinguishable from "everybody was told". Phone numbers are masked
 in the logs — logs get pasted into issues and emails.
 
-The recipients list is read **at send time**, so a change made in the web UI
-applies to the next alarm with no restart.
+The recipients list is read **at send time**, so a change made on the
+[Alarms page](../operating/webui.md#who-is-notified) applies to the next alarm
+with no restart.
 
 ### The emails
 

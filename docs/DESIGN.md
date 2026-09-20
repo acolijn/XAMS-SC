@@ -399,11 +399,28 @@ Everyone with `enabled: true` receives the notification. No shift roster, no esc
 **Applied without restarting anything**: the alarm engine re-reads the file at
 send time, not at startup, so a change takes effect on the next notification.
 
-> **The web UI page for this is not built.** §8.1 reserves `/recipients` for
-> adding, removing and toggling `enabled`; today the file is edited by hand,
-> which has exactly the same effect because the reload path is the file. The
-> page is a convenience on top of a mechanism that already works, which is why
-> it is the piece that slipped — and why its absence costs nothing but typing.
+**Edited from `/alarms`** — add, remove, or toggle *Notify* — and saved as one
+action. Editing the file by hand works equally well and has the same effect.
+Built 20 September 2026; it lives on the alarms page rather than a page of its
+own, for the reason given in §8.1.
+
+Four rules the page follows, each of which is a way the list can fail quietly:
+
+- **A recipient with neither an email nor a phone is refused.** They would sit
+  on the list looking notified, and hear nothing.
+- **An empty phone is not a mistake.** It means *do not SMS this person*; they
+  are notified by email alone. Three of the four entries are like this, and a
+  page that treated a blank as an omission would nag about a deliberate choice.
+- **Nobody enabled is a warning, not a refusal.** It may be exactly what
+  somebody means during an intervention. It is said loudly, on the page and by
+  the engine, and allowed.
+- **Removal is a checkbox applied on save, not a button that deletes on
+  click.** The page sits open beside a UI that reloads itself, and a one-click
+  irreversible delete next to that is the wrong affordance.
+
+The whole list is saved as one action and validated first: a half-saved list is
+a list nobody chose, and this one decides who finds out that something is
+wrong.
 
 This is deliberately unlike the alarm thresholds (§4.3), which stay in git and are applied with `xams-ctl reload`. Changing a threshold silently alters what the system protects against and deserves review; changing a recipient does not.
 
@@ -904,7 +921,20 @@ Separated by how often they are touched and how much a mistake costs.
 | `/logs` | the last lines of each service log — saves logging in and hunting for files |
 | `/hv` | the high-voltage page: per channel `VSET`, `VMON`, `IMON`, state, and the control actions (§10a) |
 | `/hv/defaults` | edit the default setpoints `load defaults` offers (§4.6) — writes a file, touches no instrument |
-| `/recipients` | edit the notification list (§4.4) — **not built**; edit the file |
+| `/alarms` | the alarm chain end to end: what has fired, the thresholds in force (§11), and who is notified (§4.4) |
+
+**`/alarms` rather than a top-level `/recipients`.** An earlier draft reserved
+`/recipients` in this table. It moved onto the alarms page instead, and the
+reasoning is worth keeping: this bar is five things an operator *looks at*, and
+the recipient list is a setting touched a few times a year. Giving it the same
+weight as *High voltage* would start the bar down the road of becoming a
+settings drawer — and `/hv/defaults` had already set the opposite precedent,
+that a setting lives next to the thing it configures. Recipients configure
+alarms.
+
+It also gave the thresholds in force (§11) a home. They were published and
+displayed nowhere, and "what am I protected against, and who gets told?" is one
+question, not two.
 
 Plus links to Grafana on `:3000` and to the manual, which is **mounted by this
 same application at `/manual`** rather than served from a second process. The
@@ -1532,7 +1562,18 @@ Displaying alarm *state* needs no knowledge of the limits: the engine publishes 
 xams/status/limits   {"pmain": {"high": 1.8, "hihi": 2.0}, ...}
 ```
 
-shown on the status page and written to the log. The real risk is not a missing line on a plot; it is believing a threshold is 2.0 when it is 20. This exposes what is in force, with no generation machinery.
+written to the log and **shown on `/alarms`** (§8.1) — beside what has fired
+and who would be told about it, which is the same question asked three ways.
+The real risk is not a missing line on a plot; it is believing a threshold is
+2.0 when it is 20. This exposes what is in force, with no generation machinery.
+
+An earlier draft said "shown on the status page". It is not: `/status` is a
+45-row channel table and a threshold list is not a channel reading. **Where
+nothing has been published the page says `unknown`, never "no thresholds"** —
+the engine being unreachable and the engine having nothing configured are
+different facts, and only one of them is about the plant. Same rule as the
+dashboard drift check (§12): a check that cannot see is not a check that
+passed.
 
 - Four thresholds per channel, EPICS-style: `lolo`, `low`, `high`, `hihi`, each with a severity.
 - **Hysteresis** on every threshold, to stop a channel sitting on a limit from producing a stream of notifications.
@@ -1858,7 +1899,7 @@ Everything marked **TBD** above, consolidated:
 | ~~Purpose of `DAISY_polarity_signs.vi`~~ | — | **Explained 17 September 2026**, near-certainly: the supplies report unsigned magnitudes with `POL` separate, so the sign must be applied in software (§7.2). Confirm against the block diagram when convenient. |
 | ~~Heater shut-off: hardware or software?~~ | — | **Decided 18 September 2026 (§10):** software, on `pmain` hihi alone, latching, loud on failure, audited. **Still to build** — see the note in §10. |
 | **`KILL VOLTAGE`** — the CAEN equivalent | milestone 8 | decision. Not settled by the heater decision above, and distinct from an orderly "everything to standby" (§10a). |
-| **The `/recipients` page** (§4.4, §8.1) | — | build. The reload mechanism already works and the file is editable by hand, so this is convenience, not function. |
+| ~~The `/recipients` page~~ | — | **Built 20 September 2026**, as a section of `/alarms` rather than a page of its own (§8.1). |
 | **The Python client** `api/client.py` — milestone 7's "works from a notebook" | milestone 7 | build. Reading from PostgreSQL with `pandas.read_sql` covers most of it today (§9.2). |
 | **`tools/jsonl_to_parquet.py`** (§9.4) | — | build. The JSONL archive is complete, so this is compaction, not a gap in the record. |
 | **The shared staged HV plan** (§10a) | — | build. Setpoints stage in the page's own boxes, so a second browser sees nothing and a reload discards them. Costs little while one person operates the supplies. |

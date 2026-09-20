@@ -367,6 +367,65 @@ keeps this software out of the protection path.
 
 ---
 
+## Alarms
+
+The alarm chain on one page, in the order it runs: what has fired, what
+*would* fire, and who is told.
+
+### Active alarms
+
+The same list as the overview, with a link to Grafana for history — alarm state
+is stored like any other record, so the plots have it and this page does not
+have to query a database.
+
+### Thresholds in force
+
+**What the engine actually loaded**, read from the bus rather than from
+`alarms.yaml`. The two should agree; this is how you find out when they do not.
+The risk it guards against is believing a threshold is 2.0 when it is 20.
+
+**`Unknown` is not `none`.** If the alarm engine is not running, the page says
+so rather than showing an empty table. "I cannot see the engine" and "no
+thresholds are configured" are different problems.
+
+To change one: edit `alarms.yaml`, commit, `xams-ctl reload`. A threshold is an
+engineering decision and keeps its review — it is deliberately not editable
+here.
+
+### Who is notified
+
+Add, remove, or turn **Notify** on and off, then **Save recipients**. It
+applies to the next alarm — no restart, no reload.
+
+| Column | |
+|---|---|
+| **Name** | what the person is called. Two rows with the same name are refused |
+| **Email** | where the alarm mail goes |
+| **Phone** | where the SMS goes. **Blank means do not SMS them** — they get email alone, which is normal and not an omission. A number needs its country code, `+31…` |
+| **Notify** | off keeps somebody on the list without notifying them — a holiday, without losing the number |
+| **Remove** | takes effect **on save**, not on click |
+
+To add somebody, type into the blank row at the bottom. To remove somebody,
+tick **Remove** and save.
+
+**The whole list is saved as one action**, and a bad row refuses all of it —
+nothing is written and the reason names the row. A recipient with neither an
+email nor a phone is refused: they would be on the list and hear nothing.
+
+**Turning everyone off is allowed, with a warning**, because it may be exactly
+what you mean during an intervention. The page says so in red and the alarm
+engine raises its own low-severity alarm, so it is not a state you can drift
+into unnoticed.
+
+Every change is audited — added, removed, enabled, disabled, and the address or
+number as it was. Removals especially: once somebody is out of the file, the
+audit trail is the only record that they were ever in it.
+
+`config/recipients.yaml` is tracked by git, so commit it along with everything
+else.
+
+---
+
 ## Logs
 
 The last lines of any service log, without going to the filesystem, **newest

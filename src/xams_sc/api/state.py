@@ -86,6 +86,7 @@ class SystemState:
         self._flow_ack: dict | None = None
         self._acks: dict[str, dict] = {}
         self._backup: dict | None = None
+        self._limits: dict | None = None
         self.started = utcnow()
 
     # ---------------------------------------------------------------- inputs
@@ -104,6 +105,19 @@ class SystemState:
 
     def _on_status(self, topic: str, payload: str) -> None:
         parts = topic.split("/")
+        # `xams/status/limits` is three parts, not four: it belongs to the
+        # alarm engine as a whole rather than to one service. Handled here
+        # rather than on its own subscription, because it arrives on the same
+        # wildcard and falling through the length check is how it went
+        # unnoticed until the Alarms page needed it (§11).
+        if len(parts) == 3 and parts[2] == "limits":
+            try:
+                loaded = json.loads(payload)
+            except ValueError:
+                return
+            with self._lock:
+                self._limits = loaded if isinstance(loaded, dict) else None
+            return
         if len(parts) != 4:
             return
         service, kind = parts[2], parts[3]
@@ -352,6 +366,17 @@ class SystemState:
         order = {"critical": 0, "major": 1, "minor": 2}
         active.sort(key=lambda a: (order.get(a["state"], 9), a["channel"]))
         return active
+
+    def limits(self) -> dict | None:
+        """The thresholds the alarm engine actually loaded (§11).
+
+        `None` means the engine has not published them — it is not running, or
+        has not started yet. That is reported as **unknown**, never as "no
+        thresholds": a page that cannot see must not say it looked and found
+        nothing, which is the same rule the Grafana drift check follows (§12).
+        """
+        with self._lock:
+            return None if self._limits is None else dict(self._limits)
 
     def unhealthy_channels(self) -> list[ChannelView]:
         return [c for c in self.channels() if not c.healthy]

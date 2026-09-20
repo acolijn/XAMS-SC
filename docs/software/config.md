@@ -8,7 +8,7 @@ Everything the system knows about the hardware is in `config/`, in git.
 | `channels.yaml` | every channel: address, scaling, unit, write range | edit, commit, `xams-ctl reload` |
 | `devices.yaml` | how each instrument is found and identified | edit, commit, `xams-ctl reload` |
 | `alarms.yaml` | thresholds and severity routing | edit, commit, `xams-ctl reload` |
-| `recipients.yaml` | who gets notified | the web UI, or by hand — no restart |
+| `recipients.yaml` | who gets notified | the web UI at `/alarms`, or by hand — no restart |
 | `hv_defaults.yaml` | the HV setpoints `load defaults` offers | the web UI at `/hv/defaults`, or by hand — no restart |
 | `secrets.yaml` | credentials | by hand; **never committed** |
 
@@ -124,8 +124,8 @@ engine](alarms.md).
 ## `recipients.yaml`, and why it is the odd one out
 
 Everything else here is edited in a text editor, committed, and reloaded.
-This one is edited **from the web UI** and takes effect without restarting
-anything.
+This one is edited **from the web UI — the [Alarms](../operating/webui.md)
+page** — and takes effect without restarting anything.
 
 The difference is what the file is. A threshold is an engineering decision:
 it should be reviewable, attributable and revertible, so it belongs in git.
@@ -137,7 +137,20 @@ the weekend it matters.
 
 So the recipients list is read at **send time**, not at startup: a change
 applies to the next alarm, with no restart and no reload. Changes are
-[audited](storage.md) like any other write.
+[audited](storage.md) like any other write — including removals, so it stays
+recoverable who would have been notified when a given alarm fired.
+
+What the page refuses, and why each one is a way to be notified by nothing:
+
+| | |
+|---|---|
+| neither an email nor a phone | they sit on the list looking notified and hear nothing |
+| a phone without `+` and a country code | the gateway wants international form; better refused here than at 3am |
+| a name listed twice | two rows, one person, and no way to tell which one is current |
+| nobody enabled | **allowed**, with a warning. It may be deliberate during an intervention |
+
+An **empty phone is not a mistake** — it means *do not SMS this person*, and
+they are notified by email alone.
 
 ---
 
