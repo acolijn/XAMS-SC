@@ -154,9 +154,12 @@ foreach ($name in $Services.Keys) {
 
     # Everything needs the broker. The sinks also need the database, and
     # starting before it is up just means a minute of retry noise in the log.
-    $depends = "mosquitto"
-    if ($name -eq "sinks") { $depends = "mosquitto postgresql-x64-18" }
-    & $NssmExe set $svc DependOnService $depends | Out-Null
+    # One argument per dependency. A single "a b" string makes NSSM look for a
+    # service of that whole name, which fails and leaves the service with NO
+    # dependencies at all - silently, because the error is only printed.
+    $depends = @("mosquitto")
+    if ($name -eq "sinks") { $depends = @("mosquitto", "postgresql-x64-18") }
+    & $NssmExe set $svc DependOnService @depends | Out-Null
 
     # RESTART ON CRASH, WITH A THROTTLE.
     #

@@ -1,0 +1,31 @@
+# Who receives alarm notifications. See DESIGN.md 4.4.
+#
+# Edited from the web UI (/alarms) and applied without restarting anything:
+# the alarm engine reads this file at send time. Editing it by hand works
+# equally well and has the same effect.
+#
+# Everyone with `enabled: true` receives the notification. No shift roster,
+# no escalation chain: the list is the list.
+#
+# An empty phone is not a mistake - it means "do not SMS this person", and
+# they are notified by email alone. Somebody with NEITHER an email nor a
+# phone is saved with a warning, not refused: they are on the list and hear
+# nothing, which is worth being told once, not worth blocking the save.
+#
+# An empty list is a warning - if every recipient is disabled, alarms reach
+# nobody, and the engine raises a low-severity alarm saying so.
+#
+# THIS IS THE TEMPLATE. Copy it to config/recipients.yaml and put the real
+# people in that copy, which is gitignored: it holds names, e-mail addresses
+# and mobile numbers, and those are personal data that never belong in git.
+
+recipients:
+  - name: Example Person
+    email: example.person@nikhef.nl
+    phone: "+310000000000"
+    enabled: true
+
+  - name: Someone Without SMS
+    email: someone.else@nikhef.nl
+    phone: ""
+    enabled: false

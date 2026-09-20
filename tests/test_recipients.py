@@ -67,9 +67,14 @@ class StubDrift:
 def config_dir(tmp_path, monkeypatch):
     d = tmp_path / "config"
     d.mkdir()
-    for name in ("channels.yaml", "devices.yaml", "alarms.yaml",
-                 "recipients.yaml"):
+    for name in ("channels.yaml", "devices.yaml", "alarms.yaml"):
         shutil.copy(REPO_CONFIG / name, d / name)
+    # recipients.yaml is gitignored (real names and mobile numbers), so a fresh
+    # clone does not have one. Use it when it is there, and the committed
+    # template when it is not, so the suite runs everywhere.
+    real = REPO_CONFIG / "recipients.yaml"
+    shutil.copy(real if real.exists() else REPO_CONFIG / "recipients.example.yaml",
+                d / "recipients.yaml")
     monkeypatch.setattr(config_module, "CONFIG_DIR", d)
     return d
 
