@@ -225,6 +225,27 @@ def main(argv=None) -> int:
     DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
     drifted, written = [], []
 
+    # Everything the archive holds, so the comparison can run in BOTH
+    # directions. The loop below is driven by what Grafana returns, which
+    # cannot see a dashboard that exists only as a file - exactly the state a
+    # half-finished `--load` leaves behind, and the one where `--check` used
+    # to print "everything matches" while the UI linking to that dashboard
+    # showed an empty panel. src/xams_sc/grafana.py's watcher has always
+    # compared `uids | set(archive)`; this is the same check in this tool.
+    #
+    # Skipped when --uid names dashboards explicitly: the caller asked about
+    # those, and nothing else is theirs to answer for.
+    archived = {}
+    if not args.uid:
+        for candidate in sorted(DASHBOARD_DIR.glob("*.json")):
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if data.get("uid"):
+                archived[data["uid"]] = (candidate, data.get("title", ""))
+    absent = [uid for uid in sorted(archived) if uid not in set(uids)]
+
     for uid in uids:
         payload = api(args.url, auth, f"/api/dashboards/uid/{uid}")
         dashboard = normalise(payload["dashboard"])
@@ -254,13 +275,32 @@ def main(argv=None) -> int:
         written.append(path)
         print(f"  {uid:20s} saved to {path.relative_to(ROOT)}  ({title})")
 
+    for uid in absent:
+        path, title = archived[uid]
+        print(f"  {uid:20s} NOT IN GRAFANA, only in "
+              f"{path.relative_to(ROOT)}  ({title})")
+
     if args.check:
-        if drifted:
-            print(f"\n{len(drifted)} dashboard(s) differ from the files in git.")
-            print("Run without --check to bring the files up to date.")
+        if drifted or absent:
+            if drifted:
+                print(f"\n{len(drifted)} dashboard(s) differ from the files in git.")
+                print("Run without --check to bring the files up to date.")
+            if absent:
+                print(f"\n{len(absent)} dashboard(s) exist only as a file. "
+                      "Anything linking to one shows an empty panel.")
+                print("  python tools/save_dashboard.py --load --password <pw>")
             return 1
         print("\nEverything in Grafana matches the files in git.")
         return 0
+
+    if absent:
+        # Not an error on a --save: saving is how a dashboard REACHES the
+        # archive, and a file Grafana has never seen is a normal state
+        # mid-edit. It still has to be said out loud, because the whole point
+        # of the archive is that it can be put back.
+        print(f"\n{len(absent)} dashboard(s) above exist only as a file. "
+              "To put them into Grafana:")
+        print("  python tools/save_dashboard.py --load --password <pw>")
 
     if written:
         print(f"\n{len(written)} file(s) updated. Commit them:")

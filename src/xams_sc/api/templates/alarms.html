@@ -82,7 +82,7 @@
   <div class="body dim">Nothing is alarming.</div>
   {% endif %}
   <div class="note">
-    History is in <a href="http://127.0.0.1:3000" target="_blank">Grafana</a>:
+    History is in <a href="{{ grafana_url }}" target="_blank">Grafana</a>:
     alarm state is stored like any other record, so the plots have it without
     this page querying a database (§11).
   </div>

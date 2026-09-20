@@ -35,6 +35,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
 
@@ -70,6 +71,35 @@ def _get(url: str, token: str):
         url, headers={"Authorization": "Bearer " + token})
     with urllib.request.urlopen(req, timeout=5) as response:
         return json.loads(response.read())
+
+
+# The one `$channel` dashboard every value on the mimic links to (§8.2a).
+# Fixed rather than configured: it is committed to dashboards-archive/ and
+# the drift check above reports it `unsaved` or `missing` if the two part
+# company, which is what keeps this constant honest.
+CHANNEL_DASHBOARD_UID = "xams-channel"
+
+
+def base_url() -> str:
+    """Where Grafana lives, for the footer link and the mimic popup alike.
+
+    One source rather than one hardcoded address per template (§8.2a): this
+    is the only place `secrets.yaml` is read for it.
+    """
+    url = (_secrets().get("grafana") or {}).get("url")
+    return (url or "http://127.0.0.1:3000").rstrip("/")
+
+
+def channel_url(channel: str, *, frm: str = "now-24h", to: str = "now") -> str:
+    """The link a mimic value opens: that channel's plot, ready to read.
+
+    No per-channel entry anywhere - the channel name is the only thing that
+    varies, and it already has to be a valid `channels.yaml` name to appear
+    on the mimic at all (§8.2a).
+    """
+    return ("%s/d/%s/channel?var-channel=%s&from=%s&to=%s"
+            % (base_url(), CHANNEL_DASHBOARD_UID, quote(channel, safe=""),
+               frm, to))
 
 
 def _canonical(dashboard: dict) -> str:

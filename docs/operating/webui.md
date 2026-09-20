@@ -233,6 +233,14 @@ landscape, frame and title block removed, recoloured for the dark interface.
 **A stale channel greys out and shows a dash**, exactly as on the Channels page
 and for the same reason.
 
+**Click a value to see its history.** A stale, greyed-out reading is still
+clickable — that is exactly when someone wants to know when it stopped, and
+what it was doing before. Valves, pipes and unmeasured tags such as `SG101`
+do nothing: only a value opens a plot, so the drawing never invites a click
+it can't answer. The popup shows a 1 h / 24 h / 7 d range and an *open in
+Grafana* link for the full toolbar; if Grafana is unreachable or embedding is
+not enabled on this host, the plot area stays blank but the link still works.
+
 The tags in the SVG are checked against `channels.yaml` when the service starts,
 and drift is reported **in both directions** — a bubble with no channel behind
 it, and a channel that appears nowhere on the drawing.

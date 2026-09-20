@@ -280,7 +280,7 @@ every command you send">set</button>
      things you look at. #}
   <a href="/alarms" class="{{ 'on' if page == '/alarms' }}">Alarms</a>
   <a href="/logs"   class="{{ 'on' if page == '/logs' }}">Logs</a>
-  <a href="http://127.0.0.1:3000" target="_blank">Grafana &nearr;</a>
+  <a href="{{ grafana_url }}" target="_blank">Grafana &nearr;</a>
   <a href="/manual" target="_blank">Manual &nearr;</a>
 </nav>
 <main>{% block content %}{% endblock %}</main>

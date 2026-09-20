@@ -256,3 +256,37 @@ class TestCaching:
             watcher.get()
 
         assert len(calls) == 2
+
+
+class TestChannelUrl:
+    """The link the P&ID mimic opens on a click. See DESIGN.md §8.2a.
+
+    There is no per-channel entry anywhere to drift out of step - the only
+    input is the channel name, which the mimic already gets right (§8.2's
+    SVG-versus-channels.yaml check), so this only has to pin the string.
+    """
+
+    def test_builds_the_expected_dashboard_url(self, monkeypatch):
+        monkeypatch.setattr(
+            grafana, "_secrets",
+            lambda: {"grafana": {"url": "http://grafana:3000"}})
+        assert grafana.channel_url("tt203") == (
+            "http://grafana:3000/d/xams-channel/channel"
+            "?var-channel=tt203&from=now-24h&to=now")
+
+    def test_channel_name_is_url_encoded(self, monkeypatch):
+        monkeypatch.setattr(
+            grafana, "_secrets",
+            lambda: {"grafana": {"url": "http://grafana:3000"}})
+        assert "var-channel=fm101%2Ftotal" in grafana.channel_url("fm101/total")
+
+    def test_trailing_slash_on_the_configured_url_is_stripped(self, monkeypatch):
+        monkeypatch.setattr(
+            grafana, "_secrets",
+            lambda: {"grafana": {"url": "http://grafana:3000/"}})
+        assert grafana.channel_url("tt203").startswith("http://grafana:3000/d/")
+
+    def test_falls_back_to_loopback_when_unconfigured(self, monkeypatch):
+        monkeypatch.setattr(grafana, "_secrets", lambda: {})
+        assert grafana.base_url() == "http://127.0.0.1:3000"
+

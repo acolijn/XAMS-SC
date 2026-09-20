@@ -5,10 +5,64 @@
 {% block refresh %}{% endblock %}
 {% block content %}
 
+<style>
+/* Only values invite a click (§8.2a) - a valve is manual hardware, and a
+   pointer cursor on the whole drawing would teach the wrong habit. */
+.mimic-body [id^="v-"] { cursor:pointer; }
+
+.grafana-modal {
+  display:none; position:fixed; inset:0; z-index:50;
+  background:rgba(10,12,16,.72);
+  align-items:center; justify-content:center;
+}
+.grafana-modal .panel {
+  background:var(--panel, #161a21); border:1px solid var(--line, #2a303b);
+  border-radius:6px; width:min(900px, 92vw); box-shadow:0 12px 40px rgba(0,0,0,.5);
+}
+.grafana-modal .panel-head {
+  display:flex; align-items:center; gap:.6rem; padding:.5rem .8rem;
+  border-bottom:1px solid var(--line, #2a303b);
+}
+.grafana-modal .panel-head h3 { margin:0; font-size:.85rem; flex:1; }
+.grafana-modal .gm-range {
+  background:none; border:1px solid var(--line, #2a303b); color:inherit;
+  border-radius:4px; padding:.15rem .5rem; font-size:.78rem; cursor:pointer;
+}
+.grafana-modal .gm-range.on { background:var(--line, #2a303b); }
+.grafana-modal .panel-head a { font-size:.78rem; }
+.grafana-modal .panel-head .gm-close {
+  background:none; border:none; color:inherit; font-size:1.1rem; cursor:pointer;
+  line-height:1; padding:0 .2rem;
+}
+.grafana-modal iframe {
+  display:block; width:100%; height:min(60vh, 520px); border:0;
+  background:#0d0f13;
+}
+</style>
+
 <div class="card">
   <h2>P&amp;I — live values</h2>
   <div class="body mimic-body">
     {{ svg|safe }}
+  </div>
+</div>
+
+{# Clicking a value opens this over the drawing rather than replacing the
+   page, so the reading keeps its context - the whole reason the mimic
+   exists (§8.2a). The "open in Grafana" link and the channel name are
+   rendered before the iframe loads, so a down Grafana degrades to a plain
+   link rather than an empty box. #}
+<div class="grafana-modal" id="grafana-modal">
+  <div class="panel">
+    <div class="panel-head">
+      <h3 id="gm-title"></h3>
+      <button type="button" class="gm-range" data-range="1h">1h</button>
+      <button type="button" class="gm-range" data-range="24h">24h</button>
+      <button type="button" class="gm-range" data-range="7d">7d</button>
+      <a id="gm-open" href="#" target="_blank" rel="noopener">open in Grafana &nearr;</a>
+      <button type="button" class="gm-close" title="close" aria-label="close">✕</button>
+    </div>
+    <iframe id="gm-frame" src="about:blank" loading="lazy"></iframe>
   </div>
 </div>
 
@@ -78,5 +132,70 @@ async function refresh() {
 }
 refresh();
 setInterval(refresh, 5000);
+
+// --- history popup (§8.2a): one dashboard, keyed on $channel, so a channel
+// added to channels.yaml and drawn on the P&ID gets its plot with nothing
+// else to edit anywhere. ---
+const GRAFANA_URL = {{ grafana_url|tojson }};
+const CHANNEL_DASHBOARD_UID = "xams-channel";
+const RANGES = {"1h": "now-1h", "24h": "now-24h", "7d": "now-7d"};
+let gmChannel = null, gmRange = "24h";
+
+function dashboardUrl(channel, from) {
+  return GRAFANA_URL + "/d/" + CHANNEL_DASHBOARD_UID + "/channel?var-channel="
+       + encodeURIComponent(channel) + "&from=" + from + "&to=now";
+}
+function panelUrl(channel, from) {
+  return GRAFANA_URL + "/d-solo/" + CHANNEL_DASHBOARD_UID + "/channel?var-channel="
+       + encodeURIComponent(channel) + "&from=" + from + "&to=now"
+       + "&panelId=1&theme=dark";
+}
+function setRange(range) {
+  gmRange = range;
+  const from = RANGES[range];
+  // The link and the title first: an iframe fails silently, so if the frame
+  // never loads the popup still degrades to a working link, not a blank box.
+  document.getElementById("gm-open").href = dashboardUrl(gmChannel, from);
+  for (const b of document.querySelectorAll(".gm-range")) {
+    b.classList.toggle("on", b.dataset.range === range);
+  }
+  document.getElementById("gm-frame").src = panelUrl(gmChannel, from);
+}
+function openPanel(channel) {
+  gmChannel = channel;
+  document.getElementById("gm-title").textContent = channel;
+  setRange(gmRange);
+  document.getElementById("grafana-modal").style.display = "flex";
+}
+function closePanel() {
+  document.getElementById("grafana-modal").style.display = "none";
+  document.getElementById("gm-frame").src = "about:blank";   // stop it polling out of sight
+}
+
+// One listener on the drawing rather than one per value: channels come and
+// go with channels.yaml and the SVG is rebuilt independently of this script.
+document.querySelector(".mimic-body").addEventListener("click", (e) => {
+  const id = e.target && e.target.id;
+  if (!id || !id.startsWith("v-")) return;   // valves, pipes and SG101 do nothing
+  openPanel(id.slice(2));
+});
+for (const b of document.querySelectorAll(".gm-range")) {
+  b.addEventListener("click", () => setRange(b.dataset.range));
+}
+document.querySelector(".gm-close").addEventListener("click", closePanel);
+document.getElementById("grafana-modal").addEventListener("click", (e) => {
+  if (e.target.id === "grafana-modal") closePanel();          // click-outside
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closePanel();
+});
+// A tooltip on the value nodes only, added once: everything else on the
+// drawing stays inert, and the habit a clickable diagram teaches must not
+// spread to it.
+for (const node of document.querySelectorAll('.mimic-body [id^="v-"]')) {
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  title.textContent = node.id.slice(2) + " — click for history";
+  node.appendChild(title);
+}
 </script>
 {% endblock %}

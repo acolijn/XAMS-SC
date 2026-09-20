@@ -443,6 +443,19 @@ check_for_updates = false
 
 [paths]
 provisioning = $RepoRoot\grafana\provisioning
+
+# Lets the P&ID mimic embed a panel in a popup instead of only linking out to
+# it (DESIGN.md section 8.2a). Anonymous access is acceptable only because of
+# the loopback bind above: it grants read access to every dashboard to anyone
+# who can reach this machine, and anyone who can reach it can already open
+# Grafana directly. If this ever binds beyond 127.0.0.1, reconsider both
+# settings in the same breath.
+[security]
+allow_embedding = true
+
+[auth.anonymous]
+enabled = true
+org_role = Viewer
 "@
 
 $iniCurrent = $null

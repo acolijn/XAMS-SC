@@ -50,7 +50,7 @@ from ..config import (LOG_DIR, ConfigError, load, read_hv_defaults,
                       write_recipients)
 from ..hv_status import (describe_status, is_disabled, is_energised,
                          status_faults)
-from ..grafana import DriftWatcher
+from ..grafana import DriftWatcher, base_url as grafana_base_url
 from .state import SystemState
 
 log = logging.getLogger(__name__)
@@ -385,6 +385,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
             # instrument, and the HV control surface will want the same name
             # without setting it again (section 10 rule 5).
             "operator": request.cookies.get(OPERATOR_COOKIE, ""),
+            # Read once here rather than hardcoded per template (§8.2a): the
+            # footer link and the mimic popup must never be able to disagree.
+            "grafana_url": grafana_base_url(),
             **context})
 
     # ------------------------------------------------------------- pages
