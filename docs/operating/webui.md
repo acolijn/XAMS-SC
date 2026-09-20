@@ -3,7 +3,9 @@
 <http://127.0.0.1:8000> — the page to bookmark, and where the day-to-day work
 happens. It reads the **retained MQTT topics, never the database**, so it keeps
 working when PostgreSQL does not, which is exactly when it is needed (§8.1).
-Every page refreshes itself; nothing has to be reloaded by hand.
+Every page refreshes itself; nothing has to be reloaded by hand — see
+[When a page reloads](#when-a-page-reloads) for the one rule that matters,
+which is that it will not do it while you are in the middle of something.
 
 It binds to loopback only. There is no login, and there is deliberately no
 remote access — see [Who is acting](#who-is-acting-and-why-it-is-asked) for
@@ -16,11 +18,37 @@ remote viewing is ever wanted.
 | **Channels** | What is every channel reading, right now |
 | **P&I** | Where in the plant is that number |
 | **High voltage** | What are both CAEN supplies actually doing |
+| **Alarms** | What fired, what *would* fire, and who gets told |
 | **Logs** | What did a service say when it went wrong |
 
 Two links lead off the site: **Grafana ↗** for history and plots, **Manual ↗**
 for this documentation, served by the same process so it is present on the lab
 PC whether or not the building network is.
+
+---
+
+## When a page reloads
+
+Every page except **Logs** reloads itself **every ten seconds**, so a screen
+left open is never showing yesterday.
+
+**It holds off while the page contains anything you have typed or loaded and
+not yet sent.** The question it asks is *does this page differ from what the
+server sent?*, not *is the cursor in a box?* — so a value filled in by hand and
+a column filled in by **Load defaults** are treated alike. Both are unsent
+intent, and a reload would throw either away.
+
+That distinction was a bug, on the HV page and in the worst possible place.
+*Load defaults* fills boxes nobody is touching, so nothing took focus, the
+timer ran out, and the operator watched the setpoints they had just loaded turn
+back into empty boxes a few seconds later.
+
+The hold is not permanent. Clear the boxes or apply them, and the very next
+tick reloads — a box filled and forgotten must not freeze the numbers on the
+page for the rest of the afternoon.
+
+With JavaScript off, a plain ten-second meta refresh takes over and none of the
+above applies: it cannot be cancelled once the page is parsed.
 
 ---
 
@@ -273,6 +301,8 @@ The boxes in the `set V` column are a **plan**: filling them changes nothing.
 1. **Load defaults** fills every box from `hv_defaults.yaml`, falling back to
    `channels.yaml` — in git, reviewable, rather than remembered — and **writes
    nothing**. Read them, change what you want. **Clear** empties the boxes.
+   Filled boxes [hold off the ten-second reload](#when-a-page-reloads), so they
+   stay filled for as long as you need them.
 2. **Apply setpoints** writes every box you filled in, as one action, across
    both supplies. Empty boxes are left alone, so one channel or eight is the
    same gesture.
@@ -340,6 +370,24 @@ would report a failure for a command that worked, and train somebody to re-send
 A channel whose switch is off cannot be energised. The refusal says so and names
 the remedy: flip the enable at the front panel.
 
+**The button says `switching…` and stops accepting clicks** until the answer
+comes back. Energising is a round trip — command, read-back, ack, redirect —
+and while it was in flight the row still read *not energised* and the button
+still said **turn ON**, so an operator who saw nothing happen clicked again. If
+a refresh landed in between, the button under the cursor had become **turn
+off**, and the second click de-energised the channel the first had just
+started. Only the energise buttons do this; *Apply setpoints* is idempotent and
+re-sending it costs nothing.
+
+**The Status column updates the instant the command is answered**, rather than
+at the next ten-second publish. Two things used to delay it: the status was
+published on the ordinary cadence, and a status word that changed mid-window
+was *averaged* — and a mean of a bitmask is not a bitmask. A channel caught
+part-way through a ramp averaged to a word with `RAMP_UP` set and `ON` clear,
+so the page reported a live channel as off until the ramp finished. Flags are
+now taken as they last came off the wire, and the read-back the write is
+verified against is published straight away.
+
 ```powershell
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-on  hv_cathode_vset --by <you>
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl hv-off hv_cathode_vset --by <you>
@@ -401,7 +449,7 @@ applies to the next alarm — no restart, no reload.
 |---|---|
 | **Name** | what the person is called. Two rows with the same name are refused |
 | **Email** | where the alarm mail goes |
-| **Phone** | where the SMS goes. **Blank means do not SMS them** — they get email alone, which is normal and not an omission. A number needs its country code, `+31…` |
+| **Phone** | where the SMS goes. **Blank means do not SMS them** — they get email alone, which is normal and not an omission. A number that *is* filled in needs its country code, `+31…` |
 | **Notify** | off keeps somebody on the list without notifying them — a holiday, without losing the number |
 | **Remove** | takes effect **on save**, not on click |
 
@@ -409,9 +457,23 @@ To add somebody, type into the blank row at the bottom. To remove somebody,
 tick **Remove** and save.
 
 **The whole list is saved as one action**, and a bad row refuses all of it —
-nothing is written and the reason names the row. A recipient with neither an
-email nor a phone is **not** one of those: the row is saved, the box is
-outlined in amber, and the save says they are on the list and hear nothing.
+nothing is written, nothing is half-applied, and the red banner names the row.
+Four things are refused:
+
+| | why |
+|---|---|
+| no name | the audit trail is kept by name; an unnamed row cannot be traced back |
+| an address without a plausible `@` | it is a typo, and it fails silently at 3am |
+| a phone without `+` and a country code | the gateway wants international form. Better refused here than by the gateway |
+| the same name twice | two rows, one person, and no way to tell which is current |
+
+**A recipient with neither an email nor a phone is not refused.** The row is
+saved, both boxes are outlined in amber on the page, and the green banner
+carries `WARNING: <name> has no email and no phone, so they are on the list and
+hear nothing`. They would sit there looking notified and hear nothing, which is
+worth being told — but refusing over it meant a name typed while you go and
+look up a number took the whole list hostage, and the change nobody could make
+was the one to the list of people who get told things go wrong.
 
 **Turning everyone off is allowed, with a warning**, because it may be exactly
 what you mean during an intervention. The page says so in red and the alarm

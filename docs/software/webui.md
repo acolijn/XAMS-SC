@@ -3,14 +3,14 @@
 **How to use it is in [The web interface](../operating/webui.md).** This page is
 how it is built.
 
-Server-rendered HTML, a meta refresh, no JavaScript framework and no build step
-— so that in three years a student can change it without installing a toolchain.
-Binds to `127.0.0.1`, never `0.0.0.0`.
+Server-rendered HTML, one small inline script, no JavaScript framework and no
+build step — so that in three years a student can change it without installing
+a toolchain. Binds to `127.0.0.1`, never `0.0.0.0`.
 
 Pages: Overview (`/`), Channels (`/status`), P&I mimic (`/mimic`), High voltage
-(`/hv`), Logs (`/logs`). This manual is served by the same process, at
-`/manual`, so it is present on the lab PC whether or not the building network
-is.
+(`/hv`), Alarms (`/alarms`), Logs (`/logs`). This manual is served by the same
+process, at `/manual`, so it is present on the lab PC whether or not the
+building network is.
 
 It renders from the **retained MQTT topics, never the database** (§8.1). The
 database can be down and every page still answers.
@@ -32,18 +32,29 @@ repeat a write.
 | `GET /` | Overview |
 | `GET /status` | every channel, as a table |
 | `GET /hv` | high voltage, with the controls |
+| `GET /hv/defaults` | what *Load defaults* offers, as an editable form |
 | `GET /mimic` | the P&ID mimic |
+| `GET /alarms` | what fired, the thresholds in force, the recipient list |
 | `GET /logs` | service logs |
 | `GET /api/state` | everything the pages show, as JSON |
 | `GET /healthz` | plain text, for a watchdog |
 | `GET /manual/…` | this manual, mounted as static files |
 | `POST /hv/apply`, `/hv/output` | HV setpoint, energise/de-energise |
+| `POST /hv/defaults` | write `hv_defaults.yaml`; touches no instrument |
 | `POST /lakeshore/setpoint`, `/lakeshore/range` | Lake Shore, output 1 |
 | `POST /flow/reset` | close the integrator period |
+| `POST /alarms/recipients` | write `recipients.yaml`; touches no instrument |
 | `POST /operator` | remember who is at the keyboard, in a cookie |
 
-Every POST publishes a command and waits for its acknowledgement. None of
-them touch an instrument.
+Every POST that commands an instrument publishes on `xams/cmd/…` and waits for
+its acknowledgement. None of them touch an instrument.
+
+**The two that write a file are the exception** — `/hv/defaults` and
+`/alarms/recipients` change `config/*.yaml` and nothing else. There is no
+service on the other end to validate them, so they are checked here, in
+`config.py`, before anything is written: all or nothing, because a half-saved
+list is a list nobody chose. Both are still audited like any other change, and
+both files are tracked by git.
 
 **Who did it** comes from a cookie set once, rather than a name typed before
 every command — retyping a name for each setpoint is the kind of friction
@@ -128,9 +139,28 @@ while you are reading it takes the line away mid-sentence, so that page is a
 snapshot and says when it was taken.
 
 The refresh is done in JavaScript with a `<noscript>` meta fallback, and it
-**pauses while somebody is typing into the page**. A meta refresh cannot be
+**pauses while the page holds anything unsent**. A meta refresh cannot be
 cancelled once parsed, and it would clear a half-entered operator name and
 throw away the click that was about to follow.
+
+The test is `value !== defaultValue` over every enabled field — *does this page
+differ from what the server rendered?* — not whether anything has focus. Focus
+was the original rule and it was wrong in the one place it mattered: *Load
+defaults* on the HV page writes into boxes nobody is touching, so nothing took
+focus, the timer ran, and the reload replaced the loaded setpoints with the
+empty boxes the server renders. A box filled by a button and a box filled by
+hand are both unsent operator intent and are now indistinguishable to the
+timer.
+
+It reschedules rather than giving up, so a box left filled and forgotten
+delays each tick instead of freezing the page for the rest of the day.
+
+The same script does one other thing, on `/hv` only: an energise form disables
+its button and relabels it `switching…` on submit. The round trip is long
+enough that the row still read *not energised* while it was in flight, and a
+second click after a refresh had swapped the button to **turn off** would
+de-energise the channel the first had just started. *Apply setpoints* is
+idempotent and is deliberately left alone.
 
 ---
 
@@ -164,6 +194,9 @@ nearly empty.
 - **No validation of control values.** Ranges live in `channels.yaml` and are
   enforced by the service that owns the port. Duplicating them here would
   mean two numbers to keep in step, and the copy in the config is the one
-  that counts.
+  that counts. The page checks only *is it a number*. The exception is the
+  two forms that write a YAML file rather than command an instrument: there
+  is no service downstream to check them, so they are checked where the
+  change is made.
 - **No instrument handles.** The web process could not write to hardware if
   it tried.

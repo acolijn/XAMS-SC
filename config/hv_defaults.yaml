@@ -1,0 +1,25 @@
+# HV default setpoints - the values `load defaults` offers on /hv.
+# See DESIGN.md 4.6.
+#
+# WRITTEN BY THE WEB UI, and safe to edit by hand. Overrides
+# `default_setpoint` in channels.yaml for the channels named here.
+#
+# Volts, SIGNED, as everywhere else (section 7.2): the cathode is
+# negative, the anode positive. A value outside the channel's
+# `limits` in channels.yaml is refused - limits are NOT edited from
+# the web UI, because the write path validates against them.
+#
+# Nothing here reaches an instrument. Changing a number changes what
+# a box on /hv is filled with; a person still presses Apply.
+
+updated: '2026-09-20T08:28:09+00:00'
+by: AP
+defaults:
+  hv_pmt_bot_vset: -700.0
+  hv_pmt_top_vset: 0.0
+  hv_ts_vset: -500.0
+  hv_bs_vset: -600.0
+  hv_cathode_vset: -2250.0
+  hv_gate_vset: -1750.0
+  hv_anode_vset: 4200.0
+  hv_nai_vset: 70.0
