@@ -89,8 +89,17 @@ header .meta { color:var(--dim); font-size:.82rem; }
    with the status badge: it belongs to the session, not to any one card. */
 .operator { margin-left:auto; display:flex; align-items:center; gap:.4rem; }
 .operator label { color:var(--dim); font-size:.82rem; }
+
+/* A combobox, not a bare <datalist>. The names have to stay typeable (see the
+   markup below), so this cannot become a <select> — but a datalist's popup is
+   drawn by the browser: white, system font, no CSS reaches it, which on a dark
+   page reads as a fault rather than as a list. So the popup is ours. The
+   <datalist> stays in the markup as the no-script fallback. */
+.combo { position:relative; display:flex; align-items:center; }
 .operator input {
-  width:7rem; padding:.2rem .4rem; font:inherit; font-size:.82rem;
+  /* 12rem, not 7: "Auke-Pieter Colijn" has to be readable in the box rather
+     than scrolled halfway out of it. The right padding is the caret's room. */
+  width:12rem; padding:.2rem 1.5rem .2rem .4rem; font:inherit; font-size:.82rem;
   color:var(--text); background:var(--bg); border:1px solid var(--line);
   border-radius:3px; }
 /* Unset is worth noticing but not worth shouting about: every command still
@@ -98,11 +107,38 @@ header .meta { color:var(--dim); font-size:.82rem; }
 .operator input.unset { border-color:var(--warn); }
 .operator input::placeholder { color:var(--warn); opacity:.8; }
 .operator input:focus { outline:none; border-color:var(--dim); }
-.operator button {
+
+/* The caret sits inside the box and is deliberately not a tab stop: it opens
+   the same list ArrowDown opens, for whoever reaches for the mouse instead. */
+.combo-caret {
+  position:absolute; right:1px; top:1px; bottom:1px; width:1.3rem;
+  display:flex; align-items:center; justify-content:center;
+  padding:0; font-size:.6rem; line-height:1; color:var(--dim);
+  background:none; border:0; cursor:pointer; }
+.combo-caret:hover, .combo[data-open="true"] .combo-caret { color:var(--text); }
+
+.combo-list {
+  position:absolute; z-index:20; top:calc(100% + 3px); left:0; right:0;
+  margin:0; padding:.2rem 0; list-style:none; max-height:14rem; overflow-y:auto;
+  background:var(--panel); border:1px solid var(--line); border-radius:3px;
+  box-shadow:0 6px 16px rgba(0,0,0,.45); }
+.combo-list[hidden] { display:none; }
+.combo-list li {
+  padding:.25rem .5rem; font-size:.82rem; color:var(--text);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+/* One highlight, and the mouse moves it rather than adding a second one: two
+   highlights in a list is a question about which of them Enter will take. */
+.combo-list li[aria-selected="true"] { background:var(--line); }
+.combo-list .combo-empty { color:var(--dim); font-style:italic; cursor:default; }
+.combo-list .combo-empty[aria-selected="true"] { background:none; }
+
+/* Scoped to the submit button now that the caret is a button in here too. */
+.operator button[type="submit"] {
   padding:.2rem .5rem; font:inherit; font-size:.78rem; color:var(--dim);
   background:var(--panel); border:1px solid var(--line); border-radius:3px;
   cursor:pointer; }
-.operator button:hover { color:var(--text); border-color:var(--dim); }
+.operator button[type="submit"]:hover {
+  color:var(--text); border-color:var(--dim); }
 
 .badge { margin-left:.9rem; padding:.25rem .7rem; border-radius:3px;
          font-weight:600; letter-spacing:.02em; }
@@ -259,21 +295,36 @@ a { color:#79b8ff; }
   <form method="post" action="/operator" class="operator">
     <input type="hidden" name="next" value="{{ request.url.path }}">
     <label for="op">acting as</label>
-    {# A datalist, NOT a select: the names are the alarm recipients, and
-       somebody can be at the keyboard without being on that list - a student
-       on shift, a technician swapping a pump. Typing over the suggestions has
-       to stay possible, because the alternative is that such a person picks a
-       colleague's name and the audit trail records the wrong one. It also
-       keeps this honest: the operator is a cookie, not a login, and a closed
-       list of five staff names would imply the system knows who you are.
-       Degrades to today's plain field wherever `datalist` is ignored. #}
-    <input type="text" id="op" name="operator" maxlength="40" list="operators"
-           value="{{ operator }}" placeholder="not set"
-           class="{{ '' if operator else 'unset' }}"
-           aria-label="who is operating; recorded with every command">
-    <datalist id="operators">
-      {% for name in operators %}<option value="{{ name }}">{% endfor %}
-    </datalist>
+    {# A text box that OFFERS names, NOT a select: the names are the alarm
+       recipients, and somebody can be at the keyboard without being on that
+       list - a student on shift, a technician swapping a pump. Typing over the
+       suggestions has to stay possible, because the alternative is that such a
+       person picks a colleague's name and the audit trail records the wrong
+       one. It also keeps this honest: the operator is a cookie, not a login,
+       and a closed list of five staff names would imply the system knows who
+       you are.
+
+       The list itself is ours rather than the browser's, because a `datalist`
+       popup cannot be styled - it arrives white and in the system font on a
+       dark page, which looks like a fault. The <datalist> is still here and
+       still wired to the input: that is exactly what a browser with no script
+       falls back to. The script removes the `list` attribute when it takes
+       over, so the two popups can never both appear. #}
+    <div class="combo" id="op-combo" data-open="false">
+      <input type="text" id="op" name="operator" maxlength="40" list="operators"
+             value="{{ operator }}" placeholder="not set"
+             autocomplete="off" role="combobox" aria-expanded="false"
+             aria-controls="op-list" aria-autocomplete="list"
+             class="{{ '' if operator else 'unset' }}"
+             aria-label="who is operating; recorded with every command">
+      <button type="button" class="combo-caret" tabindex="-1"
+              aria-label="show the names already known">&#9662;</button>
+      <ul class="combo-list" id="op-list" role="listbox" hidden
+          aria-label="names already known"></ul>
+      <datalist id="operators">
+        {% for name in operators %}<option value="{{ name }}">{% endfor %}
+      </datalist>
+    </div>
     <button type="submit" title="Remembered in this browser and recorded with
 every command you send">set</button>
   </form>
@@ -301,5 +352,151 @@ every command you send">set</button>
   board out of LOCAL, or change a board's protection settings — those are hand
   operations at the instrument. Bound to 127.0.0.1 only.
 </footer>
+<script>
+/* The "acting as" combobox. Vanilla, inline, no framework and no build step
+   (§8.1) - a student must be able to change this in three years.
+
+   A text box that offers names and never constrains them: see the comment on
+   the markup for why it must not become a <select>. The <datalist> beside it
+   is the no-script fallback, so the first thing this does is unwire it -
+   otherwise the browser would draw its own popup on top of ours.
+
+   Note for whoever touches the ten-second reload above: an open list keeps the
+   cursor in the input, so `typing()` already sees it and the page will not
+   reload out from under a list somebody is reading. */
+(function () {
+  var combo = document.getElementById('op-combo');
+  if (!combo) return;
+  var input = document.getElementById('op');
+  var list  = document.getElementById('op-list');
+  var caret = combo.querySelector('.combo-caret');
+  var names = [].map.call(document.querySelectorAll('#operators option'),
+                          function (o) { return o.value; });
+
+  input.removeAttribute('list');   /* ours from here; only one popup */
+
+  var items = [];   /* the <li>s currently shown */
+  var at = -1;      /* index of the highlighted one, -1 for none */
+
+  function render(filter) {
+    var f = (filter || '').toLowerCase();
+    var shown = names.filter(function (n) {
+      return !f || n.toLowerCase().indexOf(f) !== -1;
+    });
+    list.innerHTML = '';
+    items = [];
+    at = -1;
+    if (!shown.length) {
+      /* Not an error. Typing a name that is not on the recipient list is the
+         normal case this box exists for, so say so rather than showing an
+         empty box that looks broken. */
+      var none = document.createElement('li');
+      none.className = 'combo-empty';
+      none.textContent = f ? 'no match \u2014 a typed name is fine' : 'no names yet';
+      list.appendChild(none);
+      return;
+    }
+    shown.forEach(function (n) {
+      var li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', 'false');
+      li.textContent = n;
+      list.appendChild(li);
+      items.push(li);
+    });
+  }
+
+  function highlight(i) {
+    if (at >= 0 && items[at]) items[at].setAttribute('aria-selected', 'false');
+    at = i;
+    if (at < 0 || !items[at]) return;
+    items[at].setAttribute('aria-selected', 'true');
+    /* Keep the highlight visible once the list is longer than its box. */
+    var li = items[at], top = li.offsetTop, bot = top + li.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bot > list.scrollTop + list.clientHeight)
+      list.scrollTop = bot - list.clientHeight;
+  }
+
+  function isOpen() { return !list.hidden; }
+
+  function open(filter) {
+    render(filter);
+    list.hidden = false;
+    combo.setAttribute('data-open', 'true');
+    input.setAttribute('aria-expanded', 'true');
+  }
+
+  function close() {
+    list.hidden = true;
+    combo.setAttribute('data-open', 'false');
+    input.setAttribute('aria-expanded', 'false');
+    at = -1;
+  }
+
+  function choose(li) {
+    input.value = li.textContent;
+    /* The box is warning-yellow only while nobody is set. Clear that on the
+       pick rather than at the next page load. */
+    input.classList.remove('unset');
+    close();
+    input.focus();
+  }
+
+  /* mousedown rather than click throughout: click blurs the input first, and
+     the blur handler would close the very list being opened or picked from. */
+  caret.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    if (isOpen()) close(); else open('');
+    input.focus();
+  });
+
+  input.addEventListener('input', function () { open(input.value); });
+
+  list.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    var li = e.target.closest('li');
+    if (li && !li.classList.contains('combo-empty')) choose(li);
+  });
+
+  list.addEventListener('mousemove', function (e) {
+    var li = e.target.closest('li');
+    if (!li || li.classList.contains('combo-empty')) return;
+    var i = items.indexOf(li);
+    if (i !== -1 && i !== at) highlight(i);
+  });
+
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!isOpen()) { open(''); highlight(items.length ? 0 : -1); }
+      else if (items.length) highlight((at + 1) % items.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (isOpen() && items.length)
+        highlight(at <= 0 ? items.length - 1 : at - 1);
+    } else if (e.key === 'Enter') {
+      /* Enter on a highlighted name PICKS it; Enter with nothing highlighted
+         submits, which is what somebody typing a name off the list wants.
+         Without the preventDefault the first would also submit, and the name
+         would be set a keystroke before the operator meant it to be. */
+      if (isOpen() && at >= 0 && items[at]) { e.preventDefault(); choose(items[at]); }
+      else close();
+    } else if (e.key === 'Escape') {
+      if (isOpen()) { e.stopPropagation(); close(); }
+    }
+  });
+
+  document.addEventListener('mousedown', function (e) {
+    if (!combo.contains(e.target)) close();
+  });
+  input.addEventListener('blur', function () {
+    /* Deferred: tabbing away must close it, but a pick is also a blur. */
+    setTimeout(function () {
+      if (!combo.contains(document.activeElement)) close();
+    }, 0);
+  });
+})();
+</script>
 </body>
 </html>
