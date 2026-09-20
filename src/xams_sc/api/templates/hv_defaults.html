@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}HV defaults{% endblock %}
+{% block content %}
+
+{% if saved %}<div class="flash good" style="margin:0 0 1rem 0">{{ saved }}</div>{% endif %}
+{% if error %}<div class="flash bad" style="margin:0 0 1rem 0">
+  <strong>Refused — nothing was written.</strong> {{ error }}</div>{% endif %}
+
+<div class="card">
+  <h2>Default setpoints</h2>
+  <div class="body">
+    <p class="dim" style="font-size:.85rem;margin:0 0 .9rem 0">
+      These are the values <strong>Load defaults</strong> fills into the boxes
+      on <a href="/hv">the high-voltage page</a>. Saving here writes
+      <code>config/hv_defaults.yaml</code> and <strong>touches no
+      instrument</strong>: nothing ramps, nothing is energised, and no voltage
+      changes until somebody presses Apply over there.
+    </p>
+
+    <form method="post" action="/hv/defaults"
+          onsubmit="return confirm('Save these as the new defaults?\n\nThis writes a configuration file. No voltage changes.');">
+    <table class="channels">
+      <colgroup>
+        <col style="width:9rem"><col><col style="width:9rem">
+        <col style="width:12rem">
+      </colgroup>
+      <tr>
+        <th>Channel</th><th>What it is</th><th>Default (V)</th>
+        <th>Allowed range</th>
+      </tr>
+      {% for r in rows %}
+      <tr>
+        <td><code>{{ r.label }}</code></td>
+        <td class="dim">{{ r.description or '—' }}</td>
+        <td>
+          {# `any` rather than `number`: the sign matters (§7.2) and a spinner
+             on a kilovolt is not a useful affordance. #}
+          <input type="text" inputmode="text" name="{{ r.name }}"
+                 value="{{ '%g'|format(r.default) if r.default is not none else '' }}"
+                 style="width:7rem" autocomplete="off">
+        </td>
+        <td class="dim">
+          {% if r.limits %}
+            {# `+0` reads as a signed quantity that has a sign; zero has none. #}
+            {{ '%+.0f'|format(r.limits.min) if r.limits.min else '0' }} …
+            {{ '%+.0f'|format(r.limits.max) if r.limits.max else '0' }} V
+          {% else %}
+            <span class="bad">no limits — cannot hold a default</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <div style="margin-top:.9rem">
+      <button type="submit" class="hv-btn apply">Save defaults</button>
+      <a href="/hv" class="hv-btn" style="text-decoration:none">Back to /hv</a>
+    </div>
+
+    <div class="dim" style="font-size:.8rem;margin-top:.9rem">
+      <strong>Signed volts</strong>, as everywhere else: the cathode, gate and
+      screens are negative, the anode and NaI positive. An empty box means the
+      channel has no default and its box on <code>/hv</code> is simply not
+      filled.
+      <br>
+      <strong>The allowed range is not editable here.</strong> It lives in
+      <code>channels.yaml</code>, in git, because it is the range every write
+      is checked against — a page that could widen its own limit and then
+      write to it would not be a limit at all (§4.6). A default outside the
+      range is refused, and nothing is written.
+      {% if updated %}
+      <br>
+      Last saved {{ updated }}{% if updated_by %} by <code>{{ updated_by }}</code>{% endif %}.
+      {% endif %}
+    </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

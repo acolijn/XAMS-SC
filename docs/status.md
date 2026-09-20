@@ -15,6 +15,7 @@ the next before the current one passes.
 | 5 | Lake Shore + CAEN monitoring | **done** |
 | 6 | UPS, alarms, flow integrator | **done** — email delivery finally works (18 Sep) |
 | 7 | Web UI and P&ID mimic | **mostly done** — no `/recipients` page, no Python client |
+
 | 8 | Control path | **in progress** — Lake Shore and HV both writable from the UI and the CLI; the shared staged plan of §10a is not built |
 | 9 | Procedures | not started |
 | 10 | Production | **partly** — running as services, auto-start, nightly backup |
@@ -36,10 +37,18 @@ from `xams-ctl hv-set`, `hv-standby`, `hv-on` and `hv-off`.
 | 2 | The write path (`VSET`, and `ON`/`OFF`) | **done, 18 Sep** |
 | 3 | The plan (staged setpoints, applied as one action) | **partly** — staged in the page, not on the bus |
 | 4 | The UI for it | **done, 18 Sep** |
+| 5 | Editing the default setpoints from `/hv/defaults` (§4.6) | **done, 20 Sep** |
+
+**Defaults are editable from the web UI since 20 September 2026.** This is an
+R&D setup and the operating point moves, so the values *Load defaults* offers
+live in `config/hv_defaults.yaml` and are edited from `/hv/defaults` — a file
+write, audited, reaching no instrument. The `limits` each default is checked
+against stayed in `channels.yaml`, hand-edited and in git, because they are
+what the write path validates against (§4.6).
 
 **Stage 3 is the one that is not what §10a asks for.** The plan is held in the
-boxes on `/hv`: *Load defaults* fills them from `channels.yaml` and writes
-nothing, *Apply setpoints* writes every filled box as one action, and energising
+boxes on `/hv`: *Load defaults* fills them from `hv_defaults.yaml`, falling
+back to `channels.yaml`, and writes nothing, *Apply setpoints* writes every filled box as one action, and energising
 is a separate button per channel. So the plan-then-apply order is real, and so
 are the refusals. What is missing is the plan being **server-side and retained
 on the bus**: a second browser sees nothing pending, and a reload throws away
@@ -230,6 +239,7 @@ Then, roughly in order of how much it matters:
 | | Why it matters |
 |---|---|
 | **Email delivery** — set `smtp_host` in `config/secrets.yaml` | SMS works and has been proven with a real message; email has never been sent. Try the Nikhef relay with no credentials first. |
+| **The heater cut on a `pmain` hihi** (§10) — decided 18 Sep, not built | The decision is recorded and the threshold is live in `alarms.yaml`, but nothing joins them: a `pmain` hihi notifies a person, and a person cuts the heaters. The safe direction for the gap to be in, but it must not be described to an operator as something the software does. |
 | **The Nikhef VM watchdog** — one Grafana rule, "no measurement for 15 minutes" (§12) | The one failure this system cannot report is its own machine being off. Auto-start makes that *less* likely to be noticed, not more, because the system now looks after itself well enough that nobody checks. |
 | **Replace the `tt202` sensor** | Then `enabled: true` in `channels.yaml` and `xams-ctl reload`. Nothing else changes. |
 | **Rotate the MessageBird key** | It sat in plaintext in three copies on the Desktop for years. Update `secrets.yaml` and the LabVIEW scripts together while LabVIEW is still the fallback. |

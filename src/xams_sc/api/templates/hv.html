@@ -162,13 +162,21 @@ Each channel that is energised will ramp to its new value at the board's own rat
 <div class="card" style="margin-top:1.2rem">
   <div class="body">
     <button type="button" onclick="loadDefaults()" class="hv-btn">Load defaults</button>
+    {# Deliberately a link, not a button, and outside the setpoint form: it
+       navigates, it does not submit. A button inside `form="setpoints"` that
+       merely went somewhere would be the one control here whose click does
+       something other than what the row of buttons implies. #}
+    <a href="/hv/defaults" class="hv-btn"
+       style="text-decoration:none">Edit defaults…</a>
     <button type="button" onclick="clearBoxes()" class="hv-btn">Clear</button>
     <button type="submit" form="setpoints" class="hv-btn apply">Apply setpoints</button>
     <div class="dim" style="font-size:.8rem;margin-top:.6rem">
       <strong>Load defaults fills the boxes and writes nothing.</strong> Read
       them, change what you want, then apply. Defaults come from
-      <code>channels.yaml</code>, so they are in git and reviewable rather
-      than remembered (§10a).
+      <code>hv_defaults.yaml</code>, falling back to <code>channels.yaml</code>,
+      so they are in git and reviewable rather than remembered (§10a).
+      <strong>Edit defaults</strong> changes what this button offers; it
+      changes no voltage (§4.6).
       <br>
       Only channels whose enable switch is on are filled. A channel that is
       switched off cannot hold a setpoint above zero, so its box is greyed

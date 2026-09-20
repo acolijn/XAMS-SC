@@ -9,6 +9,7 @@ Everything the system knows about the hardware is in `config/`, in git.
 | `devices.yaml` | how each instrument is found and identified | edit, commit, `xams-ctl reload` |
 | `alarms.yaml` | thresholds and severity routing | edit, commit, `xams-ctl reload` |
 | `recipients.yaml` | who gets notified | the web UI, or by hand — no restart |
+| `hv_defaults.yaml` | the HV setpoints `load defaults` offers | the web UI at `/hv/defaults`, or by hand — no restart |
 | `secrets.yaml` | credentials | by hand; **never committed** |
 
 Three conventions that must not be changed:
@@ -56,7 +57,7 @@ One entry per channel. Only `name`, `device`, `phys` and `kind` are required.
 | `rtd` | RTD type and wiring for a cDAQ RTD channel |
 | `limits` | `{min, max}` — the **software write range** |
 | `derive` | compute this channel from another: `{from, transform, …}`, for relationships that are not linear |
-| `default_setpoint` | what the HV page offers as "load defaults". Offered, never applied |
+| `default_setpoint` | what the HV page offers as "load defaults". Offered, never applied. Overridden by [`hv_defaults.yaml`](#hv_defaultsyaml-the-operating-point) |
 | `legacy` | the LabVIEW name, for `tools/compare_to_labview.py` |
 | `enabled` | `false` leaves the channel defined but unread. Listed, not deleted |
 | `log_minmax` | also store the window's min and max, not only the mean |
@@ -137,6 +138,52 @@ the weekend it matters.
 So the recipients list is read at **send time**, not at startup: a change
 applies to the next alarm, with no restart and no reload. Changes are
 [audited](storage.md) like any other write.
+
+---
+
+## `hv_defaults.yaml`, the operating point
+
+The values **Load defaults** fills into the boxes on `/hv`. Edited from
+**`/hv/defaults`** — the *Edit defaults…* button beside *Load defaults* — or by
+hand.
+
+```yaml
+updated: 2026-09-20T14:02:11+00:00
+by: apc
+defaults:
+  hv_cathode_vset: -2250.0
+  hv_anode_vset:   4200.0
+```
+
+The second file edited from the web UI, and for the same kind of reason as
+`recipients.yaml`: this is an R&D setup, the operating point moves, and putting
+a number that changes weekly behind an edit-commit-reload cycle means the
+defaults on the page are the ones from a month ago.
+
+A channel that is not named keeps its `default_setpoint` from `channels.yaml`,
+so this is an override and a fresh install needs no such file.
+
+**Signed volts**, as everywhere: the cathode, gate and screens negative, the
+anode and NaI positive.
+
+!!! warning "The write range is *not* edited here"
+    `limits` stays in `channels.yaml`, hand-edited and committed, because it is
+    the range **every write to an electrode is checked against**. A page that
+    could widen its own limit and then write to it is not a limit.
+
+    A default outside its channel's `limits` is refused — by the page before it
+    writes anything, and again by every service that loads the file. The
+    refusal names the channel and tells you to change the limit in
+    `channels.yaml` if that is really what you want.
+
+**Nothing here reaches an instrument.** Saving changes which number appears in
+a box. A person still presses *Apply setpoints*, and that write is validated,
+read back and audited exactly as before — which is why this is safe to edit
+from a web page when an alarm threshold is not.
+
+Every change is [audited](storage.md): who, when, from, to. The file is tracked
+by git, so `git status` shows it as modified and you commit it with everything
+else; the web UI does not run `git` itself.
 
 ---
 

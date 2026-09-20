@@ -1,10 +1,13 @@
 # XAMS Slow Control — Software Design Specification
 
-**Version 0.1 — 16 September 2026**
+**Version 0.2 — 16 September 2026, revised 20 September 2026**
 
 Companion to `XAMS-slow-control-options.pdf` (the decision document). That document explains *why*; this one specifies *what to build*.
 
-Status of this document: authoritative for implementation. Anything marked **TBD** must be resolved before the affected component is written; nothing else should be invented at implementation time. If a TBD blocks progress, record the assumption in the code comment and list it in §16.
+Status of this document: authoritative for implementation. It describes both
+what is built and what is specified but not yet built, and says which is which
+at each point; **what is actually done is tracked in [`status.md`](status.md)**,
+and where the two disagree that file is right. Anything marked **TBD** must be resolved before the affected component is written; nothing else should be invented at implementation time. If a TBD blocks progress, record the assumption in the code comment and list it in §16.
 
 ---
 
@@ -45,7 +48,7 @@ xams-sc/
 │   ├── channels.yaml           channel definitions — single source of truth
 │   ├── devices.yaml            device connection + identity
 │   ├── alarms.yaml             thresholds and severity routing
-│   ├── recipients.yaml         who gets notified — edited from the web UI
+│   ├── recipients.yaml         who gets notified
 │   ├── secrets.yaml            credentials — NOT in git (§11)
 │   └── secrets.example.yaml    template with empty values, in git
 ├── src/xams_sc/
@@ -54,9 +57,12 @@ xams-sc/
 │   ├── config.py               load + validate YAML, compute config hash
 │   ├── model.py                Measurement, Status, Quality dataclasses
 │   ├── service.py              BaseService: lifecycle, reconnect, heartbeat
-│   ├── scaling.py              raw -> engineering units
+│   ├── scaling.py              raw -> engineering units, and the HV sign (§7.2)
+│   ├── hv_status.py            decode the CAEN STATUS word (§7.2) — no serial import
+│   ├── grafana.py              dashboard drift check against git (§12)
 │   ├── devices/
 │   │   ├── __main__.py          entry point: python -m xams_sc.devices <name>
+│   │   ├── serial_id.py         resolve serial instruments by identity (§6.2)
 │   │   ├── sim.py               synthetic data, no hardware (see note below)
 │   │   ├── cdaq.py
 │   │   ├── derived.py           flow integrator (§7.5)
@@ -64,37 +70,53 @@ xams-sc/
 │   │   ├── lakeshore.py
 │   │   └── ups.py
 │   ├── sinks/
-│   │   ├── pg_writer.py         PostgreSQL
-│   │   ├── jsonl_writer.py
-│   │   └── mongo_writer.py      temporary, see §9.5
+│   │   ├── __main__.py          one process runs them all (§9.4b: one lock)
+│   │   ├── pg_writer.py         PostgreSQL — measurements
+│   │   ├── jsonl_writer.py      the archive (§9.3)
+│   │   ├── alarm_writer.py      alarm state transitions (§11)
+│   │   ├── audit_writer.py      every write, append-only (§10 rule 5)
+│   │   └── flow_writer.py       closed integrator periods (§7.5)
 │   ├── alarms/
+│   │   ├── __main__.py          entry point
 │   │   ├── engine.py           threshold evaluation, hysteresis, dedup
-│   │   └── notify.py           SMS, email, sound
+│   │   ├── notify.py           SMS, email, sound
+│   │   ├── mail.py             HTML for the alarm and digest emails
+│   │   ├── daily.py            the daily report (§11), run from Task Scheduler
+│   │   └── flight_recorder.py  the last 10 minutes at full rate (§9.1)
 │   ├── api/
 │   │   ├── app.py              FastAPI: setpoints, status, web UI (127.0.0.1 only)
-│   │   ├── client.py           Python client for scripts and notebooks
+│   │   ├── state.py            live state from retained MQTT, never the database
+│   │   ├── templates/          server-rendered pages, no build step (§8.1)
+│   │   ├── site/               the built manual, mounted at /manual
 │   │   └── static/
 │   │       └── xams_pid.svg    the P&ID, tag bubbles carry channel ids (§8.2)
 │   └── cli/
-│       └── xams_ctl.py         start/stop/status for all services
+│       └── xams_ctl.py         start/stop/status/reload/check, and the control verbs (§12)
 ├── sql/
 │   └── schema.sql              tables + indexes — run on every install
 ├── grafana/
 │   ├── provisioning/
 │   │   ├── datasources/        points Grafana at PostgreSQL
 │   │   └── dashboards/         tells Grafana where the JSON lives
-│   └── dashboards/*.json       the dashboards themselves, in git
-├── procedures/*.yaml           named control sequences (§10)
-├── services/                   NSSM install scripts, one per service
-├── tests/
-│   ├── test_scaling.py
-│   ├── test_config.py
-│   └── test_caen_protocol.py   parser tests against recorded responses
+│   └── dashboards-archive/*.json   the dashboards as git holds them (§12)
+├── tests/                      see §13
 └── tools/
-    ├── jsonl_to_parquet.py     nightly conversion
+    ├── setup_services.ps1      install broker, database, Grafana
+    ├── install_services.ps1    install the XAMS services under NSSM (§12)
+    ├── backup.ps1              nightly backup, from Task Scheduler
+    ├── build_docs.py           build the manual into api/site/
+    ├── build_mimic.py          the P&ID SVG (§8.2)
+    ├── save_dashboard.py       --save / --check / --load (§12)
+    ├── clear_retained.py       clear the broker's retained messages (§9.4b)
     ├── import_labview_csv.py   convert CSV history into JSONL/Parquet
     └── compare_to_labview.py   validation against historical CSV
 ```
+
+**Designed but not built**, so that their absence is not mistaken for an
+oversight: `sinks/mongo_writer.py` (§9.5), `api/client.py` — the Python client
+for notebooks, milestone 7 — `tools/jsonl_to_parquet.py` (§9.4) and
+`procedures/` (§10). Each is described where it belongs and tracked in
+`docs/status.md`.
 
 Each service is a thin `__main__` that constructs a device class and runs `BaseService`. No business logic in entry points.
 
@@ -196,23 +218,51 @@ caen:
     board_name: DT1470ET         # both checked together with the serial
     board_serial: "19198"        # verified via BDSNUM on every connect
     firmware: "1.08"             # informational; logged, alarmed on change
+    baud: 9600
     # PMT bottom / PMT top / top screen / bottom screen - all negative
+    expect:                      # read and alarmed on; NEVER written (§8.3)
+      0: {pol: "-", maxv: 1100, rup: 1,  rdw: 20,  trip: 2.0,  iset: 20}
+      1: {pol: "-", maxv: 1100, rup: 20, rdw: 20,  trip: 10.0, iset: 20}
+      2: {pol: "-", maxv: 1710, rup: 50, rdw: 50,  trip: 10.0, iset: 5}
+      3: {pol: "-", maxv: 2000, rup: 50, rdw: 50,  trip: 10.0, iset: 5}
   - id: hv_2
     match: {vid: "21E1", pid: "0003"}
     board_address: 0             # BOTH units are address 0: two separate USB
     board_name: DT1470ET         # connections, not a daisy chain
     board_serial: "79"
     firmware: "1.04"
+    baud: 9600
     # cathode / gate / anode / NaI - anode and NaI positive
+    expect:
+      0: {pol: "-", maxv: 2500, rup: 25, rdw: 50,  trip: 10.0, iset: 310}
+      1: {pol: "-", maxv: 3750, rup: 50, rdw: 100, trip: 10.0, iset: 10}
+      2: {pol: "+", maxv: 4500, rup: 50, rdw: 50,  trip: 10.0, iset: 10}
+      3: {pol: "+", maxv: 1000, rup: 50, rdw: 50,  trip: 10.0, iset: 150}
 
 lakeshore:
-  match: {vid: "TBD", pid: "TBD", serial: "TBD"}
-  baud: 57600                    # TBD — confirm against instrument setting
+  match: {vid: "1FB9", pid: "0300", serial: "335A12T"}
+  idn_contains: "MODEL335"
+  baud: 57600                    # with 7 data bits, ODD parity, 1 stop (§7.3)
 
 ups:
-  model: TBD
-  connection: TBD
+  model: "APC Legacy Communication Card"
+  match: {vid: "051D", pid: "0002", serial: "3S2005X18782"}
+  connection: usb-hid            # read from the HID, alongside PowerChute (§7.4)
 ```
+
+**The `expect:` blocks are the mechanism behind §8.3 and §10 rule 2.** They record
+what each channel was *found* configured to, so the software can read the board's
+own `POL`, `MAXV`, `RUP`, `RDW`, `TRIP` and `ISET` at startup and raise an alarm
+when they differ. It never writes them: protection stays configured on the
+instrument, and the software's job is to notice when it changes, not to restore
+it. A value here is therefore an observation with an alarm attached, not a
+setting — and `hv_1` channel 0 is flagged in the file itself, because its `RUP`
+of 1 V/s and `TRIP` of 2.0 µA look more like history than intent (§16).
+
+The Lake Shore is identified twice over: the USB descriptor carries the serial
+`335A12T`, and `*IDN?` answers `LSCI,MODEL335,335A12T/#######,1.2`. The third
+field is `<instrument serial>/<option card serial>`; only the part before the
+slash identifies the unit, and it matches the descriptor. Both are checked.
 
 Device resolution never uses a COM number. It narrows candidates on USB hardware ID via `serial.tools.list_ports`, then confirms identity by querying the instrument (§6.2). For the CAEN units the second step is not a confirmation of the first — it is the *only* identification, because the hardware ID cannot distinguish the two.
 
@@ -346,7 +396,14 @@ recipients:
 
 Everyone with `enabled: true` receives the notification. No shift roster, no escalation chain: the list is the list.
 
-**Edited from the web UI** — add, remove, or toggle `enabled` — and applied without restarting anything: the alarm engine watches the file and reloads it on change. Editing the file by hand works equally well and has the same effect.
+**Applied without restarting anything**: the alarm engine re-reads the file at
+send time, not at startup, so a change takes effect on the next notification.
+
+> **The web UI page for this is not built.** §8.1 reserves `/recipients` for
+> adding, removing and toggling `enabled`; today the file is edited by hand,
+> which has exactly the same effect because the reload path is the file. The
+> page is a convenience on top of a mechanism that already works, which is why
+> it is the piece that slipped — and why its absence costs nothing but typing.
 
 This is deliberately unlike the alarm thresholds (§4.3), which stay in git and are applied with `xams-ctl reload`. Changing a threshold silently alters what the system protects against and deserves review; changing a recipient does not.
 
@@ -357,6 +414,60 @@ Every change is appended to the same audit log as control actions (§10), so it 
 ### 4.5 Config hash
 
 `config.py` computes a SHA-256 over the parsed, normalised contents of `channels.yaml`, `devices.yaml` and `alarms.yaml` (not `recipients.yaml`, which does not affect the data) and exposes the first 7 hex characters as `config_hash`. It is written into every JSONL daily file header (§9.3) and published on `xams/status/config`.
+
+### 4.6 `hv_defaults.yaml` — the HV operating point
+
+**Built 20 September 2026.** The values `load defaults` offers on `/hv`, and
+the one file in git this web UI writes.
+
+```yaml
+# Written by the web UI. Safe to edit by hand.
+updated: 2026-09-20T14:02:11+00:00
+by: apc
+defaults:
+  hv_cathode_vset: -2250.0
+  hv_anode_vset:   4200.0
+  ...
+```
+
+**Why it is a separate file, and not `channels.yaml`.** §10a left this open —
+"`channels.yaml` if there is one right answer per channel; a separate file per
+run configuration if there are several". This is an R&D setup, so there is not
+one right answer: the operating point moves while the things around it do not.
+Splitting them puts the number that changes weekly in a file a machine can
+rewrite, and leaves the channel's identity, its sign and its `limits` in a file
+that is hand-edited and reviewed. It also keeps the thirty lines of commentary
+above the `hv_vset` entries, which a YAML round-trip would silently discard.
+
+A channel not named here keeps the `default_setpoint` from `channels.yaml`, so
+the file is an override and a fresh clone needs none.
+
+**What it may not do, and this is the whole of it: `limits` are not editable
+from the web UI.** They are the range the write path of §10a validates against.
+A page that could widen its own limit and then write to it is not a guardrail —
+it is a guardrail-shaped thing that moves when pushed. A default outside its
+limits is refused, by the page before writing and by `load()` on every read,
+and the refusal says to go and edit `channels.yaml` if that is really intended.
+
+**Nothing here reaches an instrument.** A default is a number that appears in a
+box; a person still presses Apply, and that write is validated, read back and
+audited exactly as before. That is what makes this safe to edit from a web page
+when §4.3's alarm thresholds are not: a wrong threshold silently removes
+protection, while a wrong default is visible in a box before anything happens
+to it, and refused outright if it is out of range.
+
+**Excluded from the config hash** (§4.5), like `recipients.yaml`: it does not
+affect how a reading is taken or what a stored value means.
+
+**Every change is audited** (§10 rule 5) — who, when, old value, new value — on
+the same trail as every write to an instrument. `git status` shows the file as
+modified, and it is committed with everything else; the UI does not run `git`
+itself, because a lab PC committing unattended turns a setpoint edit into a git
+error on a dirty tree.
+
+Saving reloads the configuration in this process before reporting success, and
+publishes `xams/cmd/all/reload` so the other services follow. Reporting "saved"
+for something not yet in force is the failure §7.5 names.
 
 ---
 
@@ -645,18 +756,59 @@ The cost is that `VSET` writes must be signed consistently too, and the sign str
 
 ### 7.3 Lake Shore service (`devices/lakeshore.py`)
 
-Official `lakeshore` package. COM port resolved by hardware ID, identity confirmed with `*IDN?`.
+Official `lakeshore` package. COM port resolved by hardware ID, identity confirmed with `*IDN?` (§4.1).
 
-Read: two sensor inputs, two heater outputs, setpoint, heater range, PID.
-Current PID settings: P = 100, I = 20, D = 0.
+**Serial settings are 57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is
+the 335's factory setting and is not a typo. At 8-N-1 the port opens and the
+instrument returns nothing intelligible, which presents as a dead instrument
+rather than as a wrong setting — so it is recorded here, not rediscovered.
 
-Control path (§10): setpoint within instrument limits only. The instrument's own setpoint limit and heater range remain the authority.
+**Sensors are read in Celsius, with `CRDG?`.** An earlier draft of
+`channels.yaml` said Kelvin; the imported history then showed these channels
+ranging to −90, and there is no negative Kelvin. Confirmed against the
+instrument: `CRDG? A` = −89.998 and `KRDG? A` = +183.15 describe the same
+temperature.
+
+Read: two sensor inputs, two heater outputs, setpoint, heater range, PID. The
+two outputs are configured differently, and both are read — settings as found on
+17 September 2026:
+
+| Output | Setpoint | Range | PID |
+|---|---|---|---|
+| 1 | −90.000 | 3 | 100, 20, 0 |
+| 2 | −100.00 | 0 | 50, 20, 120 |
+
+These are displayed and alarmed on, never written (§8.3) — with the single
+exception of the setpoint and heater range, which are the control path below.
+
+Control path (§10): **built, 18 September 2026.** Setpoint and heater range are
+writable from `/` and from `xams-ctl`, validated, read back, acknowledged and
+audited. The instrument's own setpoint limit and heater range remain the
+authority.
 
 ### 7.4 UPS service (`devices/ups.py`)
 
-**TBD** — model and connection unknown. Read-only status: line power present, battery level, time on battery, timestamp. Publish `ups_*` channels.
+An APC, serial `3S2005X18782`, reporting itself as *Legacy Communication Card
+FW:LCC 03.1 / ID=5004*. Read-only status: line power present, battery level,
+time on battery, timestamp. Publishes `ups_*` channels.
 
-A power event is one of the few things that can end a run, so this is worth having even though it is the smallest service.
+A power event is one of the few things that can end a run, so this is worth
+having even though it is the smallest service.
+
+**Read directly from the USB HID, alongside PowerChute.** HID input is shareable
+on Windows, so PowerChute Personal Edition keeps doing its safe-shutdown job and
+this service reads the same feature reports. Nothing is taken away from the
+thing that already protects the machine.
+
+**Two routes that do not work here, recorded so nobody retries them:**
+
+- `Win32_Battery` and the other WMI battery classes report **no instances at
+  all** on this machine.
+- `GetSystemPowerStatus` answers, but says `BatteryFlag=128` — "no system
+  battery". Its `ACLineStatus` describes the **wall socket, not the UPS**, so it
+  would cheerfully read "on line power" while the UPS ran on battery. That is
+  the worst kind of wrong: a plausible answer to a question it is not being
+  asked, and precisely the failure this service exists to catch.
 
 ---
 
@@ -747,13 +899,23 @@ Separated by how often they are touched and how much a mistake costs.
 | Page | Contents |
 |---|---|
 | `/` | the overview above, self-refreshing; carries the flow-integrator reset (§7.5) |
-| `/mimic` | the P&ID with live values on it (§8.2) |
+| `/mimic` | the P&ID with live values on it (§8.2); clicking a value opens its history (§8.2a) |
 | `/status` | per channel: value, unit, age, `quality` |
-| `/recipients` | edit the notification list (§4.4) |
 | `/logs` | the last lines of each service log — saves logging in and hunting for files |
-| `/control` | setpoints and procedures — built last (§10) |
+| `/hv` | the high-voltage page: per channel `VSET`, `VMON`, `IMON`, state, and the control actions (§10a) |
+| `/hv/defaults` | edit the default setpoints `load defaults` offers (§4.6) — writes a file, touches no instrument |
+| `/recipients` | edit the notification list (§4.4) — **not built**; edit the file |
 
-Plus links to Grafana on `:3000` and to `DESIGN.md` and `OPERATIONS.md` in the repository.
+Plus links to Grafana on `:3000` and to the manual, which is **mounted by this
+same application at `/manual`** rather than served from a second process. The
+lab PC is not assumed to reach the internet, and a manual you can only read when
+the network is up is not a manual. `/manual` and not `/docs`, because "docs" on
+a FastAPI application means the OpenAPI page and would be read as that.
+
+The Lake Shore setpoint and heater range live on `/`, beside the reading they
+change. There is no separate `/control` page: the control actions went to the
+pages that already show the thing being controlled, which is one fewer place to
+look and keeps the value and the box that changes it in the same eyeful.
 
 **The status page reads from MQTT retained topics, never from the database.** If PostgreSQL is down the page must still work — that is precisely when it is needed. A status page that fails together with the component it reports on is worthless.
 
@@ -775,7 +937,13 @@ The page also carries alarm **acknowledge** (stop the repeating notification; th
 xams-ctl reload
 ```
 
-These are not editable from the web UI — with one exception, `recipients.yaml` (§4.4), which changes often and carries no safety consequence. A wrong threshold silently disables protection and is discovered months later; in git it has review, history, and the config hash in every data file records exactly which version produced which data (§4.4). A clickable threshold has none of that.
+These are not editable from the web UI — with two exceptions, both of which
+change often and neither of which carries a safety consequence:
+`recipients.yaml` (§4.4), and the HV default setpoints in `hv_defaults.yaml`
+(§4.6). The second is the case this section anticipated below: the need was
+demonstrated by an R&D setup whose operating point moves weekly. It went to a
+**separate file** so that the reviewed parts of `channels.yaml` — identity,
+sign, and above all `limits` — stay hand-edited and in git. A wrong threshold silently disables protection and is discovered months later; in git it has review, history, and the config hash in every data file records exactly which version produced which data (§4.4). A clickable threshold has none of that.
 
 The honest cost: changing a limit means editing a file rather than dragging a slider. For a handful of changes a year that is the right trade. If thresholds turn out to need weekly adjustment, the fix is a UI that edits the YAML **and** commits it — the same audit trail with less friction. Build that only once the need is demonstrated.
 
@@ -810,6 +978,78 @@ It earns its own page rather than a place on `/`. The landing page must answer "
 **The drift risk, and the check that catches it.** The SVG is a copy of a drawing that will eventually change, and a mimic quietly out of date with the plant is a liability. At service start, every `id` in the SVG is compared against `channels.yaml` in both directions, and any tag present in one and missing from the other is logged as an error. Roughly ten lines; it is what makes the page survivable three years from now. The SVG is re-exported when the P&ID is revised — a step for `OPERATIONS.md` (§14).
 
 **Tags on the drawing that are not instrumented** — `SG101`, `SG102`, the RGA, `EVM116`, the valves `V1`–`V28`, the compressor and the pulse tube — are drawn without a value and greyed. That is informative in itself: it shows at a glance how much of the plant the slow control actually sees, and what a later phase could add.
+
+### 8.2a Clicking a value on the mimic opens its history
+
+The mimic answers *where* a tag is. The question that follows it, every time, is *what has it been doing* — and today that means leaving the page, opening Grafana, finding the right dashboard and hunting for the channel among a dozen others. Clicking the number closes that gap: `tt203` on the drawing becomes `tt203` on a plot, in one click, with no searching.
+
+This is the natural companion to §8.2 and not a new surface. The mimic stays what it was; it gains one affordance.
+
+**One dashboard, not one per channel.** Every reading lands in a single `meas` table keyed by `channel` (§9.2), so one dashboard with a `$channel` template variable plots any tag in the system:
+
+```sql
+SELECT $__timeGroupAlias(t, $__interval), avg(value) AS value
+FROM meas WHERE channel = '$channel' AND $__timeFilter(t)
+GROUP BY 1 ORDER BY 1
+```
+
+A dashboard per channel would mean forty dashboards to build, forty to keep in step with the schema, and a Grafana sidebar nobody can read. The variable costs one dashboard and one line of SQL. The existing dashboards (`XAMS Heaters`, `Overview`) stay as they are — they are curated views of related channels, which is a different job from "show me this one tag".
+
+**The link is computed, never configured.** Each value node on the SVG already carries `id="v-<channel>"`, matching `name` in `channels.yaml` exactly — the invariant §8.2 already enforces in both directions. The channel name is therefore already in the DOM, and the URL is built from it:
+
+```
+{grafana}/d/xams-channel/channel?var-channel={name}&from=now-24h&to=now
+```
+
+No new field in `channels.yaml`, no tag-to-dashboard mapping table, no per-channel entry anywhere. A channel added to `channels.yaml` and drawn on the P&ID gets its plot the same day, with nothing else edited. This is the property that keeps the feature from becoming a maintenance chore: **there is nothing to keep in step, because there is no second list.**
+
+**Only values are clickable. Valves are not, and never become so.** §8.2 draws the line at control: the drawing is read-only and a valve is manual hardware. That line does not move here — looking at history is reading. But the *habit* the drawing teaches does matter: once one thing on a diagram responds to a click, everything on it invites one. So the clickable region is exactly the value text and its bubble, it carries `cursor: pointer` and a tooltip, and nothing else on the SVG reacts to the pointer at all. Tags drawn without a value — `SG101`, the RGA, `V1`–`V28` — have no channel and so have no link, which is correct rather than a gap: there is no history to show.
+
+**A stale channel still links.** Grey and a dash means the reading stopped (§8.2), and that is precisely the moment someone wants the plot — *when* did it stop, and what was it doing before. Suppressing the link on stale channels would remove it exactly when it is most useful.
+
+**Built in two steps, and the second is not rework.**
+
+*Step 1 — the link.* Clicking opens the dashboard in a new tab. Nothing changes in Grafana, nothing changes on the host, and the operator gets the full toolbar: zoom, range picker, export, add-to-dashboard. Roughly ten lines in `mimic.html` plus a URL builder.
+
+*Step 2 — the panel in place.* The same URL builder, pointed at `/d-solo/...&panelId=1&theme=dark`, loaded into a small modal over the drawing: channel name, one time-series, a 1 h / 24 h / 7 d selector, an *open in Grafana* link, and Esc or click-outside to dismiss. The drawing stays behind it, so the reading keeps its context — which is the whole reason the mimic exists.
+
+Step 1 is worth shipping on its own, and step 2 is a strict addition to it: the modal calls the same function, and the *open in Grafana* link inside the modal **is** step 1. If embedding turns out to be more trouble than it is worth on this host, step 1 remains and nothing is thrown away.
+
+**One source for the Grafana URL.** It is hardcoded in `base.html` today. With a second and third use it becomes a thing that can disagree with itself, so it moves to `grafana.url` in `secrets.yaml` — the key `grafana.py` already reads for the drift check (§12) — and is passed into the page context alongside `state` and `config`. One value, one place, already exists. (`secrets.example.yaml` does not currently document the `grafana` block at all; it should.)
+
+**What step 2 costs, stated plainly.** An iframe is the browser talking to Grafana directly, so Grafana has to permit it:
+
+```ini
+[security]
+allow_embedding = true
+[auth.anonymous]
+enabled = true
+org_role = Viewer
+```
+
+Without the second block the panel renders a login form instead of a plot for anyone not already signed in — which looks like a broken page, not a permissions message.
+
+Anonymous viewer access is acceptable **only because of §8**: Grafana binds to `127.0.0.1` and is reachable from the lab PC alone. It grants read access to every dashboard to anyone who can already reach the machine, and anyone who can reach the machine can already open Grafana. **If Grafana is ever exposed beyond loopback, this setting must be reconsidered in the same breath** — it is one of the assumptions that quietly stops holding when a bind address changes.
+
+`grafana.ini` lives outside this repository, so this is a host change that git does not record and `grafana.py` does not check. It therefore belongs in the install script and in `OPERATIONS.md` (§14), or a rebuilt lab PC gets a mimic whose popups are all login forms, with nothing anywhere explaining why.
+
+**When Grafana is down.** The modal shows a blank frame and no error — an iframe fails silently. It therefore renders its *open in Grafana* link and the channel name immediately, before the frame loads, so a failed embed degrades to step 1 rather than to an empty box. The overview already reports Grafana's reachability (§12); the mimic does not need to duplicate that check.
+
+**The checks that keep it honest.** The dashboard `uid` becomes an interface — the mimic hardcodes it — so it is fixed at `xams-channel` and the dashboard is committed to `grafana/dashboards-archive/`, where the existing drift check (§12) compares it against Grafana and reports it as `unsaved` or `missing` if the two part company. One test asserts the URL builder produces the expected string for a known channel; the SVG-versus-`channels.yaml` check of §8.2 already guarantees the channel name in it is real, so there is nothing further to verify.
+
+**Steps, in order.**
+
+| # | Step | Done when |
+|---|---|---|
+| 1 | Add the `grafana` block to `secrets.example.yaml`; read `grafana.url` in `app.py` and pass it to the page context; use it in `base.html` in place of the hardcoded address | the Grafana link in the footer still works, and the address appears once in the source |
+| 2 | Build the `xams-channel` dashboard in Grafana: one time-series panel, `$channel` query variable over `SELECT DISTINCT channel FROM meas`, uid `xams-channel` | the dashboard plots any channel picked from the variable dropdown |
+| 3 | Export it to `grafana/dashboards-archive/channel.json` and commit | `xams-ctl` reports Grafana drift `ok`, not `unsaved` |
+| 4 | Add the URL builder and click handler to `mimic.html`; `cursor: pointer` and a `<title>` tooltip on value nodes only | clicking `tt203` opens its 24 h plot in a new tab; clicking a valve, a pipe or `SG101` does nothing |
+| 5 | Test: the builder returns the expected URL for a known channel | `pytest` green |
+| 6 | Add the modal: overlay, `d-solo` iframe, range buttons, *open in Grafana* link rendered before the frame loads, Esc and click-outside to close | the plot appears over the drawing, and closing it leaves zoom and scroll position untouched |
+| 7 | Set `allow_embedding` and anonymous viewer in `grafana.ini`; record both in the install script and in `OPERATIONS.md`, with the loopback caveat above | a browser with no Grafana session sees the plot, not a login form |
+
+Steps 1–5 are independent of any host change and can land alone. Steps 6–7 go together: without 7, step 6 shows a login form.
 
 ### 8.3 What is deliberately not in any interface
 
@@ -908,7 +1148,9 @@ Flush and `fsync` at least every 10 s so a power loss costs seconds, not hours.
 
 ### 9.4 Parquet — long term
 
-`tools/jsonl_to_parquet.py` runs nightly on the closed day, then gzips the JSONL. Both are kept until the conversion has been verified; after that, keeping the gzipped JSONL as well is cheap and worth it.
+**Not built** — the JSONL archive (§9.3) is complete and is the truth, so this
+is a compaction step rather than a gap in the record. `tools/jsonl_to_parquet.py`
+runs nightly on the closed day, then gzips the JSONL. Both are kept until the conversion has been verified; after that, keeping the gzipped JSONL as well is cheap and worth it.
 
 **Log `raw` alongside the scaled value for at least the first year.** If a multiplier turns out to be wrong — the `×25` on `p101` is a candidate — the entire history can be rescaled. Without `raw`, it cannot. At ~30 channels every 2 s this costs roughly 120 MB/day uncompressed, around 10 MB gzipped.
 
@@ -955,7 +1197,15 @@ originally lacked: on 17 September 2026 two sink processes ran at once and
 duplicated 46,418 rows. Two drivers fighting over an instrument fail loudly;
 two writers succeed quietly, and the only symptom is a row count.
 
-### 9.5 MongoDB — temporary, during the transition
+### 9.5 MongoDB — temporary, and in the end not needed
+
+> **Not built, and now unlikely to be.** This was insurance for a transition
+> that turned out not to need it: Grafana was running before anyone missed the
+> old Python viewer, so the compatibility layer never had a window in which it
+> was the only way to see the data. It is kept here because the *reasoning*
+> below is what made it safe to skip — a sink is a subscriber, so adding one
+> later costs one file and touches no driver. Delete this section once the
+> Nikhef server no longer expects data at all.
 
 The existing MongoDB writer can be reused as a third sink, so the Nikhef server keeps receiving data and the existing Python viewer keeps working while Grafana is being set up. Adding it touches no driver: it is another MQTT subscriber.
 
@@ -1034,6 +1284,13 @@ Requirements:
 The existing LabVIEW system performs protective actions in software: a "Shut off heater if Alarm is active" switch and a `KILL VOLTAGE` button.
 
 **Decided 18 September 2026: the heaters are switched OFF when `pmain` reaches its `hihi` threshold (2.5 bar). That is the only condition, and it is the only automatic actuation anywhere in this system.**
+
+> **Decided, not built.** The threshold is live in `alarms.yaml` and the write
+> path it would use exists (`xams/cmd/lakeshore/range`), but nothing connects
+> them: today a `pmain` hihi notifies a person, and a person cuts the heaters.
+> That is the safe direction for the gap to be in — the system under-acts
+> rather than over-acts — but it must not be described to an operator as
+> something the software does, because it does not.
 
 The reasoning is the physics, and it is worth writing down because the direction is not obvious from the alarm name. Cutting the heater lets the cryostat run colder; colder xenon recondenses; recondensing xenon drops the pressure. **The wanted direction in this emergency is more cooling, not less**, and cutting the heater is how the software can move that way. It is not a temperature action that happens to be triggered by a pressure alarm — it is a pressure action.
 
@@ -1121,14 +1378,25 @@ Per channel, derived from `STAT` and the monitors (§7.2):
 
 | State | Meaning |
 |---|---|
-| `DISABLED` | hardware enable off. **Invariant: `VSET` must be 0.** |
-| `STANDBY` | enabled, `VSET` 0, `VMON` ~ 0. Live, and harmless. |
-| `RAMPING` | `VSET` != `VMON`; the board is moving at its own `RUP`/`RDW` |
-| `ON` | `VMON` at a non-zero `VSET` |
+| `DISABLED` | the front-panel switch is off (bit 10). **Invariant: `VSET` must be 0.** |
+| `STANDBY` | switched on, output not energised (neither bit 10 nor bit 0). A setpoint may be loaded here; nothing comes out. |
+| `RAMPING` | energised, `VSET` != `VMON`; the board is moving at its own `RUP`/`RDW` |
+| `ON` | energised, `VMON` at `VSET` |
 | `FAULT` | trip, interlock, over-current, over-temp |
 
-`DISABLED` <-> `STANDBY` is **by hand, at the supply.** No software path
-exists in either direction.
+**Three levels, not two, and only the middle one is software's.** The switch is
+the hand gate; energising is the software act; the setpoint is the voltage it
+will go to. `DISABLED` <-> `STANDBY` is **by hand, at the supply** — no software
+path exists in either direction. `STANDBY` <-> `ON` is `PAR:ON`/`PAR:OFF`, which
+this software does send, from `/hv` and from `xams-ctl hv-on` / `hv-off`.
+
+Reading the switch is **bit 10**, never "not bit 0". They are different
+questions and conflating them caused four bugs in one afternoon on
+18 September 2026 — which is why `hv_status.py` names them `is_disabled` and
+`is_energised` and no longer offers an `is_enabled` for either to hide behind.
+The most consequential of the four refused a setpoint to a channel that was
+switched on but not yet energised, which is exactly the state an operator is in
+when they want to load one.
 
 ### Plan, then apply
 
@@ -1195,7 +1463,11 @@ actually needs to judge:
 
 ### What the software must never do
 
-1. **Never enable or disable a channel.** No such command exists.
+1. **Never flip a channel's front-panel enable.** No such command exists, in
+   either direction, and none is to be added. Energising an *already
+   switched-on* channel is a different act and is allowed (§10a *States*):
+   the switch is the gate software cannot reach, and it is what makes the
+   invariant worth having.
 2. **Never write `MAXV`, `RUP`, `RDW`, `TRIP` or `ISET`** (§10 rule 2).
    Protection stays configured on the instrument.
 3. **Never actuate on startup or restart** (§6.1 rule 4).
@@ -1228,9 +1500,12 @@ the seven violations above were found rather than guessed at.
 - **Ordering between channels.** Does the gate require the cathode first? If so
   this grows into §10's `procedures/hv_rampup.yaml`, and the plan-and-apply
   model above is the step on the way.
-- **Where default setpoints live.** `channels.yaml` if there is one right
-  answer per channel; a separate file per run configuration if there are
-  several.
+- ~~**Where default setpoints live.**~~ **Resolved 20 September 2026: a
+  separate file, `config/hv_defaults.yaml`, editable from `/hv/defaults`**
+  (§4.6). There is not one right answer per channel — this is an R&D setup and
+  the operating point moves — so the number that changes weekly was split from
+  the channel definition that does not. `limits` stayed behind in
+  `channels.yaml`, deliberately.
 - **An orderly "everything to standby"** — distinct from `KILL VOLTAGE`, which
   remains TBD.
 
@@ -1273,6 +1548,38 @@ shown on the status page and written to the log. The real risk is not a missing 
 
 Three things to check before adopting it: whether it is Python 2 or 3; whether phone numbers are hardcoded (they belong in `recipients.yaml` now, passed in as arguments); and whether it writes a status file that only LabVIEW reads.
 
+### The daily report
+
+`alarms/daily.py` sends one email a day: what is alarming, what is stale, which
+services are up, and the current value of every channel. It is rendered by
+`alarms/mail.py`, which also renders the alarm notifications themselves.
+
+```
+python -m xams_sc.alarms.daily                       # render and send
+python -m xams_sc.alarms.daily --preview out.html    # render only, send nothing
+python -m xams_sc.alarms.daily --to me@nikhef.nl     # send to one address
+```
+
+**Run from Task Scheduler, not from the alarm service.** A report is a
+convenience and the alarm engine is not, and a scheduler bug that wedged a
+thread inside the engine would take the alarms down with it. Separate process,
+separate failure.
+
+**Its state comes from retained MQTT, never from the database** (§8.1), for the
+same reason the status page does: the report must be sendable when PostgreSQL is
+down, because that is one of the things worth being told about.
+
+It is also a **liveness signal in its own right** — a report that stops arriving
+says something even when it says nothing alarming. That is a weak signal, not a
+substitute for the VM watchdog (§12), because it shares a machine and a code
+path with everything it reports on.
+
+**Email HTML is not web HTML.** `mail.py` exists as a separate module rather than
+a template because mail clients accept a decade-old subset of it, and the rules
+for that subset have nothing to do with how the web UI is built.
+
+### Credentials
+
 **Credentials never enter the repository.** An API key committed to git remains in the history after deletion, and private repositories are still cloned, shared and backed up. Credentials live in `config/secrets.yaml`, listed in `.gitignore`; `config/secrets.example.yaml` is committed with empty values so the required keys are documented. `notify.py` reads from there, never from code.
 
 While examining the existing script, check whether its key is still valid and who else holds it. A gateway credential that has sat on a desktop for years is a good candidate for rotation.
@@ -1283,25 +1590,45 @@ While examining the existing script, check whether its key is still valid and wh
 
 ### Service management
 
-Each service runs under NSSM as a Windows service, with stdout/stderr to `logs/<service>.log`, restart on exit after 5 s.
+Each service runs under NSSM as a Windows service, with stdout/stderr to `logs/<service>.log`, and restart on crash with a throttle — a service that cannot start at all is not retried forever.
 
-**Automatic start stays off while LabVIEW is the fallback.** Every device admits only one process, so a service that auto-starts after an overnight reboot will claim the hardware and lock LabVIEW out.
+`tools/install_services.ps1` installs them; `-Manual` selects the trial phase, `-Uninstall` removes them again. Re-running it updates the existing services in place.
 
 | Phase | Start type | Notes |
 |---|---|---|
 | Debug | not installed | run from a terminal; let it die on errors |
-| Trial | `SERVICE_DEMAND_START` | restarts on crash, not at boot |
-| Production | `SERVICE_AUTO_START` | only after LabVIEW is retired |
+| Trial | `SERVICE_DEMAND_START` | restarts on crash, not at boot — `install_services.ps1 -Manual` |
+| Production | `SERVICE_AUTO_START` | **in force since 18 September 2026** — see below |
+
+**Automatic start was held off while LabVIEW was the fallback**, because every device admits only one process and a service auto-starting after an overnight reboot claims the hardware and locks LabVIEW out.
+
+**That condition has passed, and auto-start is on.** LabVIEW is closed, this system holds all four instruments, and real alarm thresholds now depend on it running. The reasoning reversed with the dependency: a reboot that left the lab PC with a broker, a database and a Grafana — and nothing acquiring, storing or alarming — would say nothing about it, because the thing that would say so was also down.
+
+**Going back to LabVIEW is therefore one deliberate command**, not an omission somebody has to remember:
+
+```
+xams-ctl stop --for-labview
+```
+
+It stops the services *and* suspends their auto-start, so a reboot does not quietly take the instruments back. `xams-ctl start` restores both. Handing the hardware over and handing it back are each a single action, which is what keeps the fallback real rather than theoretical.
 
 ### `xams-ctl`
 
 ```
-xams-ctl start | stop | restart | status | reload
+xams-ctl start | stop [--for-labview] | restart | status | reload | check
+xams-ctl flow-reset [--by WHO]
+xams-ctl hv-set <channel> <signed volts> [--by WHO]
+xams-ctl hv-standby [channel] [--by WHO]
+xams-ctl hv-on | hv-off [channel] [--by WHO]
 ```
 
 `reload` re-reads the YAML configuration without restarting the services, so a threshold or calibration change costs no gap in the data.
 
-`stop` releases all hardware for LabVIEW. `status` shows each service's state and heartbeat age. One command, correct order, every time.
+`stop` releases all hardware for LabVIEW; `--for-labview` also suspends auto-start (above). `status` shows each service's state, heartbeat age, and whether the Grafana dashboards still match git. One command, correct order, every time.
+
+`check` validates the configuration and prints what it defines — channel counts per device, the config hash, and any enabled channel still carrying `unit: TBD`. It touches no hardware and no service, so it is safe to run at any time, including before a first install.
+
+The control verbs carry `--by`, which is recorded in the audit log (§10 rule 5). They are the command-line half of the web UI's control actions and go through the same bus, the same validation and the same acknowledgement — never around them. `hv-set` takes a **signed** value (§7.2); `hv-standby` is the way down, and `hv-on`/`hv-off` energise a channel that a person has already enabled by hand at the supply (§10a).
 
 ### Alarm watchdog on the VM
 
@@ -1365,6 +1692,28 @@ and updating is `git pull`. A dashboard edited on the lab PC, exported to JSON a
 
 `secrets.yaml` is in `.gitignore`, so it never travels with the repository; each machine keeps its own.
 
+### Backups
+
+`tools/backup.ps1` runs nightly from Task Scheduler and copies to the Nikhef
+cluster. It copies **only what cannot be reconstructed**:
+
+| Copied | Why |
+|---|---|
+| `data/raw/` | the measurement archive — the truth (§9.3) |
+| `data/events/` | flight-recorder dumps: the ten minutes before an alarm (§9.1) |
+| `data/quarantine/` | data deliberately set aside; small, and not reproducible |
+| `data/fm101_total.json` | the integrator's running total (§7.5) — the one piece of state that cannot be recomputed |
+
+Deliberately **not** copied: `data/imported/`, which is reconstructed from the
+LabVIEW CSVs that still exist; **PostgreSQL**, accepted as expendable on
+18 September 2026 because `meas` replays from the archive (§9.2); `logs/`,
+useful for a week and worthless after; and `config/secrets.yaml`, because
+credentials do not go on shared storage (§11).
+
+Deciding what *not* to back up is the substance here. A backup that copies
+everything is slow enough that it gets turned off, and it obscures which files
+the system actually cannot lose.
+
 ### Logging
 
 Python `logging` to rotating files, INFO by default, DEBUG selectable per service. Every log line carries the service name. Hardware errors log the raw instrument response, not just the parsed exception — that is what makes protocol bugs findable.
@@ -1389,10 +1738,24 @@ class, from milestone 2 onward. The two are complementary: `sim` exercises the
 driver's* code path. Neither replaces the other, and `sim` is not a substitute
 for testing a driver.
 
-**Unit tests**, no hardware required:
-- `test_scaling.py` — `(raw - offset) * multiplier`, including the recovered values for `p101`, `pmain`, `fm101`
-- `test_config.py` — schema validation, duplicate channel names, unknown device references, config hash stability
-- `test_caen_protocol.py` — response parsing against recorded strings, including malformed and truncated replies
+**Unit tests**, no hardware required. `pytest` runs the lot on a laptop:
+
+| Test | Covers |
+|---|---|
+| `test_scaling.py` | `(raw - offset) * multiplier`, the recovered values for `p101`, `pmain`, `fm101`, and the HV sign convention (§7.2) |
+| `test_config.py` | schema validation, duplicate channel names, unknown device references, config hash stability |
+| `test_caen_protocol.py` | response parsing against recorded strings from **both** units, including malformed and truncated replies |
+| `test_caen_link.py` | the three per-device liveness rules of §6.1 |
+| `test_hv_status.py` | decoding the STATUS word: the switch is bit 10, the output is bit 0 (§10a) |
+| `test_hv_control.py`, `test_hv_page.py` | the write path and its refusals, and what `/hv` shows |
+| `test_cdaq.py`, `test_lakeshore.py`, `test_lakeshore_control.py` | driver logic against recorded or faked instrument responses |
+| `test_integrator.py` | the flow total across restarts and gaps (§7.5) |
+| `test_alarms.py`, `test_mail.py` | thresholds, hysteresis, dedup, staleness; and the rendered email |
+| `test_pipeline.py` | a measurement from bus to sink, end to end |
+| `test_grafana_drift.py` | the dashboard drift check reports `unknown` rather than `ok` when it cannot see (§12) |
+| `test_manual.py` | the manual builds, and its internal links resolve |
+| `test_cli_parser.py`, `test_webui_*.py` | the command grammar and the web UI's mutating actions |
+| `test_no_undefined_names.py` | nothing references a name that does not exist |
 
 **Hardware checklist**, run once per device on first connection:
 1. Identity query returns the expected serial number
@@ -1436,7 +1799,7 @@ The troubleshooting section grows: every time something breaks and is fixed, it 
 
 ### Acceptance
 
-**Documentation is not accepted because its author considers it complete.** The test is that a colleague, using `OPERATIONS.md` alone, can stop the system, add a channel and start it again — without asking the author anything.
+**Documentation is not accepted because its author considers it complete.** The test is that a colleague, using `docs/operating/` alone, can stop the system, add a channel and start it again — without asking the author anything.
 
 If that fails, the document is unfinished however thorough it looks. This is also the only real mitigation for the bus-factor problem: a manual nobody has ever used proves nothing.
 
@@ -1445,6 +1808,11 @@ If that fails, the document is unfinished however thorough it looks. This is als
 ## 15. Milestones
 
 Each milestone has an acceptance criterion. Do not start the next before the current one passes.
+
+**This table is the criteria, not the state.** What is actually done is tracked in
+[`docs/status.md`](status.md), which is updated as work lands; a criterion here is
+edited only when the criterion itself changes. Where the two disagree, `status.md`
+is right and this table has been missed.
 
 | # | Milestone | Acceptance criterion |
 |---|---|---|
@@ -1455,9 +1823,10 @@ Each milestone has an acceptance criterion. Do not start the next before the cur
 | 5 | Lake Shore + CAEN monitoring | Read-only. Identity verification working. Unplug test passes. |
 | 6 | UPS, alarms, flow integrator | Thresholds from `alarms.yaml`, SMS and email delivered, staleness alarms fire, flight-recorder dump produced on a test alarm. Integrator survives a service restart without losing its total. |
 | 7 | Web UI | Current values, alarm state, service health. Read-only, bound to `127.0.0.1`. Python client works from a notebook. The P&ID mimic (§8.2) shows live values on the drawing, greys stale channels, and the SVG-vs-`channels.yaml` tag check passes in both directions. |
-| 8 | Control path | **Lake Shore setpoint and heater range: DONE** (18 Sep 2026) — validated, read back, acknowledged, audited. **HV: designed, not built** — see §10a. Prerequisites, in order: read `VSET` into `hv_*_vset` channels; zero the setpoint of every disabled channel once, by hand; then plan-and-apply. |
+| 7a | History from the mimic | Clicking a value on the P&ID opens that channel's plot (§8.2a). One `$channel` dashboard, committed to `grafana/dashboards-archive/` and reported `ok` by the drift check. Steps 1–5 of §8.2a; the embedded panel (steps 6–7) is optional and may lag. |
+| 8 | Control path | **Lake Shore setpoint and heater range: DONE** (18 Sep 2026) — validated, read back, acknowledged, audited. **HV: DONE** (18 Sep 2026) — `VSET` and energising from `/hv` and `xams-ctl`, the invariant of §10a holding on both boards. What remains is the **server-side retained plan** of §10a: setpoints are staged in the page's own boxes, so a second browser sees nothing and a reload discards them. |
 | 9 | Procedures | Named sequences (§10) run, abort cleanly, and are audited step by step. |
-| 10 | Production | `SERVICE_AUTO_START`, LabVIEW retired but installed. **`OPERATIONS.md` passes the acceptance test of §14** — a colleague operates the system from it unaided. |
+| 10 | Production | `SERVICE_AUTO_START`, LabVIEW retired but installed. **`docs/operating/` passes the acceptance test of §14** — a colleague operates the system from it unaided. |
 
 Milestone 3 is the one that cannot be rushed. The tag names are now known, but a tag that was already attached to the wrong channel in the LabVIEW system would be copied across silently. Verifying each one physically is the only way to catch that.
 
@@ -1487,8 +1856,14 @@ Everything marked **TBD** above, consolidated:
 | ~~Engineering units for `p101`–`p104`~~ | — | **Resolved 17 September 2026: bar**, supplied by A.P. Colijn along with their locations (gas rack high/low pressure side, pump inlet, pump outlet). No channel now carries `unit: TBD`. |
 | Purpose of `anode_timing.vi` | milestone 8 | read the block diagram |
 | ~~Purpose of `DAISY_polarity_signs.vi`~~ | — | **Explained 17 September 2026**, near-certainly: the supplies report unsigned magnitudes with `POL` separate, so the sign must be applied in software (§7.2). Confirm against the block diagram when convenient. |
-| Heater shut-off and HV kill: hardware or software? | milestone 8 | decision |
+| ~~Heater shut-off: hardware or software?~~ | — | **Decided 18 September 2026 (§10):** software, on `pmain` hihi alone, latching, loud on failure, audited. **Still to build** — see the note in §10. |
+| **`KILL VOLTAGE`** — the CAEN equivalent | milestone 8 | decision. Not settled by the heater decision above, and distinct from an orderly "everything to standby" (§10a). |
+| **The `/recipients` page** (§4.4, §8.1) | — | build. The reload mechanism already works and the file is editable by hand, so this is convenience, not function. |
+| **The Python client** `api/client.py` — milestone 7's "works from a notebook" | milestone 7 | build. Reading from PostgreSQL with `pandas.read_sql` covers most of it today (§9.2). |
+| **`tools/jsonl_to_parquet.py`** (§9.4) | — | build. The JSONL archive is complete, so this is compaction, not a gap in the record. |
+| **The shared staged HV plan** (§10a) | — | build. Setpoints stage in the page's own boxes, so a second browser sees nothing and a reload discards them. Costs little while one person operates the supplies. |
 | ~~How far back the CSV history goes, and whether the column count is constant throughout~~ | — | **Resolved 17 September 2026, and it is not constant.** 733 log files from 2023-02-21; **9 distinct column counts** whose date ranges interleave, and 304 header files containing **90 distinct layouts** (1 to 2269 columns). The current header describes 62 columns for data that has 47. `tools/import_labview_csv.py` therefore ignores the headers entirely and refuses any file whose layout it has not confirmed. |
 | ~~Whether the P&ID of 17 May 2024 is still current~~ | — | **Confirmed current, 17 September 2026**, before the mimic was built on it. |
+| **Anonymous viewer access in Grafana** — needed only for the embedded panel on the mimic (§8.2a step 7) | milestone 7a | decision. It grants read access to every dashboard to anyone who can reach the lab PC, which today is anyone who can already open Grafana (§8). It stops being harmless the moment Grafana leaves loopback. The link-in-a-new-tab form needs none of this and is the fallback if the answer is no. |
 | Second maintainer | production | decision |
 | **Nikhef VM watchdog** — one Grafana rule, "no measurement for 15 minutes" | production | §12. The only failure this system cannot report is its own machine being off, and auto-start makes that *less* likely to be noticed rather than more. |

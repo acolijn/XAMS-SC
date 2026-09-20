@@ -40,9 +40,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
-                   ACK_LS_SETPOINT, TOPIC_HV_OUTPUT, TOPIC_HV_VSET,
-                   TOPIC_LS_RANGE, TOPIC_LS_SETPOINT, Bus)
-from ..config import LOG_DIR, load
+                   ACK_LS_SETPOINT, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
+                   TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
+                   TOPIC_RELOAD, Bus)
+from ..config import (LOG_DIR, ConfigError, load, read_hv_defaults,
+                      write_hv_defaults)
 from ..hv_status import (describe_status, is_disabled, is_energised,
                          status_faults)
 from ..grafana import DriftWatcher
@@ -146,6 +148,25 @@ async def _form(request: Request):
 def _short(channel: str) -> str:
     """`hv_cathode_vset` reads as `cathode` in a message to a person."""
     return channel.replace("hv_", "").replace("_vset", "")
+
+
+def _audit(state, actor: str, action: str, target: str, old, new,
+           result: str = "ok", detail: str = "") -> None:
+    """Record a change on the audit topic (§10 rule 5).
+
+    The web UI audits this one directly, where every write to an INSTRUMENT is
+    audited by the service that owns the port. The rule is the same in both
+    cases - whoever performs the change records it - and here the thing being
+    changed is a file this process owns, not a port.
+    """
+    import json as _json
+    from ..model import utcnow
+    state.bus.publish_raw(TOPIC_AUDIT, _json.dumps(
+        {"t": utcnow().isoformat().replace("+00:00", "Z"),
+         "actor": actor or "unknown", "action": action, "target": target,
+         "old": None if old is None else str(old),
+         "new": None if new is None else str(new),
+         "result": result, "detail": detail}, separators=(",", ":")))
 
 
 # `setup_logging` keeps 5 rotated files per service; anything outside this
@@ -348,6 +369,147 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         joined = "; ".join(results)
         return _redirect_hv(joined if failures else None,
                             None if failures else joined)
+
+    # ------------------------------------------------- HV default setpoints
+    #
+    # The one place this UI edits a file in git, and it is allowed for the
+    # reason §8.1 gave in advance: the need is demonstrated. This is an R&D
+    # setup, the operating point changes often, and the alternative is an
+    # editor and a reload for a number that reaches no instrument.
+    #
+    # It stays inside the line §8.1 draws. `limits` are NOT editable here:
+    # they are the range the write path validates against, and a page that
+    # could widen its own limit and then write to it is not a guardrail.
+
+    @app.get("/hv/defaults", response_class=HTMLResponse)
+    def hv_defaults(request: Request):
+        """Edit the values `load defaults` offers (§4.6)."""
+        raw = read_hv_defaults()
+        rows = []
+        for ch in state.config.channels.values():
+            if ch.kind != "hv_vset":
+                continue
+            rows.append({
+                "name": ch.name,
+                "label": _short(ch.name),
+                "description": ch.description,
+                "default": ch.default_setpoint,
+                "limits": ch.limits or {},
+                "unit": ch.unit,
+            })
+        rows.sort(key=lambda r: r["name"])
+        return page(request, "hv_defaults.html", rows=rows,
+                    updated=raw.get("updated"), updated_by=raw.get("by"),
+                    saved=request.query_params.get("saved"),
+                    error=request.query_params.get("error"))
+
+    @app.post("/hv/defaults")
+    def hv_defaults_save(request: Request):
+        """Write hv_defaults.yaml, then reload so /hv offers the new values.
+
+        **Validated here against `channels.yaml`, and written all or nothing.**
+        A partial save would leave the file describing a set of defaults
+        nobody chose, which is the failure this page exists to prevent.
+        """
+        import asyncio
+        from urllib.parse import quote
+        form = asyncio.run(_form(request))
+        who = operator_of(request, form.get("by", ""))
+
+        values: dict[str, float] = {}
+        problems: list[str] = []
+        for ch in state.config.channels.values():
+            if ch.kind != "hv_vset":
+                continue
+            if ch.name not in form:
+                # ABSENT is not the same as EMPTY, and conflating them loses
+                # data. A box left blank on this page is submitted as an empty
+                # string and means "no default". A field that is not in the
+                # form at all did not come from this page - a partial POST, or
+                # some future caller sending one channel - and must leave the
+                # other seven alone rather than clear them.
+                keep = state.config.channels[ch.name].default_setpoint
+                if keep is not None:
+                    values[ch.name] = keep
+                continue
+            text = (form.get(ch.name) or "").strip()
+            if not text:
+                # An empty box means "no default for this channel" - the box
+                # on /hv is then simply not filled by the button, which is
+                # what hv_pmt_top looked like before anyone set one.
+                continue
+            try:
+                volts = float(text)
+            except ValueError:
+                problems.append(f"{_short(ch.name)}: {text!r} is not a number")
+                continue
+            if not ch.limits:
+                problems.append(
+                    f"{_short(ch.name)}: no limits in channels.yaml, so no "
+                    f"default can be applied to it")
+                continue
+            if not ch.in_limits(volts):
+                problems.append(
+                    f"{_short(ch.name)}: {volts:+.1f} V is outside "
+                    f"{ch.limits['min']:+.0f}..{ch.limits['max']:+.0f} V. "
+                    f"Limits live in channels.yaml and are not changed here.")
+                continue
+            values[ch.name] = volts
+
+        if problems:
+            return RedirectResponse(
+                "/hv/defaults?error=" + quote("; ".join(problems)),
+                status_code=303)
+
+        # What changed, for the audit trail - computed before the write, while
+        # the old values are still loaded.
+        before = {ch.name: ch.default_setpoint
+                  for ch in state.config.channels.values()
+                  if ch.kind == "hv_vset"}
+
+        try:
+            write_hv_defaults(values, who)
+        except OSError as exc:
+            log.exception("could not write hv_defaults.yaml")
+            return RedirectResponse(
+                "/hv/defaults?error=" + quote(f"could not write the file: {exc}"),
+                status_code=303)
+
+        # Reload before reporting success. If the file we just wrote does not
+        # load, saying "saved" would be a lie of exactly the kind §7.5 calls
+        # out: reporting work that did not take effect.
+        try:
+            state.reload_config()
+        except ConfigError as exc:
+            log.error("hv_defaults.yaml written but will not load: %s", exc)
+            return RedirectResponse(
+                "/hv/defaults?error=" + quote(f"written, but it will not "
+                                              f"load: {exc}"),
+                status_code=303)
+
+        changed = 0
+        for name, old in sorted(before.items()):
+            new = values.get(name)
+            if (old is None and new is None) or (
+                    old is not None and new is not None and old == new):
+                continue
+            changed += 1
+            _audit(state, who, "hv_default", name, old, new)
+            log.warning("HV default %s: %s -> %s by %s", name, old, new, who)
+
+        # Every other service re-reads too, so `xams-ctl check` and a second
+        # browser do not sit on the old file.
+        state.bus.publish_raw(TOPIC_RELOAD, "{}")
+
+        if not changed:
+            return RedirectResponse("/hv/defaults?saved=" +
+                                    quote("saved - nothing was different"),
+                                    status_code=303)
+        return RedirectResponse(
+            "/hv/defaults?saved=" + quote(
+                f"saved {changed} default{'s' if changed != 1 else ''}; "
+                f"/hv now offers them"),
+            status_code=303)
 
     @app.post("/hv/output")
     def hv_output(request: Request, channel: str = Form(""),

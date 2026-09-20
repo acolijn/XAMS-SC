@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -289,6 +289,12 @@ def load(config_dir: Path | str | None = None) -> Config:
 
     channels = _parse_channels(raw_channels, devices)
 
+    # hv_defaults.yaml is optional and excluded from the hash, for the same
+    # reason recipients.yaml is: it does not affect the data. A default is a
+    # number offered in a box on /hv, not something that changes how a reading
+    # is taken or what a stored value means (§4.5, §4.6).
+    _apply_hv_defaults(channels, read_hv_defaults(d))
+
     return Config(
         channels=channels,
         devices=devices,
@@ -296,3 +302,134 @@ def load(config_dir: Path | str | None = None) -> Config:
         recipients=recipients,
         config_hash=compute_hash(raw_channels, devices, alarms),
     )
+
+
+# ---------------------------------------------------------------- HV defaults
+#
+# `hv_defaults.yaml` overrides `default_setpoint` for the HV setpoint channels.
+# See DESIGN.md §4.6. It exists because this is an R&D setup: the operating
+# point changes often, while the things around it in channels.yaml - the
+# channel's identity, its sign, and above all its `limits` - do not.
+#
+# WHAT THIS FILE MAY AND MAY NOT DO. It may change which voltage "load
+# defaults" OFFERS. It may not change `limits`, which are the range the write
+# path of §10a validates against. A page that could widen its own limit and
+# then write to it is not a guardrail, so the limits stay in channels.yaml,
+# in git, edited by hand and reviewed.
+#
+# Nothing here reaches an instrument. A default is a number that appears in a
+# box on /hv; a person still presses Apply, and that write is validated,
+# read back and audited exactly as before.
+
+HV_DEFAULTS_FILE = "hv_defaults.yaml"
+
+
+def hv_defaults_path(config_dir: Path | str | None = None) -> Path:
+    return (Path(config_dir) if config_dir else CONFIG_DIR) / HV_DEFAULTS_FILE
+
+
+def read_hv_defaults(config_dir: Path | str | None = None) -> dict[str, Any]:
+    """The raw contents of hv_defaults.yaml, or empty if there is none.
+
+    Optional by design: a fresh clone has no such file and runs on the
+    reviewed values in channels.yaml. The file appears the first time
+    somebody saves from the web UI.
+    """
+    path = hv_defaults_path(config_dir)
+    if not path.exists():
+        return {}
+    data = _read(path)
+    return data if isinstance(data, dict) else {}
+
+
+def _apply_hv_defaults(channels: dict[str, Channel],
+                       raw: dict[str, Any]) -> None:
+    """Override `default_setpoint` from hv_defaults.yaml, validating strictly.
+
+    Strict, and raising, for the same reason every other configuration error
+    raises (§4): a default that is silently dropped leaves "load defaults"
+    offering a number nobody chose, and the operator has no way to tell. The
+    web UI validates before it writes, so a file that fails here was edited by
+    hand - and saying so is the whole point.
+    """
+    defaults = raw.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        raise ConfigError(
+            f"{HV_DEFAULTS_FILE}: `defaults` must be a mapping of "
+            f"channel name to volts")
+
+    for name, value in defaults.items():
+        channel = channels.get(name)
+        if channel is None:
+            raise ConfigError(
+                f"{HV_DEFAULTS_FILE}: unknown channel {name!r}")
+        if channel.kind != "hv_vset":
+            raise ConfigError(
+                f"{HV_DEFAULTS_FILE}: {name!r} is a {channel.kind}, not a "
+                f"setpoint; only hv_vset channels have a default")
+        try:
+            volts = float(value)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"{HV_DEFAULTS_FILE}: {name!r} has a non-numeric "
+                f"default {value!r}") from None
+        if not channel.limits:
+            raise ConfigError(
+                f"{HV_DEFAULTS_FILE}: {name!r} has no `limits` in "
+                f"channels.yaml, so no default could ever be applied to it")
+        if not channel.in_limits(volts):
+            raise ConfigError(
+                f"{HV_DEFAULTS_FILE}: {name!r} default {volts} is outside "
+                f"its limits {channel.limits['min']}..{channel.limits['max']} "
+                f"in channels.yaml. Change the limit there if that is "
+                f"intended - it is not changed from the web UI (§4.6).")
+        # `Channel` is frozen, and stays frozen: a configuration object that
+        # can be edited in place is one that something can quietly edit in
+        # place. The override replaces the entry instead.
+        channels[name] = replace(channel, default_setpoint=volts)
+
+
+def write_hv_defaults(values: dict[str, float], by: str,
+                      config_dir: Path | str | None = None) -> None:
+    """Write hv_defaults.yaml atomically.
+
+    Atomic because the file is read by `load()` at startup and on every
+    reload: a half-written file caught by a service starting at that instant
+    is a configuration error on a machine where nothing is wrong. Written to a
+    temporary file beside it and renamed, which is atomic on Windows and POSIX
+    alike for a same-directory rename.
+
+    Validation belongs to the caller, which has the Config to validate
+    against; this writes what it is given.
+    """
+    path = hv_defaults_path(config_dir)
+    body = {
+        "updated": _utcnow_iso(),
+        "by": by or "unknown",
+        "defaults": {k: float(v) for k, v in values.items()},
+    }
+    text = (
+        "# HV default setpoints - the values `load defaults` offers on /hv.\n"
+        "# See DESIGN.md 4.6.\n"
+        "#\n"
+        "# WRITTEN BY THE WEB UI, and safe to edit by hand. Overrides\n"
+        "# `default_setpoint` in channels.yaml for the channels named here.\n"
+        "#\n"
+        "# Volts, SIGNED, as everywhere else (section 7.2): the cathode is\n"
+        "# negative, the anode positive. A value outside the channel's\n"
+        "# `limits` in channels.yaml is refused - limits are NOT edited from\n"
+        "# the web UI, because the write path validates against them.\n"
+        "#\n"
+        "# Nothing here reaches an instrument. Changing a number changes what\n"
+        "# a box on /hv is filled with; a person still presses Apply.\n"
+        "\n"
+        + yaml.safe_dump(body, sort_keys=False, default_flow_style=False)
+    )
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()

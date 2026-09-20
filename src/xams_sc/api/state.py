@@ -128,6 +128,20 @@ class SystemState:
             except ValueError:
                 pass
 
+    def reload_config(self):
+        """Re-read the configuration and swap it in. Returns the new Config.
+
+        Raises `ConfigError` if the configuration on disk is invalid, leaving
+        the current one in place: a service holding a working configuration
+        must not be talked out of it by a bad edit.
+        """
+        from ..config import load as load_config
+        new_config = load_config()
+        with self._lock:
+            self.config = new_config
+        log.info("configuration reloaded (config %s)", new_config.config_hash)
+        return new_config
+
     def _on_reload(self, topic: str, payload: str) -> None:
         """Re-read the configuration without restarting.
 
@@ -138,9 +152,8 @@ class SystemState:
         not work at all.
         """
         from ..config import ConfigError
-        from ..config import load as load_config
         try:
-            new_config = load_config()
+            new_config = self.reload_config()
         except ConfigError as exc:
             log.error("reload refused, configuration is invalid: %s", exc)
             self.bus.publish_raw("xams/ack/webui/reload",
@@ -148,9 +161,6 @@ class SystemState:
                                              "applied": False,
                                              "error": str(exc)}))
             return
-        with self._lock:
-            self.config = new_config
-        log.info("configuration reloaded (config %s)", new_config.config_hash)
         self.bus.publish_raw("xams/ack/webui/reload",
                              json.dumps({"service": "webui", "applied": True,
                                          "config": new_config.config_hash}))

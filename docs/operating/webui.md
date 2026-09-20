@@ -270,9 +270,9 @@ Zeroing everything:
 
 The boxes in the `set V` column are a **plan**: filling them changes nothing.
 
-1. **Load defaults** fills every box from `channels.yaml` — in git, reviewable,
-   rather than remembered — and **writes nothing**. Read them, change what you
-   want. **Clear** empties the boxes.
+1. **Load defaults** fills every box from `hv_defaults.yaml`, falling back to
+   `channels.yaml` — in git, reviewable, rather than remembered — and **writes
+   nothing**. Read them, change what you want. **Clear** empties the boxes.
 2. **Apply setpoints** writes every box you filled in, as one action, across
    both supplies. Empty boxes are left alone, so one channel or eight is the
    same gesture.
@@ -283,6 +283,22 @@ The boxes in the `set V` column are a **plan**: filling them changes nothing.
 A box is greyed out and cannot be filled when the channel's switch is off: such
 a channel must keep `VSET` 0, so offering the box and then refusing it would be
 theatre. Flip the switch and its default appears.
+
+### Changing what "Load defaults" offers
+
+**Edit defaults…**, beside *Load defaults*, opens `/hv/defaults`. Type the new
+values, press **Save defaults**, and the next *Load defaults* offers them.
+
+This is an R&D setup and the operating point moves, so the defaults are meant
+to be changed. Saving **writes a file and touches no instrument** — nothing
+ramps and no voltage changes. Every change is audited, and
+`config/hv_defaults.yaml` is tracked by git, so commit it along with everything
+else.
+
+The **allowed range** shown beside each channel is *not* editable there. It
+lives in `channels.yaml` because it is what every write is checked against. A
+default outside it is refused and nothing is written; if the range itself is
+wrong, edit `channels.yaml`, commit, and `xams-ctl reload`.
 
 What the service checks before writing, in order — the page itself checks
 nothing but *is it a number*:
