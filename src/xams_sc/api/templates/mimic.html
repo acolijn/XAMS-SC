@@ -10,6 +10,26 @@
    pointer cursor on the whole drawing would teach the wrong habit. */
 .mimic-body [id^="v-"] { cursor:pointer; }
 
+/* The drawing, and beside it the things a pipework diagram has no place for.
+   21rem is chosen so the column fits a channel name, a number and a state
+   without wrapping, and takes no more than that: the drawing is the subject
+   of this page and the column is a margin note.
+
+   It folds underneath on a narrow window rather than squeezing the drawing.
+   A mimic narrow enough to need scrolling has stopped being a mimic — the
+   same reasoning as the max-height on .mimic-body in base.html. */
+.mimic-layout { display:grid; gap:1.2rem; align-items:start;
+                grid-template-columns:minmax(0,1fr) 21rem; }
+@media (max-width:1100px) {
+  .mimic-layout { grid-template-columns:minmax(0,1fr); }
+}
+.mimic-side { display:flex; flex-direction:column; gap:1.2rem; min-width:0; }
+.mimic-side table td { padding:.28rem .9rem; font-size:.82rem; }
+.mimic-side .st { font-size:.74rem; letter-spacing:.03em; }
+/* Long channel descriptions must not push the number off the card. */
+.mimic-side .lbl { max-width:8.5rem; overflow:hidden;
+                   text-overflow:ellipsis; white-space:nowrap; }
+
 .grafana-modal {
   display:none; position:fixed; inset:0; z-index:50;
   background:rgba(10,12,16,.72);
@@ -40,11 +60,83 @@
 }
 </style>
 
+<div class="mimic-layout">
+
 <div class="card">
-  <h2>P&amp;I — live values</h2>
+  <h2>P&amp;I &mdash; live values</h2>
   <div class="body mimic-body">
     {{ svg|safe }}
   </div>
+</div>
+
+{# The complement of the drawing, never a repeat of it: see `mimic_sidebar`
+   in app.py for why nothing with a place on the P&ID appears here. Labels
+   are rendered; every value is filled by the same five-second fetch that
+   drives the drawing, so this page still never reloads. #}
+<aside class="mimic-side">
+
+  <div class="card">
+    <h2>Alarms</h2>
+    <div id="s-alarms"><div class="note">&mdash;</div></div>
+  </div>
+
+  <div class="card">
+    <h2>High voltage</h2>
+    <table>
+      {% for c in side.hv %}
+      <tr>
+        <td class="lbl" title="{{ c.label }}">{{ c.label }}</td>
+        <td class="num"><span id="s-{{ c.vmon }}" class="dim">&mdash;</span>
+            <span class="unit">V</span></td>
+        {# The board's STAT word, decoded server-side (§7.2). NEVER inferred
+           from the voltage: a channel can be enabled and sitting at zero. #}
+        <td class="st"><span id="st-{{ c.stat }}" class="dim">&mdash;</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Cryostat setpoint</h2>
+    <table>
+      <tr><td>setpoint</td>
+          <td class="num"><span id="s-ls_setpoint_1" class="dim">&mdash;</span>
+              <span class="unit">&deg;C</span></td></tr>
+      <tr><td>heater</td>
+          <td class="num"><span id="s-ls_heater_1" class="dim">&mdash;</span>
+              <span class="unit">%</span></td></tr>
+    </table>
+    {# The watts and both sensors are on the drawing; what is not is the
+       number the cryostat is being HELD to, which is the one you want when
+       the temperatures on the drawing start moving. #}
+    <div class="note">Output 1. Change it on the <a href="/">overview</a>.</div>
+  </div>
+
+  <div class="card">
+    <h2>Xenon moved</h2>
+    <table>
+      <tr><td>since period start</td>
+          <td class="num"><span id="s-fm101_total" class="dim">&mdash;</span>
+              <span class="unit">g</span></td></tr>
+    </table>
+    <div class="note">The rate is on the drawing at FM101.</div>
+  </div>
+
+  <div class="card">
+    <h2>Mains</h2>
+    <table>
+      <tr><td>supply</td>
+          <td class="num"><span id="s-ups_on_battery" class="dim">&mdash;</span></td></tr>
+      <tr><td>battery</td>
+          <td class="num"><span id="s-ups_battery_pct" class="dim">&mdash;</span>
+              <span class="unit">%</span></td></tr>
+      <tr><td>runtime left</td>
+          <td class="num"><span id="s-ups_runtime_min" class="dim">&mdash;</span>
+              <span class="unit">min</span></td></tr>
+    </table>
+  </div>
+
+</aside>
 </div>
 
 {# Clicking a value opens this over the drawing rather than replacing the
@@ -129,7 +221,103 @@ async function refresh() {
       if (unit) unit.setAttribute("fill", STALE_COLOUR);
     }
   }
+  drawSide(state);
 }
+
+// --- the column beside the drawing -------------------------------------
+// Same fetch, same five seconds, same colours. It holds only what the P&ID
+// cannot (see `mimic_sidebar` in app.py), so nothing below re-renders a
+// value that is already on the drawing.
+
+function setText(id, text, cls) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.textContent = text;
+  node.className = cls || "";
+}
+
+// Grey and a dash for a channel that is not being read, exactly as on the
+// drawing: never the last good number.
+function setValue(id, c, digits) {
+  if (!c || !c.healthy || c.value === null) { setText(id, "\u2014", "dim"); return; }
+  const cls = (c.alarm && c.alarm !== "ok") ? (c.alarm === "minor" ? "warn" : "bad") : "";
+  setText(id, c.value.toFixed(digits), cls);
+}
+
+function drawSide(state) {
+  const by = {};
+  for (const c of state.channels) by[c.name] = c;
+
+  // --- alarms. The header badge already says WHETHER something is wrong;
+  // this says what, without leaving the page. ---
+  const box = document.getElementById("s-alarms");
+  if (box) {
+    let html = "";
+    const notify = state.notifications || {};
+    // First, and shown whether or not anything is firing: a quiet page whose
+    // alarms reach nobody is the case this warning exists for (§4.4a).
+    if (notify.known && notify.enabled === false) {
+      html += '<div class="note bad"><strong>Alarms are disabled</strong>'
+            + ' &mdash; evaluated and recorded, but nobody is told.</div>';
+    }
+    if (!state.alarms.length) {
+      html += '<div class="note">No active alarms.</div>';
+    } else {
+      html += "<table>";
+      for (const a of state.alarms) {
+        const cls = a.state === "minor" ? "warn" : "bad";
+        html += '<tr><td><span class="dot ' + cls + '"></span>'
+              + '<span class="lbl" title="' + esc(a.channel) + '">'
+              + esc(a.channel) + '</span></td>'
+              + '<td class="num ' + cls + '">' + esc(a.state)
+              + (a.acknowledged ? ' <span class="dim">ack</span>' : '')
+              + '</td></tr>';
+      }
+      html += "</table>";
+    }
+    box.innerHTML = html;
+  }
+
+  // --- high voltage. The NUMBER is VMON; the STATE is the decoded STAT
+  // word and nothing else. Both come from the server: the bit meanings live
+  // in hv_status.py and must not acquire a second copy here (§7.2). ---
+  for (const node of document.querySelectorAll('[id^="st-"]')) {
+    const c = by[node.id.slice(3)];
+    const st = c && c.status;
+    if (!st) { node.textContent = "\u2014"; node.className = "dim"; continue; }
+    node.textContent = st.text;
+    node.className = st.faults.length ? "bad"
+                   : /RAMP/.test(st.text) ? "warn"
+                   : st.energised ? "good" : "dim";
+    node.title = st.faults.length ? st.faults.join(", ") : "";
+  }
+  for (const node of document.querySelectorAll('[id^="s-hv_"]')) {
+    setValue(node.id, by[node.id.slice(2)], 0);
+  }
+
+  setValue("s-ls_setpoint_1", by["ls_setpoint_1"], 2);
+  setValue("s-ls_heater_1",   by["ls_heater_1"],   1);
+  setValue("s-fm101_total",   by["fm101_total"],   1);
+  setValue("s-ups_battery_pct", by["ups_battery_pct"], 0);
+  setValue("s-ups_runtime_min", by["ups_runtime_min"], 0);
+
+  // Not a number: a boolean where the two values mean very different things,
+  // so it is spelled out rather than printed as 1 and 0.
+  const mains = by["ups_on_battery"];
+  if (!mains || !mains.healthy || mains.value === null) {
+    setText("s-ups_on_battery", "\u2014", "dim");
+  } else if (mains.value > 0.5) {
+    setText("s-ups_on_battery", "ON BATTERY", "bad");
+  } else {
+    setText("s-ups_on_battery", "line power", "good");
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, ch => (
+    {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[ch]));
+}
+
 refresh();
 setInterval(refresh, 5000);
 

@@ -1094,7 +1094,40 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 "<p>The mimic has not been built. Run "
                 "<code>python tools/build_mimic.py</code>.</p>", status_code=503)
         return page(request, "mimic.html",
-                    svg=svg_path.read_text(encoding="utf-8"))
+                    svg=svg_path.read_text(encoding="utf-8"),
+                    side=mimic_sidebar())
+
+    def mimic_sidebar() -> dict:
+        """The rows of the column beside the drawing (§8.2).
+
+        Strictly the COMPLEMENT of the P&ID. Every pressure, temperature,
+        flow rate and heater wattage is already on the drawing, in the place
+        it physically belongs, and repeating one here would give the same
+        reading two homes on one page - the sort of thing that is fine until
+        the day the two disagree and somebody has to work out which is lying.
+
+        So what is left is the state that has no place on a pipework diagram:
+        the supplies, the setpoint the cryostat is being held to, the mains,
+        and the integrated mass that answers "how much have we moved". Each
+        of those otherwise costs a navigation away from the page you are
+        watching, which on a mimic is the one thing you do not want to do.
+
+        Only the LABELS are built here. The values are filled by the same
+        five-second fetch that drives the drawing, because this page has no
+        meta refresh (§8.2) and a server-rendered number on it would be
+        frozen at whatever it was when the tab was opened.
+        """
+        hv = []
+        for spec in state.config.devices.get("caen", []) or []:
+            for ch in state.config.channels.values():
+                if ch.device != spec["id"] or ch.kind != "hv_vmon":
+                    continue
+                hv.append({
+                    "vmon": ch.name,
+                    "stat": ch.name.replace("_vmon", "_stat"),
+                    "label": ch.description or ch.name,
+                })
+        return {"hv": hv}
 
     @app.get("/logs", response_class=HTMLResponse)
     def logs(request: Request, service: str = "alarms", lines: int = 80,
@@ -1159,19 +1192,38 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
             # it needs the alarms; `enabled: null` is the engine not saying.
             "notifications": state.notifications(),
             "faults": state.known_faults(),
-            "channels": [
-                {"name": c.name, "value": c.value, "unit": c.unit,
-                 "quality": c.quality,
-                 # `null`, not the infinity a never-reported channel carries
-                 # internally: strict JSON has no way to write it, and
-                 # emitting it raw made the WHOLE endpoint 500 the moment any
-                 # one channel went silent - the API falling over exactly
-                 # when something is wrong with the plant. `null` reads the
-                 # same as it does for a service with no heartbeat.
-                 "age_s": _json_age(c.age_s),
-                 "alarm": c.alarm, "healthy": c.healthy}
-                for c in state.channels()],
+            "channels": [_channel_json(c) for c in state.channels()],
         })
+
+    def _channel_json(c) -> dict:
+        out = {
+            "name": c.name, "value": c.value, "unit": c.unit,
+            "quality": c.quality,
+            # `null`, not the infinity a never-reported channel carries
+            # internally: strict JSON has no way to write it, and
+            # emitting it raw made the WHOLE endpoint 500 the moment any
+            # one channel went silent - the API falling over exactly
+            # when something is wrong with the plant. `null` reads the
+            # same as it does for a service with no heartbeat.
+            "age_s": _json_age(c.age_s),
+            "alarm": c.alarm, "healthy": c.healthy,
+        }
+        # A STATUS word is a number that means nothing until it is decoded,
+        # and the decoding belongs to hv_status.py alone (§7.2). Decoding it
+        # here rather than in the browser is what keeps the mimic's HV panel
+        # from growing a second, drifting copy of STAT_BITS in JavaScript -
+        # and bit 0 is the one bit nobody may get wrong twice.
+        spec = state.config.channels.get(c.name)
+        if (spec is not None and spec.kind == "hv_stat"
+                and c.healthy and c.value is not None):
+            word = int(c.value)
+            out["status"] = {
+                "text": describe_status(word),
+                "faults": status_faults(word),
+                "energised": is_energised(word),
+                "disabled": is_disabled(word),
+            }
+        return out
 
     @app.get("/healthz", response_class=PlainTextResponse)
     def healthz():
