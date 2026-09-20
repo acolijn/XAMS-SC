@@ -18,7 +18,10 @@
 .lg-svc   { color:#bc8cff; }              /* the service, the usual first question */
 .lg-name  { color:var(--dim); }
 .lg-debug { color:var(--dim); }
-.lg-info  { color:#58a6ff; }              /* blue, not green: INFO is not "good" */
+.lg-info  { color:var(--good); }          /* green, the interface's own "ran
+                                             normally" colour: it is what most
+                                             lines are, and a reader scanning
+                                             for trouble skips it */
 .lg-warn  { color:var(--warn); }
 .lg-error { color:var(--bad); }
 .lg-crit  { color:var(--bad); font-weight:700; }

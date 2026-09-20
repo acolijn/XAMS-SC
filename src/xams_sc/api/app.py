@@ -344,10 +344,24 @@ _HEADER = re.compile(
     r"(?P<service>\[[^\]]*\])(?P<gap3>\s*)"
     r"(?P<logger>[\w.]+): (?P<message>.*)$")
 
+# The backup is driven from PowerShell (tools/backup.ps1), not through
+# `setup_logging`, and writes a shorter record: no milliseconds, no service
+# tag, no logger, and WARN where Python writes WARNING.
+#     2026-09-18 09:43:52 INFO    backup starting (target nikhef-backup:/...)
+# Without a pattern of its own every line of backup.log missed `_HEADER` and
+# came out as continuation grey - and backup.log is the one log where a failed
+# nightly copy has to catch the eye.
+_HEADER_PLAIN = re.compile(
+    r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+    r"(?P<gap1>\s+)(?P<level>[A-Z]+)(?P<gap2>\s+)(?P<message>.*)$")
+
 # A class per level rather than a colour per level: the palette belongs in the
 # stylesheet with every other colour in the interface (§8.1), not in here.
-_LEVEL_CLASS = {"DEBUG": "lg-debug", "INFO": "lg-info", "WARNING": "lg-warn",
-                "ERROR": "lg-error", "CRITICAL": "lg-crit"}
+# WARN and WARNING are one severity spelled two ways - the shell writes one,
+# `logging` the other.
+_LEVEL_CLASS = {"DEBUG": "lg-debug", "INFO": "lg-info", "WARN": "lg-warn",
+                "WARNING": "lg-warn", "ERROR": "lg-error",
+                "CRITICAL": "lg-crit"}
 
 
 def _colourise(text: str) -> str:
@@ -364,28 +378,39 @@ def _colourise(text: str) -> str:
     out = []
     for line in text.splitlines():
         match = _HEADER.match(line)
-        if not match:
+        # Only where the long format did not match: a `setup_logging` line
+        # carries milliseconds, which `_HEADER_PLAIN` refuses anyway, but
+        # trying that pattern first keeps it an argument, not a dependency.
+        plain = None if match else _HEADER_PLAIN.match(line)
+        head = match or plain
+        if head is None:
             # A traceback body, or any line that does not start a record.
             # Dimmed as one block so the eye falls to the next timestamp
             # instead of reading the stack frames first.
             out.append('<span class="lg-cont">%s</span>' % escape(line))
             continue
-        level = match.group("level")
+        level = head.group("level")
         cls = _LEVEL_CLASS.get(level, "lg-info")
         # ERROR and CRITICAL colour the MESSAGE too, not just the level word.
         # Everything else leaves it in the body colour: if every line shouts,
         # the one that matters stops standing out.
-        message = escape(match.group("message"))
+        message = escape(head.group("message"))
         if level in ("ERROR", "CRITICAL"):
             message = '<span class="%s">%s</span>' % (cls, message)
+        stamp = ('<span class="lg-time">%s</span>%s'
+                 '<span class="%s">%s</span>%s'
+                 % (escape(head.group("time")), head.group("gap1"),
+                    cls, escape(level), head.group("gap2")))
+        if match is None:
+            # The shell format has no service and no logger to colour, and
+            # neither may be invented for it: the line has to read the same
+            # as the file it came from.
+            out.append(stamp + message)
+            continue
         out.append(
-            '<span class="lg-time">%s</span>%s'
-            '<span class="%s">%s</span>%s'
-            '<span class="lg-svc">%s</span>%s'
+            '%s<span class="lg-svc">%s</span>%s'
             '<span class="lg-name">%s</span>: %s'
-            % (escape(match.group("time")), match.group("gap1"),
-               cls, escape(level), match.group("gap2"),
-               escape(match.group("service")), match.group("gap3"),
+            % (stamp, escape(match.group("service")), match.group("gap3"),
                escape(match.group("logger")), message))
     return "\n".join(out)
 
@@ -1049,7 +1074,12 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
             text = f"({path.name} does not exist — it has not rotated that far)"
         else:
             try:
-                content = path.read_text(encoding="utf-8", errors="replace")
+                # utf-8-SIG: PowerShell 5.1 writes a BOM at the head of
+                # backup.log, and read as plain utf-8 it lands in front of
+                # the first timestamp - which then matches nothing and comes
+                # out grey.
+                content = path.read_text(encoding="utf-8-sig",
+                                         errors="replace")
                 text = "\n".join(_newest_first(content.splitlines()[-lines:]))
             except Exception as exc:
                 text = f"could not read {path}: {exc}"

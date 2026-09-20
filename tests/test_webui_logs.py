@@ -239,3 +239,74 @@ class TestColouring:
         body = pre(client.get("/logs?service=caen").text)
 
         assert "not a log record at all" in body
+
+
+class TestTheShellsOwnFormat:
+    """`tools/backup.ps1` writes its log itself, in a shorter format than
+    `setup_logging`: no milliseconds, no [service], no logger, and WARN where
+    Python writes WARNING. Every line of it used to miss the record pattern,
+    so backup.log - the one log where a failed nightly copy has to be
+    obvious - came out uniformly grey."""
+
+    # As `Log` in tools/backup.ps1 formats it: "{0} {1,-7} {2}".
+    PS = "2026-09-18 09:43:52 %-7s %s"
+
+    def test_the_level_is_coloured(self, client, logs):
+        (logs / "backup.log").write_text(
+            self.PS % ("INFO", "backup starting"), encoding="utf-8")
+
+        body = pre(client.get("/logs?service=backup").text)
+
+        assert '<span class="lg-info">INFO</span>' in body
+
+    def test_warn_counts_as_a_warning(self, client, logs):
+        """WARN and WARNING are one severity spelled two ways."""
+        (logs / "backup.log").write_text(
+            self.PS % ("WARN", "unreadable stamp; copying everything"),
+            encoding="utf-8")
+
+        body = pre(client.get("/logs?service=backup").text)
+
+        assert '<span class="lg-warn">WARN</span>' in body
+
+    def test_an_error_still_colours_its_message(self, client, logs):
+        (logs / "backup.log").write_text(
+            self.PS % ("ERROR", "robocopy exited 8"), encoding="utf-8")
+
+        body = pre(client.get("/logs?service=backup").text)
+
+        assert '<span class="lg-error">robocopy exited 8</span>' in body
+
+    def test_no_service_or_logger_is_invented(self, client, logs):
+        """There is nothing in the line to put there, and the rendered line
+        must read the same as the file it came from."""
+        (logs / "backup.log").write_text(
+            self.PS % ("INFO", "106 file(s), 206,5 MB"), encoding="utf-8")
+
+        body = pre(client.get("/logs?service=backup").text)
+
+        assert "lg-svc" not in body and "lg-name" not in body
+        assert "INFO</span>    106 file(s), 206,5 MB" in body
+
+    def test_the_byte_order_mark_does_not_eat_the_first_line(self, client,
+                                                             logs):
+        """PowerShell 5.1 writes a BOM at the head of the file. Read as plain
+        utf-8 it sits in front of the first timestamp, and that line - the
+        'backup starting' line - loses its colours."""
+        (logs / "backup.log").write_text(
+            self.PS % ("INFO", "backup starting"), encoding="utf-8-sig")
+
+        body = pre(client.get("/logs?service=backup").text)
+
+        assert '<span class="lg-time">2026-09-18 09:43:52</span>' in body
+
+    def test_a_python_record_is_not_matched_by_the_shorter_pattern(
+            self, client, logs):
+        """The long format is tried first, and the short one refuses
+        milliseconds - a service log must keep its service and logger."""
+        (logs / "caen.log").write_text(LINE % (1, "connected"),
+                                       encoding="utf-8")
+
+        body = pre(client.get("/logs?service=caen").text)
+
+        assert '<span class="lg-svc">[caen]</span>' in body

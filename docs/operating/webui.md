@@ -507,9 +507,12 @@ This is the second place to look when a service is unhappy; the first is
 [Troubleshooting](troubleshooting.md).
 
 **The lines are coloured by level**, the way an editor colours a `.log` file:
-`WARNING` amber and `ERROR` red, in the same colours the overview uses for the
-same idea. An error colours its message as well as the level word, because a
-five-character word is easy to miss in eighty lines. Everything each line
+`INFO` green, `WARNING` amber and `ERROR` red, in the same colours the overview
+uses for the same idea. An error colours its message as well as the level word,
+because a five-character word is easy to miss in eighty lines. `backup.log` is
+written by PowerShell rather than by Python, in a shorter format with `WARN`
+for `WARNING` and no service or logger column, and it is coloured on the same
+scale. Everything each line
 repeats — the timestamp, the service, the logger — is dimmed instead: it is
 there to be checked, not read. Traceback bodies are dimmed as one block, so
 the eye falls to the next timestamp rather than into the stack frames.
