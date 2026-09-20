@@ -144,7 +144,7 @@ What the page refuses, and why each one is a way to be notified by nothing:
 
 | | |
 |---|---|
-| neither an email nor a phone | they sit on the list looking notified and hear nothing |
+| neither an email nor a phone | **allowed**, with a warning naming the row: they sit on the list looking notified and hear nothing |
 | a phone without `+` and a country code | the gateway wants international form; better refused here than at 3am |
 | a name listed twice | two rows, one person, and no way to tell which one is current |
 | nobody enabled | **allowed**, with a warning. It may be deliberate during an intervention |

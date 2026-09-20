@@ -406,8 +406,12 @@ own, for the reason given in §8.1.
 
 Four rules the page follows, each of which is a way the list can fail quietly:
 
-- **A recipient with neither an email nor a phone is refused.** They would sit
-  on the list looking notified, and hear nothing.
+- **A recipient with neither an email nor a phone is warned about, not
+  refused.** They would sit on the list looking notified, and hear nothing —
+  so the save says which row, by name. It is not blocked: a blank field is
+  somebody mid-edit far more often than it is a mistake, and refusing the
+  whole list over one of them means the change nobody could make was the one
+  to the list of people who get told things go wrong.
 - **An empty phone is not a mistake.** It means *do not SMS this person*; they
   are notified by email alone. Three of the four entries are like this, and a
   page that treated a blank as an omission would nag about a deliberate choice.

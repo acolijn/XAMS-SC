@@ -221,6 +221,23 @@ pre { margin:0; padding:.9rem; overflow-x:auto; font-size:.8rem; line-height:1.4
   border-color:var(--line); }
 .hv-btn:disabled:hover { color:var(--dim); border-color:var(--line); }
 
+/* The recipient boxes on /alarms. Left unstyled they came out as the
+   browser default - white rectangles with black text, the brightest thing
+   on the page, in a table that is otherwise quiet. They read as the panel
+   they sit in: a box is a place text can be typed, not an alarm. */
+.recip-box {
+  width:100%; box-sizing:border-box; padding:.3rem .45rem;
+  font:inherit; font-size:.85rem; color:var(--text);
+  background:var(--bg); border:1px solid var(--line); border-radius:3px; }
+.recip-box:focus { outline:none; border-color:var(--dim); }
+.recip-box::placeholder { color:var(--dim); opacity:.75; }
+/* Somebody with no email and no phone: saved, and marked where the blank is
+   rather than only in a banner that scrolls away. */
+.recip-box.hears-nothing { border-color:var(--warn); }
+/* Notify and Remove mean opposite things and should not be the same blue. */
+.recip-notify { accent-color:var(--good); }
+.recip-remove { accent-color:var(--bad); }
+
 .flash { margin-top:.8rem; padding:.45rem .6rem; border-radius:3px;
          font-size:.82rem; line-height:1.45; }
 .flash.good { background:rgba(63,185,80,.12); color:var(--good); }

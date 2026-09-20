@@ -410,7 +410,8 @@ tick **Remove** and save.
 
 **The whole list is saved as one action**, and a bad row refuses all of it —
 nothing is written and the reason names the row. A recipient with neither an
-email nor a phone is refused: they would be on the list and hear nothing.
+email nor a phone is **not** one of those: the row is saved, the box is
+outlined in amber, and the save says they are on the list and hear nothing.
 
 **Turning everyone off is allowed, with a warning**, because it may be exactly
 what you mean during an intervention. The page says so in red and the alarm

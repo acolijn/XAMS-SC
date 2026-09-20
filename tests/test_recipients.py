@@ -10,9 +10,12 @@ Two things here are worth more than the rest:
 exactly what somebody means during an intervention. It is said loudly and
 allowed.
 
-**A recipient with neither an email nor a phone is refused.** They would sit on
-the list looking notified and hear nothing, which is the silent failure this
-whole subsystem exists to avoid.
+**A recipient with neither an email nor a phone is WARNED ABOUT, not refused.**
+They would sit on the list looking notified and hear nothing, which is the
+silent failure this whole subsystem exists to avoid - so it is said, loudly and
+by name. It is not a reason to refuse the save: a blank field is somebody
+mid-edit far more often than it is a mistake, and one of them must not hold the
+rest of the list hostage.
 """
 
 import shutil
@@ -23,8 +26,8 @@ from fastapi.testclient import TestClient
 
 from xams_sc import config as config_module
 from xams_sc.api import app as app_module
-from xams_sc.config import (read_recipients, validate_recipients,
-                            write_recipients)
+from xams_sc.config import (read_recipients, recipient_warnings,
+                            validate_recipients, write_recipients)
 
 REPO_CONFIG = config_module.ROOT / "config"
 
@@ -97,11 +100,21 @@ def test_blank_phone_is_allowed():
     ) == []
 
 
-def test_neither_email_nor_phone_is_refused():
-    problems = validate_recipients(
-        [{"name": "A", "email": "", "phone": "", "enabled": True}])
-    assert len(problems) == 1
-    assert "hear nothing" in problems[0]
+def test_neither_email_nor_phone_is_allowed_but_warned_about():
+    person = [{"name": "A", "email": "", "phone": "", "enabled": True}]
+    assert validate_recipients(person) == []
+    warnings = recipient_warnings(person)
+    assert len(warnings) == 1
+    assert "hear nothing" in warnings[0]
+    assert "A" in warnings[0]
+
+
+def test_a_reachable_person_warns_about_nothing():
+    """A blank phone alone is silent, not a warning: it MEANS "do not SMS"."""
+    assert recipient_warnings(
+        [{"name": "A", "email": "a@nikhef.nl", "phone": ""}]) == []
+    assert recipient_warnings(
+        [{"name": "B", "email": "", "phone": "+31612345678"}]) == []
 
 
 def test_phone_needs_a_country_code():
@@ -237,16 +250,55 @@ def test_blank_phone_survives_a_save(client, config_dir):
 
 
 def test_a_bad_row_refuses_the_whole_save(client, config_dir):
+    """All or nothing: a half-saved list is a list nobody chose."""
     http, _, _ = client
     before = (config_dir / "recipients.yaml").read_text()
+    people = read_recipients(config_dir)
+    data = rows(people)
+    data[f"name-{len(people)}"] = "Nobody"
+    data[f"email-{len(people)}"] = "not-an-address"
+    data[f"enabled-{len(people)}"] = "on"
+    response = http.post("/alarms/recipients", data=dict(data, by="apc"),
+                         follow_redirects=False)
+    assert "error" in response.headers["location"]
+    assert (config_dir / "recipients.yaml").read_text() == before
+
+
+def test_a_contactless_row_saves_with_a_warning(client, config_dir):
+    """Somebody with no email and no phone is saved, loudly.
+
+    Refusing it meant one half-filled row - a name typed while the number is
+    looked up - refused every other change on the page with it.
+    """
+    http, _, _ = client
     people = read_recipients(config_dir)
     data = rows(people)
     data[f"name-{len(people)}"] = "Nobody"      # no email, no phone
     data[f"enabled-{len(people)}"] = "on"
     response = http.post("/alarms/recipients", data=dict(data, by="apc"),
                          follow_redirects=False)
-    assert "error" in response.headers["location"]
-    assert (config_dir / "recipients.yaml").read_text() == before
+    where = response.headers["location"]
+    assert "saved" in where
+    assert "WARNING" in where and "hear%20nothing" in where
+    assert any(p["name"] == "Nobody" for p in read_recipients(config_dir))
+
+
+def test_the_page_marks_who_hears_nothing(client, config_dir):
+    """Marked where the blank is, not only in a banner that scrolls away."""
+    http, _, _ = client
+    people = read_recipients(config_dir)
+    people.append({"name": "Nobody", "email": "", "phone": "",
+                   "enabled": True})
+    write_recipients(people, "apc", config_dir)
+    assert "hears-nothing" in http.get("/alarms").text
+
+
+def test_the_boxes_are_not_browser_default_white(client):
+    """The inputs read as the dark panel they sit in, not as four lamps."""
+    http, _, _ = client
+    text = http.get("/alarms").text
+    assert 'class="recip-box' in text
+    assert 'style="width:95%"' not in text
 
 
 def test_empty_spare_row_is_not_an_error(client, config_dir):

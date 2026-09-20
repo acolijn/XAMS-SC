@@ -107,28 +107,37 @@
         <th>Notify</th><th>Remove</th>
       </tr>
       {% for p in people %}
+      {# No email and no phone: on the list, notified by nothing. Marked, and
+         saved anyway - the refusal it used to be blocked the whole list. #}
+      {% set silent = not (p.email or p.phone) %}
       <tr>
-        <td><input type="text" name="name-{{ loop.index0 }}"
-                   value="{{ p.name or '' }}" style="width:95%" autocomplete="off"></td>
+        <td><input type="text" name="name-{{ loop.index0 }}" class="recip-box"
+                   value="{{ p.name or '' }}" autocomplete="off"></td>
         <td><input type="text" name="email-{{ loop.index0 }}"
-                   value="{{ p.email or '' }}" style="width:95%" autocomplete="off"></td>
+                   class="recip-box{{ ' hears-nothing' if silent }}"
+                   value="{{ p.email or '' }}" autocomplete="off"></td>
         <td><input type="text" name="phone-{{ loop.index0 }}"
-                   value="{{ p.phone or '' }}" style="width:95%" autocomplete="off"></td>
-        <td><input type="checkbox" name="enabled-{{ loop.index0 }}"
+                   class="recip-box{{ ' hears-nothing' if silent }}"
+                   value="{{ p.phone or '' }}" placeholder="no SMS"
+                   autocomplete="off"></td>
+        <td><input type="checkbox" class="recip-notify"
+                   name="enabled-{{ loop.index0 }}"
                    {{ 'checked' if p.enabled }}></td>
-        <td><input type="checkbox" name="remove-{{ loop.index0 }}"></td>
+        <td><input type="checkbox" class="recip-remove"
+                   name="remove-{{ loop.index0 }}"></td>
       </tr>
       {% endfor %}
       {# One spare row, so adding somebody needs no separate form and no
          second gesture. Blank rows are dropped on save. #}
       <tr>
-        <td><input type="text" name="name-{{ people|length }}"
-                   placeholder="add somebody…" style="width:95%" autocomplete="off"></td>
-        <td><input type="text" name="email-{{ people|length }}"
-                   style="width:95%" autocomplete="off"></td>
-        <td><input type="text" name="phone-{{ people|length }}"
-                   style="width:95%" autocomplete="off"></td>
-        <td><input type="checkbox" name="enabled-{{ people|length }}" checked></td>
+        <td><input type="text" name="name-{{ people|length }}" class="recip-box"
+                   placeholder="add somebody…" autocomplete="off"></td>
+        <td><input type="text" name="email-{{ people|length }}" class="recip-box"
+                   placeholder="name@nikhef.nl" autocomplete="off"></td>
+        <td><input type="text" name="phone-{{ people|length }}" class="recip-box"
+                   placeholder="+31… or leave empty" autocomplete="off"></td>
+        <td><input type="checkbox" class="recip-notify"
+                   name="enabled-{{ people|length }}" checked></td>
         <td></td>
       </tr>
     </table>
@@ -143,8 +152,10 @@
       <br>
       <strong>An empty phone is not a mistake.</strong> It means do not SMS
       this person; they are notified by email alone. Somebody with neither an
-      email nor a phone is refused, because they would be on the list and hear
-      nothing. A phone number needs its country code, <code>+31…</code>.
+      email nor a phone is saved and <span class="warn">marked</span>, not
+      refused — they are on the list and hear nothing, which is worth saying
+      once rather than blocking the whole list over. A phone number that is
+      filled in needs its country code, <code>+31…</code>.
       <br>
       <strong>Notify</strong> off keeps somebody on the list without
       notifying them — for a holiday, without losing the number.

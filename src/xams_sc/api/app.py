@@ -44,8 +44,9 @@ from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
                    TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
                    TOPIC_RELOAD, Bus)
 from ..config import (LOG_DIR, ConfigError, load, read_hv_defaults,
-                      read_recipients, validate_recipients,
-                      write_hv_defaults, write_recipients)
+                      read_recipients, recipient_warnings,
+                      validate_recipients, write_hv_defaults,
+                      write_recipients)
 from ..hv_status import (describe_status, is_disabled, is_energised,
                          status_faults)
 from ..grafana import DriftWatcher
@@ -863,6 +864,11 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
 
         enabled = sum(1 for p in people if p.get("enabled"))
         note = f"saved {len(people)} recipient{'' if len(people) == 1 else 's'}"
+        # Said after the save, not instead of it: a blank contact field is
+        # somebody mid-edit far more often than it is a mistake, and taking
+        # the whole list hostage over one is the wrong trade (§4.4).
+        for warning in recipient_warnings(people):
+            note += f" - WARNING: {warning}"
         if not enabled:
             # A warning, not a refusal: turning everyone off may be exactly
             # what somebody means to do during an intervention. The engine

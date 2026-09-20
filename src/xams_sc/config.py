@@ -459,7 +459,8 @@ _RECIPIENTS_HEADER = """\
 #
 # An empty phone is not a mistake - it means "do not SMS this person", and
 # they are notified by email alone. Somebody with NEITHER an email nor a
-# phone is refused, because they would be on the list and hear nothing.
+# phone is saved with a warning, not refused: they are on the list and hear
+# nothing, which is worth being told once, not worth blocking the save.
 #
 # An empty list is a warning - if every recipient is disabled, alarms reach
 # nobody, and the engine raises a low-severity alarm saying so.
@@ -486,7 +487,11 @@ def read_recipients(config_dir: Path | str | None = None) -> list[dict]:
 
 
 def validate_recipients(people: list[dict]) -> list[str]:
-    """Problems with a proposed recipient list, as sentences. Empty is fine.
+    """Reasons to REFUSE a proposed recipient list, as sentences.
+
+    Only things that would make the list wrong are here. A blank field is not
+    one of them - see `recipient_warnings` for what is said loudly and saved
+    anyway.
 
     Deliberately NOT a schema check on the file at load time. The engine must
     keep running on a list it finds odd - refusing to start because somebody
@@ -502,11 +507,6 @@ def validate_recipients(people: list[dict]) -> list[str]:
         where = f"row {i}" if not name else name
         if not name:
             problems.append(f"{where}: no name")
-        if not email and not phone:
-            # The silent-failure case: on the list, notified by nothing.
-            problems.append(
-                f"{where}: needs an email or a phone, or they are on the "
-                f"list and hear nothing")
         if email and ("@" not in email or email.startswith("@")
                       or email.endswith("@")):
             problems.append(f"{where}: {email!r} is not an email address")
@@ -521,6 +521,30 @@ def validate_recipients(people: list[dict]) -> list[str]:
             problems.append(f"{name}: listed twice")
         seen.add(key)
     return problems
+
+
+def recipient_warnings(people: list[dict]) -> list[str]:
+    """What is worth saying out loud about a list that is saved anyway.
+
+    Somebody with neither an email nor a phone sits on the list looking
+    notified and hears nothing. That used to be a refusal, which meant a
+    half-filled row could not be parked while somebody went to look up a
+    number - and refusing the whole list over one blank field takes the
+    recipient list hostage to a detail. It is now saved and said loudly,
+    like "nobody is enabled" already was: the same warning, the same place,
+    and the operator decides.
+    """
+    notes = []
+    for i, person in enumerate(people, start=1):
+        name = (person.get("name") or "").strip()
+        email = (person.get("email") or "").strip()
+        phone = (person.get("phone") or "").strip()
+        where = f"row {i}" if not name else name
+        if not email and not phone:
+            notes.append(
+                f"{where} has no email and no phone, so they are on the "
+                f"list and hear nothing")
+    return notes
 
 
 def write_recipients(people: list[dict], by: str,
