@@ -20,12 +20,29 @@
 # and mobile numbers, and those are personal data that never belong in git.
 
 recipients:
-  - name: Example Person
-    email: example.person@nikhef.nl
-    phone: "+310000000000"
+  - name: Alice Example
+    email: alice.example@example.org
+    phone: "+31600000001"
     enabled: true
 
-  - name: Someone Without SMS
-    email: someone.else@nikhef.nl
+  - name: Bob Example
+    email: bob.example@example.org
+    phone: "+31600000002"
+    enabled: true
+
+  - name: Carol Example
+    email: carol.example@example.org
+    phone: "+31600000003"
+    enabled: true
+
+  # No phone: e-mail only. Not a mistake - see the note above.
+  - name: Dan Example
+    email: dan.example@example.org
     phone: ""
+    enabled: true
+
+  # Temporarily off, without losing the number.
+  - name: Erin Example
+    email: erin.example@example.org
+    phone: "+31600000005"
     enabled: false

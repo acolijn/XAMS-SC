@@ -69,12 +69,11 @@ def config_dir(tmp_path, monkeypatch):
     d.mkdir()
     for name in ("channels.yaml", "devices.yaml", "alarms.yaml"):
         shutil.copy(REPO_CONFIG / name, d / name)
-    # recipients.yaml is gitignored (real names and mobile numbers), so a fresh
-    # clone does not have one. Use it when it is there, and the committed
-    # template when it is not, so the suite runs everywhere.
-    real = REPO_CONFIG / "recipients.yaml"
-    shutil.copy(real if real.exists() else REPO_CONFIG / "recipients.example.yaml",
-                d / "recipients.yaml")
+    # ALWAYS the template, never config/recipients.yaml. That file holds real
+    # colleagues' names and mobile numbers, it is gitignored, and a fresh clone
+    # does not have one. Asserting against real people also put their numbers
+    # in this file, which is how they ended up in a public repository once.
+    shutil.copy(REPO_CONFIG / "recipients.example.yaml", d / "recipients.yaml")
     monkeypatch.setattr(config_module, "CONFIG_DIR", d)
     return d
 
@@ -180,8 +179,8 @@ def test_missing_file_is_not_an_error(tmp_path):
 def test_page_lists_everyone(client):
     http, _, _ = client
     text = http.get("/alarms").text
-    assert "Auke-Pieter Colijn" in text
-    assert "a.p.colijn@nikhef.nl" in text
+    assert "Alice Example" in text
+    assert "alice.example@example.org" in text
 
 
 def test_nav_carries_alarms(client):
@@ -227,26 +226,26 @@ def test_disabling_keeps_the_number(client, config_dir):
     http, _, _ = client
     people = read_recipients(config_dir)
     for p in people:
-        if p["name"] == "Example Person 4":
+        if p["name"] == "Bob Example":
             p["enabled"] = False
     http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
               follow_redirects=False)
     saved = {p["name"]: p for p in read_recipients(config_dir)}
-    assert saved["Example Person 4"]["enabled"] is False
-    assert saved["Example Person 4"]["phone"] == "+31600000000"
+    assert saved["Bob Example"]["enabled"] is False
+    assert saved["Bob Example"]["phone"] == "+31600000002"
 
 
 def test_removing_somebody(client, config_dir):
     http, _, _ = client
     people = read_recipients(config_dir)
     index = [i for i, p in enumerate(people)
-             if p["name"] == "Example Person 3"][0]
+             if p["name"] == "Carol Example"][0]
     data = rows(people)
     data[f"remove-{index}"] = "on"
     http.post("/alarms/recipients", data=dict(data, by="apc"),
               follow_redirects=False)
     saved = read_recipients(config_dir)
-    assert all(p["name"] != "Example Person 3" for p in saved)
+    assert all(p["name"] != "Carol Example" for p in saved)
     assert len(saved) == len(people) - 1
 
 
@@ -257,9 +256,9 @@ def test_blank_phone_survives_a_save(client, config_dir):
               data=dict(rows(read_recipients(config_dir)), by="apc"),
               follow_redirects=False)
     body = yaml.safe_load((config_dir / "recipients.yaml").read_text())
-    westveer = [p for p in body["recipients"]
-                if p["name"] == "Example Person 2"][0]
-    assert westveer["phone"] == ""
+    dan = [p for p in body["recipients"]
+                if p["name"] == "Dan Example"][0]
+    assert dan["phone"] == ""
 
 
 def test_a_bad_row_refuses_the_whole_save(client, config_dir):
@@ -354,12 +353,12 @@ def test_changes_are_audited(client, config_dir):
     http, _, bus = client
     people = read_recipients(config_dir)
     for p in people:
-        if p["name"] == "Example Person 4":
+        if p["name"] == "Bob Example":
             p["enabled"] = False
     http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
               follow_redirects=False)
     audits = [p for topic, p in bus.published if topic == "xams/audit"]
-    assert any('"action":"recipients"' in a and "Example Person 4" in a
+    assert any('"action":"recipients"' in a and "Bob Example" in a
                and "disabled" in a and '"actor":"apc"' in a for a in audits)
 
 
@@ -368,13 +367,13 @@ def test_removal_is_audited_with_what_was_lost(client, config_dir):
     http, _, bus = client
     people = read_recipients(config_dir)
     index = [i for i, p in enumerate(people)
-             if p["name"] == "Example Person 3"][0]
+             if p["name"] == "Carol Example"][0]
     data = rows(people)
     data[f"remove-{index}"] = "on"
     http.post("/alarms/recipients", data=dict(data, by="apc"),
               follow_redirects=False)
     audits = [p for topic, p in bus.published if topic == "xams/audit"]
-    line = [a for a in audits if "Example Person 3" in a]
+    line = [a for a in audits if "Carol Example" in a]
     assert line, audits
     assert '"new":"removed"' in line[0]
     # Their address as the file actually had it. Hard-coding one meant the
@@ -576,17 +575,17 @@ def test_a_silent_engine_is_reported_as_a_refusal(client):
 
 def test_the_operator_box_offers_the_recipients(client):
     """The names are typed a few times a day and end up in the audit trail,
-    where `apc`, `AP Colijn` and `Auke-Pieter Colijn` are three people."""
+    where `alice`, `A Example` and `Alice Example` are three people."""
     http, _, _ = client
     text = http.get("/").text
     assert 'list="operators"' in text
-    assert '<option value="Example Person 4">' in text
+    assert '<option value="Bob Example">' in text
 
 
 def test_the_suggestions_are_on_every_page(client):
     http, _, _ = client
     for path in ("/", "/status", "/hv", "/alarms", "/logs"):
-        assert '<option value="Example Person 4">' in http.get(path).text, (
+        assert '<option value="Bob Example">' in http.get(path).text, (
             "%s offers no names under 'acting as'" % path)
 
 
@@ -596,12 +595,12 @@ def test_a_disabled_recipient_is_still_offered(client, config_dir):
     http, _, _ = client
     people = read_recipients(config_dir)
     for p in people:
-        if p["name"] == "Example Person 4":
+        if p["name"] == "Bob Example":
             p["enabled"] = False
     http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
               follow_redirects=False)
 
-    assert '<option value="Example Person 4">' in http.get("/").text
+    assert '<option value="Bob Example">' in http.get("/").text
 
 
 def test_a_name_that_is_not_offered_is_still_accepted(client, config_dir):
