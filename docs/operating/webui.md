@@ -98,10 +98,14 @@ crossed it. *Acknowledged* means the repeating notification has been stopped —
 the same thing.
 
 **Services** — one row per service, with its state and how long ago it last sent
-a heartbeat. A few seconds is normal. `sinks` and `alarms` publish no heartbeat,
-so a dash on those two is not a fault. Note what this card cannot do: the alarm
-engine cannot report that the alarm engine has stopped. That needs the outside
-watchdog of §12.
+a heartbeat. A few seconds is normal. All seven publish one, so **silent**
+means silent for any of them, including `sinks` and `alarms`. Green is beating
+and reporting itself running; amber is beating but degraded — the sinks go
+amber when they have had to discard data; red is silent, stopped, or in a
+state it should not be in.
+
+Note what this card cannot do: the alarm engine cannot report that the alarm
+engine has stopped. That needs the outside watchdog of §12.
 
 **UPS & dashboards** — line power or `ON BATTERY`, battery charge and runtime,
 plus two housekeeping facts that ride along rather than taking a card of their

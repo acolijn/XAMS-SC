@@ -173,7 +173,7 @@ def digest(state, when: datetime) -> tuple[str, str, str]:
     unhealthy = state.unhealthy_channels()
     backup = state.backup_status()
 
-    down = [s for s in services if s.get("expects_heartbeat") and not s.get("healthy")]
+    down = [s for s in services if not s.get("healthy")]
     accent = BAD if (alarms or down) else (WARN if unhealthy else GOOD)
 
     if alarms:
@@ -227,12 +227,13 @@ def digest(state, when: datetime) -> tuple[str, str, str]:
     backup_text = ("%.0f h ago" % backup["age_h"]) if (
         backup["state"] == "ok" and backup["age_h"] is not None) else backup["state"]
     body.append(table([
-        # Counted over services that PUBLISH a heartbeat. sinks and alarms
-        # deliberately do not (section 8.1), so counting them made a healthy
-        # system report "5 of 7" and look as though two things had died.
+        # All seven are counted now that all seven publish a heartbeat. This
+        # used to count only the five that did, because including the two
+        # that did not made a healthy system report "5 of 7" and look as
+        # though something had died.
         ("Services running",
          "%d of %d" % (len([s for s in services if s.get("healthy")]),
-                       len([s for s in services if s.get("expects_heartbeat")]))),
+                       len(services))),
         ("Channels not reading", str(len(unhealthy)),
          WARN if unhealthy else GOOD),
         ("Mains", "ON BATTERY" if on_battery else "line power",
@@ -304,7 +305,7 @@ def alarm(channel: str, state_name: str, threshold, value, description: str,
         body.append(table([(name, _reading(view)) for name, view in readings]))
 
     services = context.get("services") or []
-    down = [s for s in services if s.get("expects_heartbeat") and not s.get("healthy")]
+    down = [s for s in services if not s.get("healthy")]
     body.append(heading("System"))
     rows = [("Services", "ALL RUNNING" if not down else
              "DOWN: " + ", ".join(_esc(s["name"]) for s in down),

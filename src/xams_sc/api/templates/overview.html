@@ -49,8 +49,8 @@
         <td>
           {% if s.name == 'alarms' and notify.known and not notify.enabled %}
           <span class="dot bad"></span>
-          {% elif not s.expects_heartbeat %}<span class="dot off"></span>
-          {% elif s.healthy %}<span class="dot good"></span>
+          {% elif s.healthy and s.state == 'running' %}<span class="dot good"></span>
+          {% elif s.healthy %}<span class="dot warn"></span>
           {% else %}<span class="dot bad"></span>{% endif %}{{ s.name }}
         </td>
         {# The alarms row says what the engine is DOING, not merely that
@@ -61,15 +61,16 @@
         {% else %}<td class="dim">{{ s.state }}</td>{% endif %}
         <td class="num dim">
           {% if s.age_s is not none %}{{ '%.0f'|format(s.age_s) }}s ago
-          {% elif not s.expects_heartbeat %}no heartbeat
           {% else %}<span class="bad">silent</span>{% endif %}
         </td>
       </tr>
       {% endfor %}
     </table>
     <div class="note">
-      `sinks` and `alarms` publish no heartbeat, so a dash there is not a
-      fault. The alarm engine cannot report that the alarm engine has stopped
+      All seven services publish a heartbeat, so <strong>silent</strong> means
+      silent for any of them. A green dot is a service that is both beating
+      and reports itself running; amber is one still beating but degraded.
+      The alarm engine still cannot report that the alarm engine has stopped
       — that needs the outside watchdog of §12.
     </div>
   </div>

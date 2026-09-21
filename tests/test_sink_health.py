@@ -25,9 +25,11 @@ the next one.
 from __future__ import annotations
 
 import logging
+import threading
 
 import pytest
 
+from xams_sc.api.state import SystemState
 from xams_sc.model import ServiceState
 from xams_sc.sinks.__main__ import SinkHealth
 
@@ -251,3 +253,53 @@ class TestTheRunSummary:
 
         assert health.lost_rows == 0 and health.lost_messages == 0
         assert health.degraded is False
+
+
+def service_rows(heartbeats, states):
+    """`SystemState.services()` with only the two dicts it reads.
+
+    Built with __new__ rather than a constructed SystemState: the real one
+    connects a bus, starts threads and loads the configuration, and none of
+    that is what these are about.
+    """
+    s = SystemState.__new__(SystemState)
+    s._lock = threading.Lock()
+    s._heartbeats = heartbeats
+    s._states = states
+    return {row["name"]: row for row in s.services()}
+
+
+class TestTheHeartbeat:
+    """`sinks` publishes one now, like every other service.
+
+    Without it the only evidence the process was alive was a RETAINED
+    `running` that outlived it: a sinks that hangs rather than exits publishes
+    no will, so the page went on saying `running` indefinitely. The archive is
+    the last thing that should be able to die quietly.
+    """
+
+    def test_a_beating_sinks_is_healthy(self):
+        rows = service_rows({"sinks": 3.0}, {"sinks": "running"})
+
+        assert rows["sinks"]["healthy"] is True
+
+    def test_a_silent_sinks_is_not_healthy_whatever_it_last_said(self):
+        rows = service_rows({}, {"sinks": "running"})
+
+        assert rows["sinks"]["healthy"] is False, \
+            "a retained `running` outlived the process and nothing noticed"
+
+    def test_a_stale_heartbeat_is_not_healthy(self):
+        """Sixty seconds, the same window every other service is held to."""
+        rows = service_rows({"sinks": 3600.0}, {"sinks": "running"})
+
+        assert rows["sinks"]["healthy"] is False
+
+    def test_no_service_is_exempt_from_reporting(self):
+        rows = service_rows({}, {})
+
+        assert set(rows) == {"cdaq", "caen", "lakeshore", "ups", "derived",
+                             "alarms", "sinks"}
+        assert all(r["healthy"] is False for r in rows.values())
+        assert not any("expects_heartbeat" in r for r in rows.values()), \
+            "the exemption is gone; nothing should still be asking for it"

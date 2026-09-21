@@ -109,8 +109,12 @@ whose machine loses power, is reported as stopped by the broker on its
 behalf. A service that could only report its own death would never report the
 deaths that matter.
 
-`sinks` and `alarms` publish no heartbeat, so a dash against those two on the
-Services card is not a fault.
+Every service publishes a heartbeat, `sinks` and `alarms` included. They did
+not until recently, on the reasoning that neither is a `BaseService` — which
+left the archive and the notifier as the two things the Services card could
+never show as broken, and meant a process that HUNG rather than exited kept a
+retained `running` next to its name indefinitely. A frozen plausible value is
+worse than a gap (§1, principle 4).
 
 ---
 

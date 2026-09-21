@@ -413,7 +413,11 @@ def all_well(app, bus):
     to be genuinely well first.
     """
     now = iso(utcnow())
-    for service in ("cdaq", "caen", "lakeshore", "ups", "derived"):
+    # All seven, including `sinks` and `alarms`. They were absent here because
+    # they used to publish no heartbeat, which is exactly what made the page
+    # unable to show the archive or the notifier as broken.
+    for service in ("cdaq", "caen", "lakeshore", "ups", "derived",
+                    "sinks", "alarms"):
         bus.deliver(
             f"xams/status/{service}/heartbeat", now)
     for ch in app.state.system.config.enabled_channels():

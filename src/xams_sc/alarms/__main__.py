@@ -17,7 +17,6 @@ import logging
 import signal
 import sys
 import threading
-import time
 from pathlib import Path
 
 import yaml
@@ -175,9 +174,18 @@ def main(argv=None) -> int:
         except (ValueError, OSError):
             pass
 
+    # Ten seconds, matching BaseService, so the 60 s staleness window has the
+    # same six-fold margin everywhere. The alarm summary below keeps its own
+    # thirty-second cadence: it is a log line somebody greps, not a liveness
+    # signal, and tripling it would only make it harder to read.
+    beats = 0
     try:
         while not stop.is_set():
-            stop.wait(30)
+            stop.wait(10)
+            bus.publish_heartbeat("alarms")
+            beats += 1
+            if beats % 3:
+                continue
             active = engine.active()
             if active:
                 # Which way the switch is sits next to the list, because this

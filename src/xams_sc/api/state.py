@@ -369,11 +369,13 @@ class SystemState:
                 "name": name,
                 "state": states.get(name, "unknown"),
                 "age_s": age,
-                # sinks and alarms are not BaseService and publish no
-                # heartbeat, so absence there is not evidence of a problem.
-                "expects_heartbeat": name not in ("sinks", "alarms"),
-                "healthy": (age is not None and age < 60)
-                           if name not in ("sinks", "alarms") else None,
+                # EVERY service publishes a heartbeat now, so silence is
+                # evidence for all seven alike. `sinks` and `alarms` used to
+                # be exempt because they are not BaseService, which meant the
+                # two that matter most — the archive, and the thing that
+                # telephones people — were the two the page could never show
+                # as broken.
+                "healthy": age is not None and age < 60,
             })
         return out
 
@@ -471,8 +473,7 @@ class SystemState:
         if self.active_alarms():
             worst = self.active_alarms()[0]["state"]
             return (f"{worst.upper()} ALARM", "bad" if worst != "minor" else "warn")
-        broken = [s for s in self.services()
-                  if s["expects_heartbeat"] and not s["healthy"]]
+        broken = [s for s in self.services() if not s["healthy"]]
         if broken:
             return (f"{len(broken)} SERVICE(S) NOT REPORTING", "bad")
         if self.unhealthy_channels():

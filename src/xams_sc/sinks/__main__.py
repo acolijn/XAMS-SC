@@ -284,6 +284,14 @@ def main(argv=None) -> int:
             stop.wait(5)
             jsonl.flush()
             health.check()
+            # A heartbeat, like every other service. Without one the only
+            # evidence this process is alive is a RETAINED `running` that
+            # outlives it: a sinks that HANGS rather than exits publishes no
+            # will, so the page went on saying `running` indefinitely. A
+            # frozen plausible value is worse than a gap (principle 4), and
+            # the archive is the last thing that should be able to die
+            # quietly.
+            bus.publish_heartbeat("sinks")
     finally:
         log.info("shutting down; %d records archived this run", jsonl.written)
         # Do not let a loss go unsaid because it happened hours ago and the
