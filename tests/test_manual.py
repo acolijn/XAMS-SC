@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from xams_sc.api import app as app_module
-from test_hv_page import FakeBus, StubDrift
+from doubles import RecordingBus, StubDrift  # noqa: F401
 
 MANUAL = app_module.HERE / "site"
 built = pytest.mark.skipif(
@@ -22,7 +22,7 @@ built = pytest.mark.skipif(
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: FakeBus())
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     return TestClient(app_module.create_app())
 
@@ -31,7 +31,7 @@ def test_app_starts_without_the_manual(monkeypatch):
     """An unbuilt manual is a nuisance, not a fault. The monitoring must come
     up regardless — this is the one that stops a documentation change from
     ever being able to stop the slow control."""
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: FakeBus())
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     monkeypatch.setattr(app_module.Path, "is_dir", lambda self: False)
     client = TestClient(app_module.create_app())

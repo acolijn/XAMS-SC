@@ -23,34 +23,12 @@ import threading
 
 import pytest
 
+from doubles import RecordingBus
+
 from xams_sc.bus import (ACK_LS_RANGE, ACK_LS_SETPOINT, TOPIC_AUDIT,
                          TOPIC_LS_RANGE, TOPIC_LS_SETPOINT)
 from xams_sc.config import load
 from xams_sc.devices.lakeshore import LakeShoreService
-
-
-class RecordingBus:
-    def __init__(self):
-        self.published = []
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, json.loads(payload)))
-
-    def subscribe(self, topic, handler): pass
-    def connect(self): pass
-    def disconnect(self): pass
-    def publish_state(self, s, st): pass
-    def publish_heartbeat(self, s): pass
-    def publish_measurement(self, m): pass
-
-    def last(self, topic):
-        for t, p in reversed(self.published):
-            if t == topic:
-                return p
-        return None
-
-    def all(self, topic):
-        return [p for t, p in self.published if t == topic]
 
 
 class FakeDevice:
@@ -101,14 +79,14 @@ def setpoint(service, **kw):
     payload = {"output": 1, "by": "ap"}
     payload.update(kw)
     service._handle_setpoint(TOPIC_LS_SETPOINT, json.dumps(payload))
-    return service.bus.last(ACK_LS_SETPOINT)
+    return service.bus.last_json(ACK_LS_SETPOINT)
 
 
 def heater(service, **kw):
     payload = {"output": 1, "by": "ap"}
     payload.update(kw)
     service._handle_range(TOPIC_LS_RANGE, json.dumps(payload))
-    return service.bus.last(ACK_LS_RANGE)
+    return service.bus.last_json(ACK_LS_RANGE)
 
 
 class TestTheSetpointCanBeChanged:
@@ -124,7 +102,7 @@ class TestTheSetpointCanBeChanged:
         it to -95" is a different fact from "somebody moved it from -90"."""
         setpoint(service, value=-95.0)
 
-        record = service.bus.last(TOPIC_AUDIT)
+        record = service.bus.last_json(TOPIC_AUDIT)
         assert record["old"] == "-90.0"
         assert record["new"] == "-95.0"
         assert record["actor"] == "ap"
@@ -200,19 +178,19 @@ class TestRefusals:
     def test_a_missing_value_is_refused(self, service):
         service._handle_setpoint(TOPIC_LS_SETPOINT, json.dumps({"by": "ap"}))
 
-        assert service.bus.last(ACK_LS_SETPOINT)["ok"] is False
+        assert service.bus.last_json(ACK_LS_SETPOINT)["ok"] is False
 
     def test_unparseable_json_is_refused_without_raising(self, service):
         service._handle_setpoint(TOPIC_LS_SETPOINT, "{not json")
 
-        assert service.bus.last(ACK_LS_SETPOINT)["ok"] is False
+        assert service.bus.last_json(ACK_LS_SETPOINT)["ok"] is False
 
     def test_a_refusal_is_audited_too(self, service):
         """What somebody tried to do is as interesting afterwards as what
         they managed to do."""
         setpoint(service, value=25.0)
 
-        record = service.bus.last(TOPIC_AUDIT)
+        record = service.bus.last_json(TOPIC_AUDIT)
         assert record["result"] == "rejected"
         assert record["actor"] == "ap"
         assert "outside the permitted range" in record["detail"]
@@ -254,7 +232,7 @@ class TestTheReadBack:
         service._device = FakeDevice(obey=False)
         setpoint(service, value=-95.0)
 
-        assert service.bus.last(TOPIC_AUDIT)["result"] == "rejected"
+        assert service.bus.last_json(TOPIC_AUDIT)["result"] == "rejected"
 
 
 class TestAttribution:
@@ -263,11 +241,11 @@ class TestAttribution:
         service._handle_setpoint(TOPIC_LS_SETPOINT,
                                  json.dumps({"output": 1, "value": -95.0}))
 
-        assert service.bus.last(TOPIC_AUDIT)["actor"] == "unknown"
+        assert service.bus.last_json(TOPIC_AUDIT)["actor"] == "unknown"
 
     def test_every_command_produces_exactly_one_audit_record(self, service):
         setpoint(service, value=-95.0)
         setpoint(service, value=25.0)        # refused
         heater(service, range="high")
 
-        assert len(service.bus.all(TOPIC_AUDIT)) == 3
+        assert len(service.bus.json_on(TOPIC_AUDIT)) == 3

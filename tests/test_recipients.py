@@ -19,72 +19,15 @@ rest of the list hostage.
 """
 
 import json
-import shutil
 
-import pytest
 import yaml
-from fastapi.testclient import TestClient
 
 from xams_sc import config as config_module
-from xams_sc.api import app as app_module
 from xams_sc.model import iso, utcnow
 from xams_sc.config import (read_recipients, recipient_warnings,
                             validate_recipients, write_recipients)
 
 REPO_CONFIG = config_module.ROOT / "config"
-
-
-class FakeBus:
-    def __init__(self):
-        self.published = []
-        self.handlers = {}
-        # Set by a test that wants to play the service on the other end:
-        # called with every published command, so an ack can be fed back the
-        # way a running service would.
-        self.on_publish = None
-
-    def subscribe(self, topic, handler):
-        self.handlers[topic] = handler
-
-    def connect(self): pass
-    def disconnect(self): pass
-    def publish_state(self, service, state): pass
-    def publish_heartbeat(self, service): pass
-    def publish_measurement(self, m): pass
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, payload))
-        if self.on_publish is not None:
-            self.on_publish(topic, payload)
-
-
-class StubDrift:
-    def get(self):
-        return {"state": "ok", "dashboards": [], "detail": "stubbed"}
-
-
-@pytest.fixture
-def config_dir(tmp_path, monkeypatch):
-    d = tmp_path / "config"
-    d.mkdir()
-    for name in ("channels.yaml", "devices.yaml", "alarms.yaml"):
-        shutil.copy(REPO_CONFIG / name, d / name)
-    # ALWAYS the template, never config/recipients.yaml. That file holds real
-    # colleagues' names and mobile numbers, it is gitignored, and a fresh clone
-    # does not have one. Asserting against real people also put their numbers
-    # in this file, which is how they ended up in a public repository once.
-    shutil.copy(REPO_CONFIG / "recipients.example.yaml", d / "recipients.yaml")
-    monkeypatch.setattr(config_module, "CONFIG_DIR", d)
-    return d
-
-
-@pytest.fixture
-def client(config_dir, monkeypatch):
-    bus = FakeBus()
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
-    monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    app = app_module.create_app()
-    return TestClient(app), app, bus
 
 
 def rows(people, **extra):
@@ -176,29 +119,29 @@ def test_missing_file_is_not_an_error(tmp_path):
 
 # ------------------------------------------------------------- the page
 
-def test_page_lists_everyone(client):
-    http, _, _ = client
+def test_page_lists_everyone(webui):
+    http, _, _ = webui
     text = http.get("/alarms").text
     assert "Alice Example" in text
     assert "alice.example@example.org" in text
 
 
-def test_nav_carries_alarms(client):
-    http, _, _ = client
+def test_nav_carries_alarms(webui):
+    http, _, _ = webui
     assert 'href="/alarms"' in http.get("/").text
 
 
-def test_limits_unknown_when_engine_is_silent(client):
+def test_limits_unknown_when_engine_is_silent(webui):
     """Nothing published means unknown, never "no thresholds" (§12)."""
-    http, _, _ = client
+    http, _, _ = webui
     text = http.get("/alarms").text
     assert "Unknown" in text
     assert "has not published its" in text
 
 
-def test_limits_shown_when_published(client):
-    http, app, bus = client
-    bus.handlers["xams/status/#"](
+def test_limits_shown_when_published(webui):
+    http, app, bus = webui
+    bus.deliver(
         "xams/status/limits",
         '{"pmain":{"high":2.1,"hihi":2.5,"low":0.9}}')
     text = http.get("/alarms").text
@@ -206,8 +149,8 @@ def test_limits_shown_when_published(client):
     assert "pmain" in text
 
 
-def test_adding_somebody(client, config_dir):
-    http, _, _ = client
+def test_adding_somebody(webui, config_dir):
+    http, _, _ = webui
     people = read_recipients(config_dir)
     data = rows(people)
     data[f"name-{len(people)}"] = "Ada Lovelace"
@@ -221,9 +164,9 @@ def test_adding_somebody(client, config_dir):
     assert any(p["name"] == "Ada Lovelace" and p["enabled"] for p in saved)
 
 
-def test_disabling_keeps_the_number(client, config_dir):
+def test_disabling_keeps_the_number(webui, config_dir):
     """Notify off is not removal: the number survives a holiday (§4.4)."""
-    http, _, _ = client
+    http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
         if p["name"] == "Bob Example":
@@ -235,8 +178,8 @@ def test_disabling_keeps_the_number(client, config_dir):
     assert saved["Bob Example"]["phone"] == "+31600000002"
 
 
-def test_removing_somebody(client, config_dir):
-    http, _, _ = client
+def test_removing_somebody(webui, config_dir):
+    http, _, _ = webui
     people = read_recipients(config_dir)
     index = [i for i, p in enumerate(people)
              if p["name"] == "Carol Example"][0]
@@ -249,9 +192,9 @@ def test_removing_somebody(client, config_dir):
     assert len(saved) == len(people) - 1
 
 
-def test_blank_phone_survives_a_save(client, config_dir):
+def test_blank_phone_survives_a_save(webui, config_dir):
     """The thing the user asked to keep: `phone: ""` stays an empty string."""
-    http, _, _ = client
+    http, _, _ = webui
     http.post("/alarms/recipients",
               data=dict(rows(read_recipients(config_dir)), by="apc"),
               follow_redirects=False)
@@ -261,9 +204,9 @@ def test_blank_phone_survives_a_save(client, config_dir):
     assert dan["phone"] == ""
 
 
-def test_a_bad_row_refuses_the_whole_save(client, config_dir):
+def test_a_bad_row_refuses_the_whole_save(webui, config_dir):
     """All or nothing: a half-saved list is a list nobody chose."""
-    http, _, _ = client
+    http, _, _ = webui
     before = (config_dir / "recipients.yaml").read_text()
     people = read_recipients(config_dir)
     data = rows(people)
@@ -276,13 +219,13 @@ def test_a_bad_row_refuses_the_whole_save(client, config_dir):
     assert (config_dir / "recipients.yaml").read_text() == before
 
 
-def test_a_contactless_row_saves_with_a_warning(client, config_dir):
+def test_a_contactless_row_saves_with_a_warning(webui, config_dir):
     """Somebody with no email and no phone is saved, loudly.
 
     Refusing it meant one half-filled row - a name typed while the number is
     looked up - refused every other change on the page with it.
     """
-    http, _, _ = client
+    http, _, _ = webui
     people = read_recipients(config_dir)
     data = rows(people)
     data[f"name-{len(people)}"] = "Nobody"      # no email, no phone
@@ -295,9 +238,9 @@ def test_a_contactless_row_saves_with_a_warning(client, config_dir):
     assert any(p["name"] == "Nobody" for p in read_recipients(config_dir))
 
 
-def test_the_page_marks_who_hears_nothing(client, config_dir):
+def test_the_page_marks_who_hears_nothing(webui, config_dir):
     """Marked where the blank is, not only in a banner that scrolls away."""
-    http, _, _ = client
+    http, _, _ = webui
     people = read_recipients(config_dir)
     people.append({"name": "Nobody", "email": "", "phone": "",
                    "enabled": True})
@@ -305,17 +248,17 @@ def test_the_page_marks_who_hears_nothing(client, config_dir):
     assert "hears-nothing" in http.get("/alarms").text
 
 
-def test_the_boxes_are_not_browser_default_white(client):
+def test_the_boxes_are_not_browser_default_white(webui):
     """The inputs read as the dark panel they sit in, not as four lamps."""
-    http, _, _ = client
+    http, _, _ = webui
     text = http.get("/alarms").text
     assert 'class="recip-box' in text
     assert 'style="width:95%"' not in text
 
 
-def test_empty_spare_row_is_not_an_error(client, config_dir):
+def test_empty_spare_row_is_not_an_error(webui, config_dir):
     """Saving without using the spare row must simply work."""
-    http, _, _ = client
+    http, _, _ = webui
     before = read_recipients(config_dir)
     response = http.post("/alarms/recipients",
                          data=dict(rows(before), by="apc"),
@@ -327,8 +270,8 @@ def test_empty_spare_row_is_not_an_error(client, config_dir):
     assert len(read_recipients(config_dir)) == len(before)
 
 
-def test_disabling_everyone_warns_but_is_allowed(client, config_dir):
-    http, _, _ = client
+def test_disabling_everyone_warns_but_is_allowed(webui, config_dir):
+    http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
         p["enabled"] = False
@@ -340,8 +283,8 @@ def test_disabling_everyone_warns_but_is_allowed(client, config_dir):
     assert all(not p["enabled"] for p in read_recipients(config_dir))
 
 
-def test_the_page_says_so_when_nobody_is_enabled(client, config_dir):
-    http, _, _ = client
+def test_the_page_says_so_when_nobody_is_enabled(webui, config_dir):
+    http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
         p["enabled"] = False
@@ -349,8 +292,8 @@ def test_the_page_says_so_when_nobody_is_enabled(client, config_dir):
     assert "alarms reach nobody" in http.get("/alarms").text
 
 
-def test_changes_are_audited(client, config_dir):
-    http, _, bus = client
+def test_changes_are_audited(webui, config_dir):
+    http, _, bus = webui
     people = read_recipients(config_dir)
     for p in people:
         if p["name"] == "Bob Example":
@@ -362,9 +305,9 @@ def test_changes_are_audited(client, config_dir):
                and "disabled" in a and '"actor":"apc"' in a for a in audits)
 
 
-def test_removal_is_audited_with_what_was_lost(client, config_dir):
+def test_removal_is_audited_with_what_was_lost(webui, config_dir):
     """The file no longer mentions them, so the trail must (§4.4)."""
-    http, _, bus = client
+    http, _, bus = webui
     people = read_recipients(config_dir)
     index = [i for i, p in enumerate(people)
              if p["name"] == "Carol Example"][0]
@@ -381,15 +324,15 @@ def test_removal_is_audited_with_what_was_lost(client, config_dir):
     assert people[index]["email"] in line[0]
 
 
-def test_an_unchanged_save_is_not_audited(client, config_dir):
-    http, _, bus = client
+def test_an_unchanged_save_is_not_audited(webui, config_dir):
+    http, _, bus = webui
     http.post("/alarms/recipients",
               data=dict(rows(read_recipients(config_dir)), by="apc"),
               follow_redirects=False)
     assert [p for topic, p in bus.published if topic == "xams/audit"] == []
 
 
-def test_the_reload_notices_a_ticked_checkbox(client):
+def test_the_reload_notices_a_ticked_checkbox(webui):
     """The auto-reload must not discard an unsent tick.
 
     A checkbox's `value` is "on" whether or not it is ticked, so comparing
@@ -397,7 +340,7 @@ def test_the_reload_notices_a_ticked_checkbox(client):
     losing — **Notify** and **Remove** — and losing a *Remove* tick silently
     is the same class of bug as the HV boxes that reverted after ten seconds.
     """
-    http, _, _ = client
+    http, _, _ = webui
     script = http.get("/alarms").text
     assert "defaultChecked" in script
 
@@ -413,29 +356,29 @@ def test_the_reload_notices_a_ticked_checkbox(client):
 
 def notify_status(bus, enabled, by="apc", at="2026-09-20T10:00:00Z"):
     """What the alarm engine publishes, retained, about the switch."""
-    bus.handlers["xams/status/#"](
+    bus.deliver(
         "xams/status/notify",
         json.dumps({"enabled": enabled, "by": by, "at": at}))
 
 
-def test_unknown_until_the_engine_says(client):
+def test_unknown_until_the_engine_says(webui):
     """Nothing published is unknown, never "on" (§12)."""
-    http, _, _ = client
+    http, _, _ = webui
     text = http.get("/alarms").text
     assert "has not said whether it would notify" in text
     assert "disable all alarms" not in text
 
 
-def test_the_button_is_offered_when_alarms_are_on(client):
-    http, _, bus = client
+def test_the_button_is_offered_when_alarms_are_on(webui):
+    http, _, bus = webui
     notify_status(bus, True)
     text = http.get("/alarms").text
     assert "disable all alarms" in text
     assert "Alarms are notifying" in text
 
 
-def test_the_alarms_page_shouts_when_they_are_off(client):
-    http, _, bus = client
+def test_the_alarms_page_shouts_when_they_are_off(webui):
+    http, _, bus = webui
     notify_status(bus, False)
     text = http.get("/alarms").text
     assert "ALARMS ARE DISABLED" in text
@@ -443,19 +386,19 @@ def test_the_alarms_page_shouts_when_they_are_off(client):
     assert "apc" in text
 
 
-def test_the_overview_says_alarms_disabled_not_running(client):
+def test_the_overview_says_alarms_disabled_not_running(webui):
     """The services row must say what the engine is DOING (§4.4a)."""
-    http, _, bus = client
-    bus.handlers["xams/status/#"]("xams/status/alarms/state", "running")
+    http, _, bus = webui
+    bus.deliver("xams/status/alarms/state", "running")
     notify_status(bus, False)
     text = http.get("/").text
     assert "alarms disabled" in text
     assert "ALARMS ARE DISABLED" in text
 
 
-def test_the_overview_says_running_when_they_are_on(client):
-    http, _, bus = client
-    bus.handlers["xams/status/#"]("xams/status/alarms/state", "running")
+def test_the_overview_says_running_when_they_are_on(webui):
+    http, _, bus = webui
+    bus.deliver("xams/status/alarms/state", "running")
     notify_status(bus, True)
     text = http.get("/").text
     assert "alarms disabled" not in text
@@ -471,19 +414,19 @@ def all_well(app, bus):
     """
     now = iso(utcnow())
     for service in ("cdaq", "caen", "lakeshore", "ups", "derived"):
-        bus.handlers["xams/status/#"](
+        bus.deliver(
             f"xams/status/{service}/heartbeat", now)
     for ch in app.state.system.config.enabled_channels():
-        bus.handlers["xams/meas/#"](
+        bus.deliver(
             f"xams/meas/{ch.name}",
             json.dumps({"t": now, "ch": ch.name, "v": 1.0,
                         "u": ch.unit, "q": "ok"}))
 
 
-def test_the_badge_never_says_all_ok_with_alarms_off(client):
+def test_the_badge_never_says_all_ok_with_alarms_off(webui):
     """"ALL OK" on a system nobody would be told about is the sentence this
     whole subsystem exists to prevent."""
-    http, app, bus = client
+    http, app, bus = webui
     all_well(app, bus)
     assert http.get("/healthz").text == "ALL OK"      # the fixture is sound
 
@@ -493,24 +436,24 @@ def test_the_badge_never_says_all_ok_with_alarms_off(client):
     assert "ALARMS ARE DISABLED" in http.get("/").text
 
 
-def test_a_live_alarm_still_outranks_the_switch(client):
-    http, _, bus = client
+def test_a_live_alarm_still_outranks_the_switch(webui):
+    http, _, bus = webui
     notify_status(bus, False)
-    bus.handlers["xams/alarm/#"](
+    bus.deliver(
         "xams/alarm/pmain",
         '{"state":"major","threshold":"hihi","value":2.5}')
     assert "MAJOR ALARM" in http.get("/healthz").text
 
 
-def test_api_state_carries_the_switch(client):
-    http, _, bus = client
+def test_api_state_carries_the_switch(webui):
+    http, _, bus = webui
     notify_status(bus, False)
     body = http.get("/api/state").json()
     assert body["notifications"] == {"known": True, "enabled": False,
                                      "by": "apc", "at": "2026-09-20T10:00:00Z"}
 
 
-def test_api_state_survives_a_channel_that_has_never_reported(client):
+def test_api_state_survives_a_channel_that_has_never_reported(webui):
     """One silent channel must not take the whole endpoint down.
 
     A channel with no reading carries an age of infinity, which strict JSON
@@ -520,7 +463,7 @@ def test_api_state_survives_a_channel_that_has_never_reported(client):
     is the same failure the pages are built to avoid. `null` is how a service
     with no heartbeat already reports the same thing.
     """
-    http, app, bus = client
+    http, app, bus = webui
     silent = list(app.state.system.config.enabled_channels())[0].name
 
     body = http.get("/api/state").json()          # nothing has reported yet
@@ -533,10 +476,10 @@ def test_api_state_survives_a_channel_that_has_never_reported(client):
     assert all(isinstance(c["age_s"], float) for c in body["channels"])
 
 
-def test_switching_it_off_is_a_command_and_is_audited(client):
+def test_switching_it_off_is_a_command_and_is_audited(webui):
     """The UI asks over the bus and reports what came back - it does not
     decide for itself that the alarms are off."""
-    http, _, bus = client
+    http, _, bus = webui
 
     def answer(topic, payload):
         # Only the command. The handler audits on the same bus, and a fake
@@ -544,7 +487,7 @@ def test_switching_it_off_is_a_command_and_is_audited(client):
         if topic != "xams/cmd/alarms/notify":
             return
         request = json.loads(payload)
-        bus.handlers["xams/ack/alarms/notify"](
+        bus.deliver(
             "xams/ack/alarms/notify",
             json.dumps({"ok": True, "enabled": request["enabled"],
                         "was": True, "active": ["pmain"],
@@ -561,9 +504,9 @@ def test_switching_it_off_is_a_command_and_is_audited(client):
                and '"actor":"apc"' in a for a in audits)
 
 
-def test_a_silent_engine_is_reported_as_a_refusal(client):
+def test_a_silent_engine_is_reported_as_a_refusal(webui):
     """No ack means it did not happen, and the page must not claim it did."""
-    http, app, _ = client
+    http, app, _ = webui
     app.state.system.command = lambda *a, **kw: {
         "ok": False, "reason": "the alarms service did not answer"}
     response = http.post("/alarms/notify", data={"enabled": "0", "by": "apc"},
@@ -573,26 +516,26 @@ def test_a_silent_engine_is_reported_as_a_refusal(client):
 
 # ------------------------------------------- the "acting as" suggestions
 
-def test_the_operator_box_offers_the_recipients(client):
+def test_the_operator_box_offers_the_recipients(webui):
     """The names are typed a few times a day and end up in the audit trail,
     where `alice`, `A Example` and `Alice Example` are three people."""
-    http, _, _ = client
+    http, _, _ = webui
     text = http.get("/").text
     assert 'list="operators"' in text
     assert '<option value="Bob Example">' in text
 
 
-def test_the_suggestions_are_on_every_page(client):
-    http, _, _ = client
+def test_the_suggestions_are_on_every_page(webui):
+    http, _, _ = webui
     for path in ("/", "/status", "/hv", "/alarms", "/logs"):
         assert '<option value="Bob Example">' in http.get(path).text, (
             "%s offers no names under 'acting as'" % path)
 
 
-def test_a_disabled_recipient_is_still_offered(client, config_dir):
+def test_a_disabled_recipient_is_still_offered(webui, config_dir):
     """Disabled means "do not notify me", which is usually somebody away -
     exactly when a colleague is the one at the keyboard."""
-    http, _, _ = client
+    http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
         if p["name"] == "Bob Example":
@@ -603,12 +546,12 @@ def test_a_disabled_recipient_is_still_offered(client, config_dir):
     assert '<option value="Bob Example">' in http.get("/").text
 
 
-def test_a_name_that_is_not_offered_is_still_accepted(client, config_dir):
+def test_a_name_that_is_not_offered_is_still_accepted(webui, config_dir):
     """The heart of it being a datalist and not a select. A student on shift
     is not an alarm recipient, and the alternative to typing their own name
     is picking a colleague's - which puts the WRONG name in the audit trail,
     worse than no name at all."""
-    http, _, bus = client
+    http, _, bus = webui
     http.post("/operator", data={"operator": "Visiting Student"})
 
     people = read_recipients(config_dir)
@@ -620,11 +563,11 @@ def test_a_name_that_is_not_offered_is_still_accepted(client, config_dir):
     assert any('"actor":"Visiting Student"' in a for a in audits)
 
 
-def test_the_names_follow_an_edit_without_a_restart(client, config_dir):
+def test_the_names_follow_an_edit_without_a_restart(webui, config_dir):
     """The list is cached on the file's timestamp, because it renders in the
     header of pages that reload every ten seconds. A cache that outlived an
     edit made on /alarms would be a stale list nobody could explain."""
-    http, _, _ = client
+    http, _, _ = webui
     assert "Ada Lovelace" not in http.get("/").text
 
     people = read_recipients(config_dir)
@@ -638,10 +581,10 @@ def test_the_names_follow_an_edit_without_a_restart(client, config_dir):
     assert '<option value="Ada Lovelace">' in http.get("/").text
 
 
-def test_no_recipient_file_leaves_the_box_working(client, config_dir):
+def test_no_recipient_file_leaves_the_box_working(webui, config_dir):
     """Nothing to suggest is not a broken header: it is a plain text field,
     which is what it was before any of this."""
-    http, _, _ = client
+    http, _, _ = webui
     (config_dir / "recipients.yaml").unlink()
 
     text = http.get("/").text

@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from xams_sc.api import app as app_module
 
-from test_webui_flow_reset import FakeBus, StubDrift  # noqa: F401
+from doubles import RecordingBus, StubDrift  # noqa: F401
 
 
 LINE = "2026-09-18 13:27:0%d INFO     [caen] xams_sc.devices.caen: %s"
@@ -38,7 +38,7 @@ def logs(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(logs, monkeypatch):
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: FakeBus())
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     return TestClient(app_module.create_app())
 

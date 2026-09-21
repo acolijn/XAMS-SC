@@ -35,3 +35,7 @@ tools/installers/
 
 # Scratch files from ad-hoc probing
 .scratch_*
+
+# Coverage measurement output
+.coverage
+htmlcov/

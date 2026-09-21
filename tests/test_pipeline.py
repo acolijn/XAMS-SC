@@ -16,42 +16,12 @@ from pathlib import Path
 
 import pytest
 
+from doubles import RecordingBus
+
 from xams_sc.config import load
 from xams_sc.devices.sim import SimService
 from xams_sc.model import Measurement, Quality, utcnow
 from xams_sc.sinks.jsonl_writer import JsonlWriter
-
-
-class RecordingBus:
-    """Stands in for Bus: records instead of publishing."""
-
-    def __init__(self):
-        self.measurements: list[Measurement] = []
-        self.states: list = []
-        self.heartbeats: list[str] = []
-        # A list, mirroring the real Bus. This stand-in originally used a dict
-        # keyed by topic — the same flaw the real Bus had — so the suite was
-        # structurally incapable of catching the fanout bug. A double that
-        # reproduces the defect under test proves nothing.
-        self.handlers: list = []
-
-    def publish_measurement(self, m):
-        self.measurements.append(m)
-
-    def publish_state(self, service, state):
-        self.states.append((service, state))
-
-    def publish_heartbeat(self, service):
-        self.heartbeats.append(service)
-
-    def subscribe(self, topic, handler):
-        self.handlers.append((topic, handler))
-
-    def connect(self):
-        pass
-
-    def disconnect(self):
-        pass
 
 
 @pytest.fixture

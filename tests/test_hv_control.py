@@ -18,6 +18,8 @@ import json
 
 import pytest
 
+from doubles import RecordingBus
+
 from xams_sc.bus import (ACK_HV_OUTPUT, ACK_HV_VSET, TOPIC_AUDIT,
                          TOPIC_HV_OUTPUT, TOPIC_HV_VSET)
 from xams_sc.config import load
@@ -27,36 +29,6 @@ from xams_sc.model import Measurement, Quality, utcnow
 
 ENABLED = 1 << BIT_ON
 DISABLED = 1 << BIT_DISABLED
-
-
-class RecordingBus:
-    def __init__(self):
-        self.published = []
-        self.measurements = []
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, json.loads(payload)))
-
-    def subscribe(self, topic, handler): pass
-    def connect(self): pass
-    def disconnect(self): pass
-    def publish_state(self, s, st): pass
-    def publish_heartbeat(self, s): pass
-
-    def publish_measurement(self, m):
-        self.measurements.append(m)
-
-    def measured(self, channel):
-        for m in reversed(self.measurements):
-            if m.channel == channel:
-                return m
-        return None
-
-    def last(self, topic):
-        for t, p in reversed(self.published):
-            if t == topic:
-                return p
-        return None
 
 
 class FakeReader:
@@ -117,7 +89,7 @@ def service(tmp_path):
 def send(service, channel="hv_cathode_vset", value=-1000.0, by="ap"):
     service._handle_vset(TOPIC_HV_VSET, json.dumps(
         {"channel": channel, "value": value, "by": by}))
-    return service.bus.last(ACK_HV_VSET)
+    return service.bus.last_json(ACK_HV_VSET)
 
 
 class TestTheInvariant:
@@ -286,7 +258,7 @@ class TestRefusalsAreRecorded:
         service._readers["hv_2"].stat = DISABLED
         send(service, value=-1000.0)
 
-        record = service.bus.last(TOPIC_AUDIT)
+        record = service.bus.last_json(TOPIC_AUDIT)
         assert record["result"] == "rejected"
         assert record["action"] == "caen_vset"
         assert record["actor"] == "ap"
@@ -296,7 +268,7 @@ class TestRefusalsAreRecorded:
         service._readers["hv_2"].vset = 500.0
         send(service, value=-1000.0)
 
-        record = service.bus.last(TOPIC_AUDIT)
+        record = service.bus.last_json(TOPIC_AUDIT)
         assert record["result"] == "ok"
         assert record["old"] == "-500.0"
         assert record["new"] == "-1000.0"
@@ -305,7 +277,7 @@ class TestRefusalsAreRecorded:
         service._handle_vset(TOPIC_HV_VSET, json.dumps(
             {"channel": "hv_cathode_vset", "value": 0.0}))
 
-        assert service.bus.last(TOPIC_AUDIT)["actor"] == "unknown"
+        assert service.bus.last_json(TOPIC_AUDIT)["actor"] == "unknown"
 
 
 class TestBadInput:
@@ -319,7 +291,7 @@ class TestBadInput:
     def test_it_is_refused_without_raising(self, service, payload):
         service._handle_vset(TOPIC_HV_VSET, payload)
 
-        assert service.bus.last(ACK_HV_VSET)["ok"] is False
+        assert service.bus.last_json(ACK_HV_VSET)["ok"] is False
         assert service._readers["hv_2"].written == []
 
     def test_a_simulating_service_refuses_to_write(self, service):
@@ -355,7 +327,7 @@ class TestWhatTheDriverCannotDo:
 def energise(service, channel="hv_nai_vset", on=True, by="ap"):
     service._handle_output(TOPIC_HV_OUTPUT, json.dumps(
         {"channel": channel, "on": on, "by": by}))
-    return service.bus.last(ACK_HV_OUTPUT)
+    return service.bus.last_json(ACK_HV_OUTPUT)
 
 
 class TestEnergisingSaysSoAtOnce:

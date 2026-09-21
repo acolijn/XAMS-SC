@@ -22,10 +22,7 @@ on the rendered HTML rather than on the templates.
 
 import pathlib
 import re
-import shutil
 
-import pytest
-from fastapi.testclient import TestClient
 from jinja2 import Environment
 
 from xams_sc import config as config_module
@@ -38,42 +35,6 @@ REPO_CONFIG = config_module.ROOT / "config"
 PAGES = ("/", "/alarms", "/hv", "/hv/defaults", "/status", "/mimic")
 
 HANDLER = re.compile(r"""onsubmit=(?P<q>["'])(?P<body>.*?)(?P=q)""", re.S)
-
-
-class _Bus:
-    def __init__(self):
-        self.handlers = {}
-
-    def subscribe(self, topic, handler):
-        self.handlers[topic] = handler
-
-    def connect(self): pass
-    def disconnect(self): pass
-    def publish_state(self, service, state): pass
-    def publish_heartbeat(self, service): pass
-    def publish_measurement(self, m): pass
-    def publish_raw(self, topic, payload, retain=False): pass
-
-
-class _Drift:
-    def get(self):
-        return {"state": "ok", "dashboards": [], "detail": "stubbed"}
-
-
-@pytest.fixture
-def http(tmp_path, monkeypatch):
-    d = tmp_path / "config"
-    d.mkdir()
-    for name in ("channels.yaml", "devices.yaml", "alarms.yaml"):
-        shutil.copy(REPO_CONFIG / name, d / name)
-    # ALWAYS the template, never config/recipients.yaml: that file holds real
-    # colleagues' names and mobile numbers, it is gitignored, and a fresh clone
-    # does not have one.
-    shutil.copy(REPO_CONFIG / "recipients.example.yaml", d / "recipients.yaml")
-    monkeypatch.setattr(config_module, "CONFIG_DIR", d)
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: _Bus())
-    monkeypatch.setattr(app_module, "DriftWatcher", _Drift)
-    return TestClient(app_module.create_app())
 
 
 def handlers(html):
@@ -89,10 +50,10 @@ def test_the_pages_have_handlers_to_check():
     assert found >= 3
 
 
-def test_no_confirmation_contains_a_raw_newline(http):
+def test_no_confirmation_contains_a_raw_newline(client):
     seen = 0
     for page in PAGES:
-        response = http.get(page)
+        response = client.get(page)
         assert response.status_code == 200, page
         for handler in handlers(response.text):
             seen += 1
@@ -103,10 +64,10 @@ def test_no_confirmation_contains_a_raw_newline(http):
     assert seen >= 3
 
 
-def test_no_confirmation_breaks_out_of_its_attribute(http):
+def test_no_confirmation_breaks_out_of_its_attribute(client):
     """The quote that opened the attribute must not appear inside it."""
     for page in PAGES:
-        for m in HANDLER.finditer(http.get(page).text):
+        for m in HANDLER.finditer(client.get(page).text):
             assert m.group("q") not in m.group("body"), (
                 "%s: the handler ends early at a %s - the confirm text is "
                 "stray markup: %r" % (page, m.group("q"), m.group("body")[:80]))

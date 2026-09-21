@@ -22,32 +22,11 @@ awkward to arrange in the lab and easy to regress.
 
 import pytest
 
+from doubles import RecordingBus
+
 from xams_sc.config import load
 from xams_sc.devices.caen import CaenService
 from xams_sc.model import Quality
-
-
-class RecordingBus:
-    def __init__(self):
-        self.measurements = []
-
-    def publish_measurement(self, m):
-        self.measurements.append(m)
-
-    def publish_state(self, s, st):
-        pass
-
-    def publish_heartbeat(self, s):
-        pass
-
-    def subscribe(self, t, h):
-        pass
-
-    def connect(self):
-        pass
-
-    def disconnect(self):
-        pass
 
 
 class FakeReader:

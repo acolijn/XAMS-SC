@@ -23,23 +23,9 @@ Four states, and the middle two are the ones worth care:
 import pytest
 from fastapi.testclient import TestClient
 
+from doubles import RecordingBus, StubDrift
 from xams_sc.api import app as app_module
 from xams_sc.api.state import ChannelView
-
-
-class FakeBus:
-    def subscribe(self, topic, handler): pass
-    def connect(self): pass
-    def disconnect(self): pass
-    def publish_state(self, service, state): pass
-    def publish_heartbeat(self, service): pass
-    def publish_measurement(self, m): pass
-    def publish_raw(self, topic, payload, retain=False): pass
-
-
-class StubDrift:
-    def get(self):
-        return {"state": "ok", "dashboards": [], "detail": "stubbed"}
 
 
 def view(name, value, unit="V"):
@@ -50,7 +36,7 @@ def view(name, value, unit="V"):
 @pytest.fixture
 def page(monkeypatch):
     """Render /hv with the status word and voltage of our choosing."""
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: FakeBus())
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     app = app_module.create_app()
     state = app.state.system
@@ -79,7 +65,7 @@ def page(monkeypatch):
 @pytest.fixture
 def page_html(monkeypatch):
     """Like `page`, but returns the whole page and lets VSET be set too."""
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: FakeBus())
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     app = app_module.create_app()
     state = app.state.system

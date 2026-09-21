@@ -18,68 +18,34 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from doubles import RecordingBus, StubDrift
 from xams_sc.api import app as app_module
 from xams_sc.bus import TOPIC_FLOW_RESET
-from xams_sc.model import ServiceState
 
 
-class FakeBus:
-    """Stands in for the broker, and for the derived service behind it.
+def flow_reset_bus(acknowledge=True):
+    """A RecordingBus that also plays the derived service behind the broker.
 
-    When `acknowledge` is set it answers a reset the way DerivedService does,
-    which is what lets the round trip be tested without a broker.
+    Answering the reset is what lets the round trip be tested without a
+    broker. `acknowledge=False` is the service being down, which must read as
+    failure and not as a silent success.
     """
-
-    def __init__(self, acknowledge=True):
-        self.acknowledge = acknowledge
-        self.published = []
-        self.handlers = []
-
-    def subscribe(self, topic, handler):
-        self.handlers.append((topic, handler))
-
-    def connect(self):
-        pass
-
-    def disconnect(self):
-        pass
-
-    def publish_state(self, service, state):
-        pass
-
-    def publish_heartbeat(self, service):
-        pass
-
-    def publish_measurement(self, m):
-        pass
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, payload))
-        if topic == TOPIC_FLOW_RESET and self.acknowledge:
-            reply = json.dumps({"ok": True, "start": "2026-09-17T10:00:00Z",
-                                "stop": "2026-09-17T17:00:00Z",
-                                "total_g": 1987.654, "gaps_s": 0.0,
-                                "by": json.loads(payload)["by"]})
-            for topic_pattern, handler in self.handlers:
-                if topic_pattern == "xams/ack/derived/flow_reset":
-                    handler(topic_pattern, reply)
+    bus = RecordingBus()
+    if acknowledge:
+        def reply(topic, payload):
+            if topic != TOPIC_FLOW_RESET:
+                return
+            bus.ack("xams/ack/derived/flow_reset",
+                    {"ok": True, "start": "2026-09-17T10:00:00Z",
+                     "stop": "2026-09-17T17:00:00Z", "total_g": 1987.654,
+                     "gaps_s": 0.0, "by": json.loads(payload)["by"]})
+        bus.on_publish = reply
+    return bus
 
 
 @pytest.fixture
 def bus():
-    return FakeBus()
-
-
-class StubDrift:
-    """The dashboard-drift check, stubbed out.
-
-    Without this the web UI tests reach across to Grafana over HTTP, which
-    makes them fail on any machine where Grafana is merely stopped — and the
-    thing they are testing has nothing to do with dashboards.
-    """
-
-    def get(self):
-        return {"state": "ok", "dashboards": [], "detail": "stubbed"}
+    return flow_reset_bus()
 
 
 @pytest.fixture
@@ -139,7 +105,7 @@ class TestTheAnswerIsReportedHonestly:
         If the derived service is down, the period was NOT closed. Saying it
         was would leave somebody believing they had a fresh integration.
         """
-        silent = FakeBus(acknowledge=False)
+        silent = flow_reset_bus(acknowledge=False)
         monkeypatch.setattr(app_module, "Bus", lambda **kw: silent)
         monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
         app = app_module.create_app()

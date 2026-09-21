@@ -11,20 +11,11 @@ from datetime import timedelta
 
 import pytest
 
+from doubles import RecordingBus
+
 from xams_sc.config import load
 from xams_sc.devices.derived import MAX_INTERVAL_S, FlowIntegrator
 from xams_sc.model import Measurement, Quality, utcnow
-
-
-class FakeBus:
-    def __init__(self):
-        self.published = []
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, json.loads(payload)))
-
-    def subscribe(self, topic, handler):
-        pass
 
 
 @pytest.fixture
@@ -38,12 +29,13 @@ def flow(t, value, quality=Quality.OK):
 
 
 def totals(bus):
-    return [p["v"] for t, p in bus.published if t.endswith("fm101_total")]
+    return [p["v"] for t, p in bus.published
+            if t.endswith("fm101_total") for p in [json.loads(p)]]
 
 
 class TestAccumulation:
     def test_six_grams_per_minute_for_one_minute_is_six_grams(self, config, tmp_path):
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=tmp_path / "s.json")
         t0 = utcnow()
         it.on_measurement(flow(t0, 6.0))
@@ -51,7 +43,7 @@ class TestAccumulation:
         assert it.state.total_g == pytest.approx(6.0)
 
     def test_ten_second_steps(self, config, tmp_path):
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
@@ -61,7 +53,7 @@ class TestAccumulation:
         assert it.state.total_g == pytest.approx(6.0)
 
     def test_the_total_is_published(self, config, tmp_path):
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
@@ -69,10 +61,10 @@ class TestAccumulation:
         assert totals(bus)[-1] == pytest.approx(6.0)
 
     def test_unit_is_grams(self, config, tmp_path):
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=tmp_path / "s.json")
         it.on_measurement(flow(utcnow(), 6.0))
-        assert bus.published[-1][1]["u"] == "g"
+        assert json.loads(bus.published[-1][1])["u"] == "g"
 
 
 class TestSurvivesRestart:
@@ -81,7 +73,7 @@ class TestSurvivesRestart:
 
     def test_total_is_restored(self, config, tmp_path):
         path = tmp_path / "s.json"
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=path)
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
@@ -90,7 +82,7 @@ class TestSurvivesRestart:
         assert before > 0
 
         # A completely new instance, as after a service restart.
-        again = FlowIntegrator(FakeBus(), config, state_path=path)
+        again = FlowIntegrator(RecordingBus(), config, state_path=path)
         assert again.state.total_g == pytest.approx(before)
 
     def test_accumulation_continues_after_a_restart(self, config, tmp_path):
@@ -107,11 +99,11 @@ class TestSurvivesRestart:
         """
         path = tmp_path / "s.json"
         t = utcnow()
-        it = FlowIntegrator(FakeBus(), config, state_path=path)
+        it = FlowIntegrator(RecordingBus(), config, state_path=path)
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=60), 6.0))
 
-        again = FlowIntegrator(FakeBus(), config, state_path=path)
+        again = FlowIntegrator(RecordingBus(), config, state_path=path)
         again.on_measurement(flow(t + timedelta(seconds=120), 6.0))
 
         one_ms_of_flow = 6.0 * (0.001 / 60.0)
@@ -121,7 +113,7 @@ class TestSurvivesRestart:
         """The bias this guards against: truncating the previous timestamp
         makes every dt slightly too long, always in the same direction, so an
         integrator drifts upward forever. Exact equality here, no tolerance."""
-        it = FlowIntegrator(FakeBus(), config, state_path=tmp_path / "s.json")
+        it = FlowIntegrator(RecordingBus(), config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         for i in range(1, 101):
@@ -134,7 +126,7 @@ class TestSurvivesRestart:
         path = tmp_path / "s.json"
         path.write_text("{not json", encoding="utf-8")
         with pytest.raises(Exception):
-            FlowIntegrator(FakeBus(), config, state_path=path)
+            FlowIntegrator(RecordingBus(), config, state_path=path)
 
 
 class TestGaps:
@@ -142,7 +134,7 @@ class TestGaps:
     wrong."""
 
     def test_a_long_outage_is_not_integrated(self, config, tmp_path):
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
@@ -152,15 +144,15 @@ class TestGaps:
 
     def test_the_gap_is_published_with_the_total(self, config, tmp_path):
         """The total carries the evidence that it is an underestimate."""
-        bus = FakeBus()
+        bus = RecordingBus()
         it = FlowIntegrator(bus, config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=2 * 3600), 6.0))
-        assert bus.published[-1][1]["gaps_s"] == pytest.approx(7200, abs=1)
+        assert json.loads(bus.published[-1][1])["gaps_s"] == pytest.approx(7200, abs=1)
 
     def test_a_bad_sample_is_not_integrated(self, config, tmp_path):
-        it = FlowIntegrator(FakeBus(), config, state_path=tmp_path / "s.json")
+        it = FlowIntegrator(RecordingBus(), config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=30), None, Quality.ERROR))
@@ -168,7 +160,7 @@ class TestGaps:
         assert it.state.gaps_s == pytest.approx(30, abs=1)
 
     def test_a_normal_interval_is_integrated(self, config, tmp_path):
-        it = FlowIntegrator(FakeBus(), config, state_path=tmp_path / "s.json")
+        it = FlowIntegrator(RecordingBus(), config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=MAX_INTERVAL_S - 1), 6.0))
@@ -180,7 +172,7 @@ class TestReset:
     """§7.5: reset closes a period; it does not erase."""
 
     def test_reset_returns_the_closed_period(self, config, tmp_path):
-        it = FlowIntegrator(FakeBus(), config, state_path=tmp_path / "s.json")
+        it = FlowIntegrator(RecordingBus(), config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=60), 6.0))
@@ -191,7 +183,7 @@ class TestReset:
         assert closed["start"] and closed["stop"]
 
     def test_reset_starts_the_new_period_at_zero(self, config, tmp_path):
-        it = FlowIntegrator(FakeBus(), config, state_path=tmp_path / "s.json")
+        it = FlowIntegrator(RecordingBus(), config, state_path=tmp_path / "s.json")
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=60), 6.0))
@@ -201,10 +193,10 @@ class TestReset:
 
     def test_reset_survives_a_restart(self, config, tmp_path):
         path = tmp_path / "s.json"
-        it = FlowIntegrator(FakeBus(), config, state_path=path)
+        it = FlowIntegrator(RecordingBus(), config, state_path=path)
         t = utcnow()
         it.on_measurement(flow(t, 6.0))
         it.on_measurement(flow(t + timedelta(seconds=60), 6.0))
         it.reset("apc")
-        again = FlowIntegrator(FakeBus(), config, state_path=path)
+        again = FlowIntegrator(RecordingBus(), config, state_path=path)
         assert again.state.total_g == 0.0

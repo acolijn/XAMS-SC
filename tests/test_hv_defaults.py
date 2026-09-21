@@ -11,60 +11,14 @@ Nothing in this file touches an instrument, and nothing in the feature does
 either — which is the reason it is allowed to exist before the rest of §10a.
 """
 
-import shutil
 
 import pytest
 import yaml
-from fastapi.testclient import TestClient
 
 from xams_sc import config as config_module
-from xams_sc.api import app as app_module
 from xams_sc.config import ConfigError, load, read_hv_defaults, write_hv_defaults
 
 REPO_CONFIG = config_module.ROOT / "config"
-
-
-class FakeBus:
-    """Records what was published, so the audit trail can be asserted on."""
-
-    def __init__(self):
-        self.published = []
-
-    def subscribe(self, topic, handler): pass
-    def connect(self): pass
-    def disconnect(self): pass
-    def publish_state(self, service, state): pass
-    def publish_heartbeat(self, service): pass
-    def publish_measurement(self, m): pass
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, payload))
-
-
-class StubDrift:
-    def get(self):
-        return {"state": "ok", "dashboards": [], "detail": "stubbed"}
-
-
-@pytest.fixture
-def config_dir(tmp_path, monkeypatch):
-    """A copy of the real configuration, so a test never writes into git."""
-    d = tmp_path / "config"
-    d.mkdir()
-    for name in ("channels.yaml", "devices.yaml", "alarms.yaml"):
-        shutil.copy(REPO_CONFIG / name, d / name)
-    monkeypatch.setattr(config_module, "CONFIG_DIR", d)
-    return d
-
-
-@pytest.fixture
-def client(config_dir, monkeypatch):
-    bus = FakeBus()
-    monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
-    monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    app = app_module.create_app()
-    app.state.bus_for_test = bus
-    return TestClient(app), app, bus
 
 
 # ------------------------------------------------------------ the config layer
@@ -139,26 +93,26 @@ def test_read_hv_defaults_on_missing_file(config_dir):
 
 # ------------------------------------------------------------------- the page
 
-def test_page_lists_every_setpoint_channel(client):
-    http, app, _ = client
+def test_page_lists_every_setpoint_channel(webui):
+    http, app, _ = webui
     response = http.get("/hv/defaults")
     assert response.status_code == 200
     for label in ("cathode", "gate", "anode", "nai", "pmt_bot"):
         assert label in response.text
 
 
-def test_page_shows_the_range_but_offers_no_box_for_it(client):
+def test_page_shows_the_range_but_offers_no_box_for_it(webui):
     """The limits are displayed, because the operator needs them to choose a
     default. They are NOT an input, because that is the whole line (§4.6)."""
-    http, _, _ = client
+    http, _, _ = webui
     text = http.get("/hv/defaults").text
     assert "-2500" in text or "−2500" in text
     assert 'name="limits"' not in text
     assert 'name="hv_cathode_vset_min"' not in text
 
 
-def test_saving_writes_the_file_and_reloads(client, config_dir):
-    http, app, _ = client
+def test_saving_writes_the_file_and_reloads(webui, config_dir):
+    http, app, _ = webui
     response = http.post("/hv/defaults",
                          data={"hv_cathode_vset": "-1500", "by": "apc"},
                          follow_redirects=False)
@@ -173,8 +127,8 @@ def test_saving_writes_the_file_and_reloads(client, config_dir):
         "hv_cathode_vset"].default_setpoint == -1500.0
 
 
-def test_saving_out_of_range_writes_nothing(client, config_dir):
-    http, app, _ = client
+def test_saving_out_of_range_writes_nothing(webui, config_dir):
+    http, app, _ = webui
     response = http.post("/hv/defaults",
                          data={"hv_cathode_vset": "-2600", "by": "apc"},
                          follow_redirects=False)
@@ -184,9 +138,9 @@ def test_saving_out_of_range_writes_nothing(client, config_dir):
     assert not (config_dir / "hv_defaults.yaml").exists()
 
 
-def test_one_bad_value_refuses_the_whole_save(client, config_dir):
+def test_one_bad_value_refuses_the_whole_save(webui, config_dir):
     """All or nothing. A partial save leaves a set of defaults nobody chose."""
-    http, _, _ = client
+    http, _, _ = webui
     response = http.post("/hv/defaults",
                          data={"hv_cathode_vset": "-1500",   # fine
                                "hv_anode_vset": "9999",      # outside 0..4500
@@ -196,8 +150,8 @@ def test_one_bad_value_refuses_the_whole_save(client, config_dir):
     assert not (config_dir / "hv_defaults.yaml").exists()
 
 
-def test_non_numeric_is_refused_by_name(client, config_dir):
-    http, _, _ = client
+def test_non_numeric_is_refused_by_name(webui, config_dir):
+    http, _, _ = webui
     response = http.post("/hv/defaults",
                          data={"hv_gate_vset": "minus a lot", "by": "apc"},
                          follow_redirects=False)
@@ -206,9 +160,9 @@ def test_non_numeric_is_refused_by_name(client, config_dir):
     assert not (config_dir / "hv_defaults.yaml").exists()
 
 
-def test_every_change_is_audited(client):
+def test_every_change_is_audited(webui):
     """§10 rule 5: who, what, when, from, to — for this as for every write."""
-    http, _, bus = client
+    http, _, bus = webui
     http.post("/hv/defaults",
               data={"hv_cathode_vset": "-1500", "by": "apc"},
               follow_redirects=False)
@@ -229,16 +183,16 @@ ALL_DEFAULTS = {
 }
 
 
-def test_unchanged_values_are_not_audited(client):
+def test_unchanged_values_are_not_audited(webui):
     """Saving the page untouched must not fill the audit trail with noise."""
-    http, _, bus = client
+    http, _, bus = webui
     http.post("/hv/defaults", data=dict(ALL_DEFAULTS, by="apc"),
               follow_redirects=False)
     audits = [p for topic, p in bus.published if topic == "xams/audit"]
     assert audits == []
 
 
-def test_a_field_left_out_of_the_form_is_not_cleared(client, config_dir):
+def test_a_field_left_out_of_the_form_is_not_cleared(webui, config_dir):
     """**ABSENT is not EMPTY.**
 
     A box left blank on this page posts an empty string and means "no
@@ -248,7 +202,7 @@ def test_a_field_left_out_of_the_form_is_not_cleared(client, config_dir):
 
     Found by a test that posted one field and watched all eight get audited.
     """
-    http, app, bus = client
+    http, app, bus = webui
     http.post("/hv/defaults",
               data={"hv_cathode_vset": "-1500", "by": "apc"},
               follow_redirects=False)
@@ -262,9 +216,9 @@ def test_a_field_left_out_of_the_form_is_not_cleared(client, config_dir):
     assert "hv_cathode_vset" in audits[0]
 
 
-def test_an_empty_box_is_still_a_clear(client, config_dir):
+def test_an_empty_box_is_still_a_clear(webui, config_dir):
     """The other half of the rule above: present-but-blank does clear."""
-    http, _, _ = client
+    http, _, _ = webui
     http.post("/hv/defaults",
               data=dict(ALL_DEFAULTS, hv_cathode_vset="", by="apc"),
               follow_redirects=False)
@@ -273,13 +227,13 @@ def test_an_empty_box_is_still_a_clear(client, config_dir):
     assert body["defaults"]["hv_anode_vset"] == 4200.0
 
 
-def test_saving_asks_the_others_to_reload(client):
-    http, _, bus = client
+def test_saving_asks_the_others_to_reload(webui):
+    http, _, bus = webui
     http.post("/hv/defaults", data={"hv_cathode_vset": "-1500", "by": "apc"},
               follow_redirects=False)
     assert any(topic == "xams/cmd/all/reload" for topic, _ in bus.published)
 
 
-def test_hv_page_links_to_the_editor(client):
-    http, _, _ = client
+def test_hv_page_links_to_the_editor(webui):
+    http, _, _ = webui
     assert '/hv/defaults' in http.get("/hv").text

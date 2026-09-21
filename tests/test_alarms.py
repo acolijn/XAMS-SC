@@ -10,34 +10,12 @@ import pathlib
 import tempfile
 import time
 
-import pytest
-
+from doubles import RecordingBus
 from xams_sc.alarms.engine import AlarmEngine
 from xams_sc.alarms.flight_recorder import FlightRecorder
 from xams_sc.alarms.notify import Notifier, _mask
 from xams_sc.config import load
 from xams_sc.model import Measurement, Quality, utcnow
-
-
-class FakeBus:
-    def __init__(self):
-        self.published = []
-        self.handlers = []
-
-    def publish_raw(self, topic, payload, retain=False):
-        self.published.append((topic, payload))
-
-    def publish_measurement(self, m):
-        pass
-
-    def subscribe(self, topic, handler):
-        self.handlers.append((topic, handler))
-
-    def connect(self):
-        pass
-
-    def disconnect(self):
-        pass
 
 
 class RecordingNotifier:
@@ -62,7 +40,7 @@ def engine_with(thresholds, notify_state=None, **defaults):
         "channels": thresholds,
         "staleness": {"severity": "major", "notify": ["email"]},
     }
-    bus, notifier = FakeBus(), RecordingNotifier()
+    bus, notifier = RecordingBus(), RecordingNotifier()
     # ALWAYS an isolated path for the master switch (§4.4a). The default is
     # `data/alarm_notify.json` in the working directory, and an engine built
     # in a checkout where somebody has alarms switched off would start every
@@ -265,7 +243,7 @@ class TestPublishedState:
 
 class TestFlightRecorder:
     def test_dump_writes_the_buffer(self, tmp_path):
-        rec = FlightRecorder(FakeBus(), directory=tmp_path)
+        rec = FlightRecorder(RecordingBus(), directory=tmp_path)
         for i in range(50):
             rec.record(reading("pmain", 1.0 + i * 0.01))
         path = rec.dump("hihi", "pmain")
@@ -280,7 +258,7 @@ class TestFlightRecorder:
 
     def test_the_buffer_is_bounded(self):
         """The guard against an incident must not create a memory leak."""
-        rec = FlightRecorder(FakeBus(), window_s=10, expected_rate_hz=1, channels=2)
+        rec = FlightRecorder(RecordingBus(), window_s=10, expected_rate_hz=1, channels=2)
         for _ in range(1000):
             rec.record(reading("pmain", 1.0))
         assert rec.depth <= 20
@@ -288,14 +266,14 @@ class TestFlightRecorder:
     def test_dump_on_alarm_captures_the_approach(self, tmp_path):
         """The point of the recorder: the run-up to the alarm, not just the
         alarm. The present system has only averaged values afterwards."""
-        rec = FlightRecorder(FakeBus(), directory=tmp_path)
+        rec = FlightRecorder(RecordingBus(), directory=tmp_path)
         for value in (1.0, 1.2, 1.5, 1.8, 2.1):
             rec.record(reading("pmain", value))
 
         cfg = load()
         cfg.alarms = {"defaults": {}, "channels": {
             "pmain": {"hihi": {"value": 2.0, "severity": "major"}}}}
-        engine = AlarmEngine(FakeBus(), cfg, notifier=RecordingNotifier(),
+        engine = AlarmEngine(RecordingBus(), cfg, notifier=RecordingNotifier(),
                              on_alarm=lambda ch, sev, thr: rec.dump(thr or sev, ch))
         engine.on_measurement(reading("pmain", 2.1))
 
@@ -306,7 +284,7 @@ class TestFlightRecorder:
         assert values == [1.0, 1.2, 1.5, 1.8, 2.1]
 
     def test_empty_buffer_dumps_nothing(self, tmp_path):
-        rec = FlightRecorder(FakeBus(), directory=tmp_path)
+        rec = FlightRecorder(RecordingBus(), directory=tmp_path)
         assert rec.dump("test") is None
 
 
@@ -390,7 +368,7 @@ class TestTheMasterSwitch:
         cfg.alarms = {"defaults": {}, "channels": self.THRESHOLDS,
                       "staleness": {}}
         engine = AlarmEngine(
-            FakeBus(), cfg, notifier=RecordingNotifier(),
+            RecordingBus(), cfg, notifier=RecordingNotifier(),
             on_alarm=lambda c, s, t: dumps.append((c, s, t)),
             notify_state_path=tmp_path / "notify.json")
         engine.set_notifications(False, "apc")

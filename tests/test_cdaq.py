@@ -7,33 +7,11 @@ correctly on its own, and the difference between a cold sensor and no sensor.
 
 import pytest
 
+from doubles import RecordingBus
+
 from xams_sc.config import load
 from xams_sc.devices.cdaq import EXCITATION_A, RTD_VALID_C, CdaqService
 from xams_sc.model import Quality
-
-
-class RecordingBus:
-    def __init__(self):
-        self.measurements = []
-        self.handlers = []
-
-    def publish_measurement(self, m):
-        self.measurements.append(m)
-
-    def publish_state(self, s, st):
-        pass
-
-    def publish_heartbeat(self, s):
-        pass
-
-    def subscribe(self, t, h):
-        self.handlers.append((t, h))
-
-    def connect(self):
-        pass
-
-    def disconnect(self):
-        pass
 
 
 @pytest.fixture
