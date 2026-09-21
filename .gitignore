@@ -42,3 +42,9 @@ htmlcov/
 
 stack_analysis.md
 nikhef-vm-request.md
+
+# A snapshot of one test run on one machine, from
+# tools/make_test_report.py. Regenerate it rather than reading an old one:
+# a stale report of a green suite is the most misleading file there is.
+test_report.md
+test_report.pdf
