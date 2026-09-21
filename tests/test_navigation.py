@@ -114,3 +114,48 @@ class TestTheControlPageLayout:
 
     def test_they_fold_to_one_column_on_a_narrow_window(self, client):
         assert "@media (max-width:900px)" in client.get("/hv").text
+
+    def test_the_two_cards_are_the_same_height(self, client):
+        """They used to end wherever their own text ran out, which left a
+        ragged edge between two boxes sitting side by side.
+
+        Asserted on the rule rather than on a rendered height, which no test
+        here can measure: `align-items:start` is the thing that was wrong and
+        the thing somebody would put back.
+
+        Matched inside the `.control-pair` declaration alone. Searching the
+        whole page for `align-items:start` also finds the comment explaining
+        this, and the P&ID's own layout, where starting at the top is right.
+        """
+        body = client.get("/hv").text
+        rule = re.search(r"\.control-pair \{[^}]*\}", body)
+        assert rule is not None, "the .control-pair rule is gone"
+        assert "align-items:stretch" in rule.group(0)
+        assert "start" not in rule.group(0)
+        assert ".control-pair > div { display:flex; }" in body
+
+    def test_the_page_does_not_label_the_obvious(self, client):
+        """No "On this page" bar, and no "High voltage" heading over two
+        cards that already name themselves hv_1 and hv_2.
+
+        Three links to three sections of one short page is a table of
+        contents for something you can see all of, and it was the first thing
+        under the header on the page people come to in order to act.
+        """
+        body = client.get("/hv").text
+        assert "On this page" not in body
+        assert "<h2 id=\"hv\"" not in body
+
+    def test_the_anchors_the_mimic_links_to_still_exist(self, client):
+        """A cross-page guard, in the direction nothing else checks.
+
+        test_mimic_page asserts the P&ID LINKS to /hv#cryostat, /hv#flow and
+        /hv#hv. Nothing asserted the targets were there, so removing the
+        heading that carried `id="hv"` would have left that link landing
+        silently at the top of the page - and the two redirects after a Lake
+        Shore write or a flow reset do the same thing with #cryostat and
+        #flow.
+        """
+        body = client.get("/hv").text
+        for anchor in ("cryostat", "flow", "hv"):
+            assert 'id="%s"' % anchor in body, anchor

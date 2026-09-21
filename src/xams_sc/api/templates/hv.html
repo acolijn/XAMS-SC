@@ -6,10 +6,16 @@
    the fold on a laptop, and neither is wide enough to need a full row. One
    column again when the window is too narrow to hold both without squeezing
    — the same rule the P&ID column follows. */
-.control-pair { display:grid; gap:1.2rem; align-items:start;
+.control-pair { display:grid; gap:1.2rem; align-items:stretch;
                 grid-template-columns:repeat(2, minmax(0,1fr)); }
 @media (max-width:900px) { .control-pair { grid-template-columns:minmax(0,1fr); } }
-.control-pair > div > .card { margin:0; }
+/* EQUAL HEIGHT, not each card to its own content. `align-items:start` let
+   them end wherever their text ran out, so two boxes of different height sat
+   side by side with a ragged edge between them. The grid stretches the
+   wrapper; the wrapper is a flex row so the single card inside it fills that
+   height rather than only the width. Content stays at the top of each. */
+.control-pair > div { display:flex; }
+.control-pair > div > .card { margin:0; flex:1; }
 </style>
 
 {# THE CONTROL PAGE. Everything in this system that writes to an instrument or
@@ -25,13 +31,6 @@
    The P&ID is deliberately read-only and links here instead (§8.2). A
    setpoint box on the page left open on a screen all day is the wrong thing
    to reach for by accident. #}
-
-<nav class="note" style="margin:0 0 1rem 0">
-  On this page:
-  <a href="#cryostat">cryostat</a> &middot;
-  <a href="#flow">xenon flow</a> &middot;
-  <a href="#hv">high voltage</a>
-</nav>
 
 {% if ls_ok %}<div class="flash good" style="margin:0 0 1rem 0">{{ ls_ok }}</div>{% endif %}
 {% if ls_error %}<div class="flash bad" style="margin:0 0 1rem 0">
@@ -168,7 +167,14 @@
 
 </div>{# /control-pair #}
 
-<h2 id="hv" style="margin:1.6rem 0 .6rem 0">High voltage</h2>
+{# The `#hv` anchor WITHOUT a heading over it. The heading said "High
+   voltage" above two cards that already name themselves hv_1 and hv_2, on a
+   page whose other two sections are a cryostat and a flow meter - it labelled
+   the obvious. The id has to stay: the P&ID links to /hv#hv (mimic.html), the
+   same way the Lake Shore and flow redirects land on #cryostat and #flow.
+   A height rather than a margin, so it keeps the gap the heading used to
+   provide without depending on how margins collapse against the grid above. #}
+<div id="hv" style="height:1.6rem"></div>
 
 {% if hv_ok %}<div class="flash good" style="margin:0 0 1rem 0">{{ hv_ok }}</div>{% endif %}
 {% if hv_error %}<div class="flash bad" style="margin:0 0 1rem 0">
