@@ -173,7 +173,10 @@
       <tr><td>battery</td>
           <td class="num"><span id="s-ups_battery_pct" class="dim">&mdash;</span>
               <span class="unit">%</span></td></tr>
-      <tr><td>runtime left</td>
+      {# "UPS runtime", not "runtime left". In a detector lab "runtime" on its
+         own reads as how long the RUN has left, which is a different number
+         from a different system entirely. Naming the instrument settles it. #}
+      <tr><td>UPS runtime</td>
           <td class="num"><span id="s-ups_runtime_min" class="dim">&mdash;</span>
               <span class="unit">min</span></td></tr>
     </table>
