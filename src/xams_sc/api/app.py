@@ -7,6 +7,11 @@ tutorials and in much example code; on this system it would expose the control
 surface to the building network. Every bind address is explicit, and loopback
 is the only accepted value without a recorded decision to the contrary (§8).
 
+That bind keeps the NETWORK out and nothing else. The browser on this PC can
+reach this port whatever it is bound to, so every request is also checked for
+where it came from - see `same_origin_only` in `create_app`, and "What
+loopback does not protect against" in DESIGN.md §8.
+
 **Almost everything here is read-only.** Three things are not:
 
   * the flow-integrator reset, which changes a record rather than hardware

@@ -897,6 +897,35 @@ The same applies to everything else that opens a port:
 
 If remote viewing is wanted later, the answer is an SSH tunnel or a read-only mirror of the data — never opening the control port. Adding remote access is a decision with a security consequence, and should be recorded as such.
 
+### What loopback does not protect against
+
+**The bind address is a network boundary, not a browser one.** Everything above keeps the building network out. It does nothing about the browser already running on the lab PC, and for a while this section read as though it did — which is the more dangerous kind of mistake, because it stops anyone from looking further.
+
+The attack takes no skill and no access to this machine. An operator opens any page in any tab; that page contains a hidden form pointed at `http://127.0.0.1:8000/hv/output`, and submits it. A plain form POST needs no CORS preflight, so the browser sends it, cookies and all, and the request arrives indistinguishable from one made on the page itself. There is no login to fail. The command runs. The attacker never sees the response — and does not need to, because the damage is the write, not the reply:
+
+* `/alarms/notify` with `enabled=0` — the plant is no longer watched by anyone, while every page still says the alarms are simply off
+* `/hv/output` with `on=0` — a channel de-energised in the middle of a measurement
+* `/hv/apply`, `/lakeshore/setpoint`, `/lakeshore/range` — a setpoint moved within the limits the service enforces, which is a legal value and therefore not refused anywhere
+* `/alarms/recipients` — the list of who is told rewritten
+* and the `by` field travels with the request, so the audit trail records a name the attacker chose
+
+The same gap reads as well as writes. Nothing checked the `Host` header, so a domain the attacker controls could be re-pointed at `127.0.0.1` (DNS rebinding); the browser then treats this site as same-origin and hands over `/api/state` and the Alarms page — colleagues' names, e-mail addresses and mobile numbers, the data §11 keeps out of git.
+
+**The fix, as of 21 September 2026:** one middleware in `api/app.py`, two checks, against the two attacks:
+
+* the `Host` header, on **every** request, against rebinding
+* the `Origin` — falling back to the `Referer` where a browser sends none — on `POST`, `PUT`, `PATCH` and `DELETE`, against the cross-site form
+
+No token and no session. A per-form CSRF token is the stricter answer, and it was not taken: it means a hidden field in ten templates and a secret to manage, for a UI with no login on a machine one person at a time uses. Two headers a browser sets by itself, checked in one place a student can read, is the §8.1 trade.
+
+Three consequences worth knowing before something looks broken:
+
+1. **The allowed hosts come from the bind arguments**, not a hardcoded `8000`. `--port 8080` would otherwise start a UI that refused every request to itself, with nothing on screen explaining why.
+2. **`curl` posting to this port is refused**, and that is intended rather than tolerated: the CLI talks MQTT, and nothing in this repository posts HTTP here. A script that needs to change something uses `xams-ctl`.
+3. **A refusal is logged at `WARNING`** and therefore appears on the Logs page under `webui`. If a browser ever withholds both headers on a same-origin form, the operator sees a control that does nothing, and that line is the only explanation anywhere.
+
+The rule this leaves behind: **loopback answers "who can reach the port", never "who asked".** Any future surface on this machine has to answer the second question for itself.
+
 ### 8.1 The four surfaces
 
 Separated by how often they are touched and how much a mistake costs.

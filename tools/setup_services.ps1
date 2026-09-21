@@ -24,6 +24,12 @@
     unauthenticated HV control interface on the building network. See
     docs/DESIGN.md §8.
 
+    What it does NOT buy is protection from the browser running on this
+    PC: a page in any tab can post a form to 127.0.0.1:8000. That is
+    handled in api/app.py, not here. Loopback answers who can reach the
+    port, never who asked - see "What loopback does not protect
+    against" in DESIGN.md §8.
+
     This script does NOT install the NSSM services for the XAMS Python
     services themselves. That belongs to the trial phase (§12), and auto-start
     stays off while LabVIEW is still the fallback: every device admits only

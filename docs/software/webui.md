@@ -58,6 +58,18 @@ service on the other end to validate them, so they are checked here, in
 list is a list nobody chose. Both are still audited like any other change, and
 both files are tracked by git.
 
+**Every POST is checked for where it came from.** The `Origin` header must be
+this site's own, and the `Host` header one this server answers to; a request
+that fails either gets a 403 or a 421 and never reaches the handler. Without
+that, a page in any other tab could submit a hidden form to `127.0.0.1:8000`
+and the command would run — the loopback bind keeps the network out, not the
+browser on this PC. See "What loopback does not protect against" in
+[DESIGN.md §8](../DESIGN.md).
+
+A consequence for anyone writing a client: **`curl` cannot post here**, and
+that is intended rather than an oversight. The CLI talks MQTT; use
+`xams-ctl` to change something from a script. `GET /api/state` is unaffected.
+
 **Who did it** comes from a cookie set once, rather than a name typed before
 every command — retyping a name for each setpoint is the kind of friction
 that gets worked around by leaving it blank, which costs the audit trail the
