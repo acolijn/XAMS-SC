@@ -217,7 +217,7 @@ without a Grafana token the [drift check](../grafana/drift.md) reports
 ## The config hash
 
 Every load computes a hash over the YAML. It is stamped into the header of
-each JSONL file, logged at service start, and shown on the Overview page — so
+each JSONL file, logged at service start, and shown on the System health page — so
 an archive file says what configuration produced it, and two services running
 different configurations are visible rather than mysterious.
 

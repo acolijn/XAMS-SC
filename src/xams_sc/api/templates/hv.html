@@ -1,6 +1,157 @@
 {% extends "base.html" %}
-{% block title %}High voltage{% endblock %}
+{% block title %}Control{% endblock %}
 {% block content %}
+
+{# THE CONTROL PAGE. Everything in this system that writes to an instrument or
+   closes a record is here, and nothing else is.
+
+   It was the High voltage page, and the cryostat and the flow integrator sat
+   on the overview because they had nowhere else to be — so that page answered
+   both "is everything all right?" and "change something", which are asked at
+   different moments. Grouped by INTENT rather than by instrument: "I want to
+   change something" is the question somebody asks before they navigate, and
+   it now has one answer.
+
+   The P&ID is deliberately read-only and links here instead (§8.2). A
+   setpoint box on the page left open on a screen all day is the wrong thing
+   to reach for by accident. #}
+
+<nav class="note" style="margin:0 0 1rem 0">
+  On this page:
+  <a href="#cryostat">cryostat</a> &middot;
+  <a href="#flow">xenon flow</a> &middot;
+  <a href="#hv">high voltage</a>
+</nav>
+
+{% if ls_ok %}<div class="flash good" style="margin:0 0 1rem 0">{{ ls_ok }}</div>{% endif %}
+{% if ls_error %}<div class="flash bad" style="margin:0 0 1rem 0">
+  <strong>Refused — nothing was changed.</strong> {{ ls_error }}</div>{% endif %}
+{% if reset == 'ok' %}<div class="flash good" style="margin:0 0 1rem 0">
+  Flow period closed at {{ reset_total }} g. A new one is open.</div>{% endif %}
+{% if reset == 'failed' %}<div class="flash bad" style="margin:0 0 1rem 0">
+  <strong>The derived service did not acknowledge.</strong> Nothing was reset.
+  </div>{% endif %}
+
+<div id="cryostat">
+<div class="card">
+    <h2>Lake Shore 335 — temperature control</h2>
+    <table>
+      {% for c in lakeshore.sensors %}
+      <tr>
+        <td>{{ c.name if c else '—' }}
+            <span class="dim">{{ ('— ' + c.description) if c and c.description }}</span></td>
+        <td class="num {{ 'dim' if not (c and c.healthy) }}">
+          {{ c.formatted() if c else '—' }} <span class="unit">°C</span></td>
+      </tr>
+      {% endfor %}
+      {% for o in lakeshore.outputs %}
+      <tr>
+        <td>output {{ o.n }} <span class="dim">— setpoint / heater</span></td>
+        <td class="num">
+          <span class="{{ '' if o.setpoint and o.setpoint.healthy else 'dim' }}">
+            {{ o.setpoint.formatted() if o.setpoint else '—' }}</span>
+          <span class="unit">°C</span>
+          <span class="dim"> · </span>
+          <span class="{{ '' if o.percent and o.percent.healthy else 'dim' }}">
+            {{ o.percent.formatted() if o.percent else '—' }}</span>
+          <span class="unit">%</span>
+          <span class="dim">({{ o.watts.formatted() if o.watts else '—' }} W)</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    {% if ls_ok %}<div class="flash good" style="margin:.9rem">{{ ls_ok }}</div>{% endif %}
+    {% if ls_error %}<div class="flash bad" style="margin:.9rem">
+      <strong>Refused — nothing was changed.</strong> {{ ls_error }}</div>{% endif %}
+
+    <div class="body" style="border-top:1px solid var(--line)">
+      {# The control path (§10), output 1 only.
+
+         No name on the commands: it is set once in the header and kept in a
+         cookie. Retyping it before every setpoint is the friction that gets
+         worked around by leaving it blank, which costs the audit trail the
+         one thing it is for. #}
+      <form method="post" action="/lakeshore/setpoint" class="reset-form"
+            onsubmit="return confirm('Change the Lake Shore setpoint on output 1 to ' + this.value.value + ' °C?');">
+        <label class="dim" style="align-self:center;min-width:4.2rem">setpoint</label>
+        <input type="text" name="value" inputmode="decimal"
+               placeholder="°C" aria-label="new setpoint in Celsius"
+               style="max-width:6rem">
+        <button type="submit">Set</button>
+      </form>
+
+      <form method="post" action="/lakeshore/range" class="reset-form"
+            onsubmit="return confirm('Switch the Lake Shore heater ' + this.range.value + ' on output 1?');">
+        <label class="dim" style="align-self:center;min-width:4.2rem">heater</label>
+        <select name="range" aria-label="heater range" style="max-width:6rem">
+          <option value="high">high</option>
+          <option value="off">off</option>
+        </select>
+        <button type="submit">Apply</button>
+      </form>
+
+    </div>
+
+  </div>
+</div>
+
+<div id="flow">
+<div class="card">
+    <h2>Integrated flow</h2>
+    <div class="body">
+      {% set f = flow.view %}
+      <div style="font-size:1.9rem;font-variant-numeric:tabular-nums;
+                  font-family:Consolas,monospace">
+        {{ f.formatted() if f else '—' }}
+        <span class="unit" style="font-size:1rem">g</span>
+      </div>
+      {# The rate as well as the total: the total answers "how much has gone
+         through", the rate answers "is it flowing now", and reading the
+         second off a rising number is guesswork. Smaller, because the total
+         is what this card is for. #}
+      {% set r = flow.rate %}
+      <div style="font-size:1.15rem;font-variant-numeric:tabular-nums;
+                  font-family:Consolas,monospace;margin-top:.15rem"
+           class="{{ '' if r and r.healthy else 'dim' }}">
+        {{ r.formatted() if r else '—' }}
+        <span class="unit" style="font-size:.8rem">{{ r.unit if r else '' }}</span>
+      </div>
+      <div class="dim" style="margin-top:.5rem">
+        since the period started
+        {% if flow.gaps_s > 0 %}
+          <br><span class="warn">{{ '%.0f'|format(flow.gaps_s) }} s of gaps</span>
+          — the total is an underestimate by whatever flowed during them
+        {% else %}
+          <br>no gaps in this period
+        {% endif %}
+      </div>
+
+      {% if reset == 'ok' %}
+        <div class="flash good">Period closed at {{ reset_total }} g. A new
+          one is running; the old one is kept in <code>flow_periods</code>.</div>
+      {% elif reset == 'failed' %}
+        <div class="flash bad">The derived service did not acknowledge.
+          <strong>Nothing was reset.</strong> Is it running?</div>
+      {% endif %}
+
+      {# §8.1 wants a confirmation step on anything that acts. The typed name
+         is the audit trail (§10) — there is no login here, so it is taken on
+         trust, exactly as `xams-ctl flow-reset --by` does. #}
+      <form method="post" action="/flow/reset" class="reset-form"
+            onsubmit="return confirm('Close the current flow period and start a new one?\n\nNothing is erased — the period is kept in flow_periods.');">
+        <button type="submit">Reset</button>
+      </form>
+    </div>
+    <div class="note">
+      Reset closes the period into <code>flow_periods</code> and opens a new
+      one; nothing is erased (§7.5). Also
+      <code>xams-ctl flow-reset --by &lt;you&gt;</code>.
+    </div>
+  </div>
+</div>
+
+<h2 id="hv" style="margin:1.6rem 0 .6rem 0">High voltage</h2>
 
 {% if hv_ok %}<div class="flash good" style="margin:0 0 1rem 0">{{ hv_ok }}</div>{% endif %}
 {% if hv_error %}<div class="flash bad" style="margin:0 0 1rem 0">
@@ -247,7 +398,7 @@ document.addEventListener('submit', function (e) {
 </script>
 
 <div class="card">
-  <h2>What these columns are, and what this page cannot do</h2>
+  <h2>The high-voltage columns, and what this page cannot do</h2>
   <div class="note">
     <p><strong>Status</strong> comes from the board's own <code>STAT</code>
     word, never from the voltage. There are <strong>four</strong> states, and

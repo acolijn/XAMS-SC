@@ -18,7 +18,7 @@ its place on consequence, not on volume.
 | `ups_runtime_min` | the UPS's own estimate, minutes | treat with care |
 
 `ups_on_battery` is the alarm. The other two answer "how long have I got" once
-it has fired, and both are shown on the [Overview
+it has fired, and both are shown on the [System health
 page](../operating/webui.md).
 
 ### How much to trust the runtime estimate
@@ -92,7 +92,7 @@ reports itself as *Legacy Communication Card FW:LCC 03.1 / ID=5004*.
 or is out of tolerance. It does **not** mean the battery is low, and it does
 not mean anything is about to shut down.
 
-On the Overview page it is rendered as `ON BATTERY` or `line power` rather
+On the System health page it is rendered as `ON BATTERY` or `line power` rather
 than as a number, because `1` and `0` are a poor way to convey the one fact
 somebody needs at a glance.
 

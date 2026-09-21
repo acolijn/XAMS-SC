@@ -46,6 +46,12 @@
 .mimic-body.stale { filter:grayscale(1); opacity:.45; transition:opacity .3s; }
 .mimic-side table td { padding:.28rem .9rem; font-size:.82rem; }
 .mimic-side .st { font-size:.74rem; letter-spacing:.03em; }
+/* This page does not write to instruments (§8.2); it says where to. Quiet,
+   because the drawing is the subject and these are a way out, not a feature
+   of the page. */
+.mimic-side h2 .chg { float:right; font-size:.72rem; font-weight:400;
+                      text-transform:none; letter-spacing:0; opacity:.65; }
+.mimic-side h2 .chg:hover { opacity:1; }
 /* Long channel descriptions must not push the number off the card. */
 .mimic-side .lbl { max-width:11rem; overflow:hidden;
                    text-overflow:ellipsis; white-space:nowrap; }
@@ -99,7 +105,9 @@
   <div class="mimic-status" id="s-status"><span class="dim">connecting&hellip;</span></div>
 
   <div class="card">
-    <h2>Cryostat setpoint</h2>
+    <h2>Cryostat setpoint
+      <a href="/hv#cryostat" class="chg" title="change it on the Control page"
+         >change &rarr;</a></h2>
     <table>
       <tr><td>setpoint</td>
           <td class="num"><span id="s-ls_setpoint_1" class="dim">&mdash;</span>
@@ -115,7 +123,9 @@
   </div>
 
   <div class="card">
-    <h2>Xenon moved</h2>
+    <h2>Xenon moved
+      <a href="/hv#flow" class="chg" title="reset it on the Control page"
+         >reset &rarr;</a></h2>
     <table>
       <tr><td>since period start</td>
           <td class="num"><span id="s-fm101_total" class="dim">&mdash;</span>
@@ -125,7 +135,9 @@
   </div>
 
   <div class="card">
-    <h2>High voltage</h2>
+    <h2>High voltage
+      <a href="/hv#hv" class="chg" title="set it on the Control page"
+         >set &rarr;</a></h2>
     <table>
       {% for c in side.hv %}
       <tr>

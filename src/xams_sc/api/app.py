@@ -239,8 +239,10 @@ def _redirect_ls(error: str | None, ok: str | None = None):
     refresh must not repeat a write to an instrument."""
     from urllib.parse import quote
     if error:
-        return RedirectResponse("/?ls_error=" + quote(error), status_code=303)
-    return RedirectResponse("/?ls_ok=" + quote(ok or "done"), status_code=303)
+        return RedirectResponse("/hv?ls_error=" + quote(error) + "#cryostat",
+                                status_code=303)
+    return RedirectResponse("/hv?ls_ok=" + quote(ok or "done") + "#cryostat",
+                            status_code=303)
 
 
 def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
@@ -288,10 +290,16 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
 
     # ------------------------------------------------------------- pages
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/system", response_class=HTMLResponse)
     def overview(request: Request):
-        """The page to bookmark. Answers "is everything all right?" with no
-        clicks and no scrolling, and only then offers links (§8.1)."""
+        """Is the SOFTWARE all right? Services, faults, channels not reading.
+
+        Was `/` and was called Overview, and it carried the Lake Shore and
+        flow-reset controls because they had nowhere else to be. Two jobs on
+        one page: "is everything all right" and "change something". They are
+        asked at different moments and they are now on different pages — the
+        controls moved to /hv, which is the Control page.
+        """
         return page(request, "overview.html",
                     services=state.services(),
                     unhealthy=state.unhealthy_channels(),
@@ -618,11 +626,11 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         closed = state.reset_flow(who)
         if closed is None:
             log.warning("flow reset by %s was not acknowledged", who)
-            return RedirectResponse("/?reset=failed", status_code=303)
+            return RedirectResponse("/hv?reset=failed#flow", status_code=303)
         log.info("flow period closed by %s: %.3f g over %.0f s of gaps",
                  who, closed.get("total_g", 0.0), closed.get("gaps_s", 0.0))
         return RedirectResponse(
-            "/?reset=ok&total=%.3f" % closed.get("total_g", 0.0),
+            "/hv?reset=ok&total=%.3f#flow" % closed.get("total_g", 0.0),
             status_code=303)
 
     @app.get("/status", response_class=HTMLResponse)
@@ -719,9 +727,16 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 "firmware": spec.get("firmware"),
                 "channels": sorted(channels, key=lambda c: c["index"]),
             })
+        # The cryostat and the flow integrator come along because this is
+        # the Control page, not the HV page: one place answers "I want to
+        # change something", which is the question asked before navigating.
+        # They were on the overview only because they had nowhere else.
+        q = request.query_params
         return page(request, "hv.html", supplies=supplies,
-                    hv_ok=request.query_params.get("hv_ok"),
-                    hv_error=request.query_params.get("hv_error"))
+                    hv_ok=q.get("hv_ok"), hv_error=q.get("hv_error"),
+                    lakeshore=lakeshore_view(), flow=state.flow_total(),
+                    ls_ok=q.get("ls_ok"), ls_error=q.get("ls_error"),
+                    reset=q.get("reset"), reset_total=q.get("total"))
 
     # ------------------------------------------------------------- alarms
     #
@@ -843,14 +858,22 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                                 status_code=303)
 
     @app.get("/mimic", response_class=HTMLResponse)
-    def mimic(request: Request):
-        """The P&ID with live values on it (§8.2).
+    def mimic_alias(request: Request):
+        """Where the P&ID used to live. Bookmarks and the manual still work."""
+        return RedirectResponse("/", status_code=301)
 
-        Answers the question the status table cannot — *where* is tt203, and
-        what is it next to. It earns its own page rather than a place on the
-        overview: that must answer "is everything all right?" in one glance
-        with no scrolling, and a full P&ID needs zoom and attention. Both are
-        wanted, at different moments.
+    @app.get("/", response_class=HTMLResponse)
+    def mimic(request: Request):
+        """The P&ID with live values on it, and the page this site opens on.
+
+        It is where people actually go: the plant drawn as it is, with every
+        reading in the place it physically belongs. It answers the question
+        the status table cannot — *where* is tt203, and what is it next to.
+
+        READ-ONLY, deliberately (§8.2). This is the page left open on a
+        screen all day, so nothing on it writes to an instrument; the cards
+        beside the drawing link to the Control page instead. A setpoint box
+        on an unattended display is the wrong thing to reach for by accident.
         """
         svg_path = HERE / "static" / "xams_pid.svg"
         if not svg_path.exists():

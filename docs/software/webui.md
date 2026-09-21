@@ -7,8 +7,9 @@ Server-rendered HTML, one small inline script, no JavaScript framework and no
 build step — so that in three years a student can change it without installing
 a toolchain. Binds to `127.0.0.1`, never `0.0.0.0`.
 
-Pages: Overview (`/`), Channels (`/status`), P&I mimic (`/mimic`), High voltage
-(`/hv`), Alarms (`/alarms`), Logs (`/logs`). This manual is served by the same
+Pages: P&I mimic (`/`, the landing page and read-only), Channels (`/status`),
+Control (`/hv`), System health (`/system`), Alarms (`/alarms`), Logs
+(`/logs`). `/mimic` is a 301 to `/`, kept for bookmarks. This manual is served by the same
 process, at `/manual`, so it is present on the lab PC whether or not the
 building network is.
 
@@ -29,11 +30,12 @@ repeat a write.
 
 | | |
 |---|---|
-| `GET /` | Overview |
+| `GET /` | the P&ID mimic, live and read-only |
 | `GET /status` | every channel, as a table |
-| `GET /hv` | high voltage, with the controls |
+| `GET /system` | System health: services, faults, channels not reading |
+| `GET /hv` | Control: high voltage, cryostat setpoint, flow reset |
 | `GET /hv/defaults` | what *Load defaults* offers, as an editable form |
-| `GET /mimic` | the P&ID mimic |
+| `GET /mimic` | 301 to `/` |
 | `GET /alarms` | what fired, the thresholds in force, the recipient list |
 | `GET /logs` | service logs |
 | `GET /api/state` | everything the pages show, as JSON |

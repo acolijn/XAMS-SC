@@ -134,7 +134,7 @@ git commit -m "grafana: <what changed>"
 **Grafana owns the live dashboard; `grafana/dashboards-archive/` is the copy git
 tracks, and a dashboard that exists only in Grafana is lost when Grafana's
 database is.** Nothing runs the save for you, so the system watches for it and
-says so on `xams-ctl status` and the Overview page.
+says so on `xams-ctl status` and the System health page.
 
 The full round trip, which direction wins, the venv-Python trap that makes a
 failed save look successful, and how to add a channel to a graph in the first

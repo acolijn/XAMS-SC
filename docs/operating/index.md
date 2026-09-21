@@ -27,7 +27,7 @@ anyone. If that fails, the document is unfinished however thorough it looks.
 ## Every day
 
 Open <http://127.0.0.1:8000>. The badge in the header is the whole system in one
-word; the Overview page is the detail behind it. What each tab shows is in
+word; the System health page is the detail behind it. What each tab shows is in
 [The web interface](webui.md).
 
 The same picture from a terminal, in
@@ -52,7 +52,7 @@ dashboard.
   **empty** — that emptiness is the point, because a frozen plausible value is
   worse than a gap;
 - no active alarms, or only ones somebody is already dealing with;
-- backup `ok` and dashboards `saved to git` on the Overview page.
+- backup `ok` and dashboards `saved to git` on the System health page.
 
 ---
 

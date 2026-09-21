@@ -6,7 +6,7 @@ database is. `tools\save_dashboard.py --save` is what prevents that, and
 behind without a word. It did, which is why this check exists.
 
 The system therefore answers the question itself, on
-[`xams-ctl status`](../operating/index.md#every-day) and on the Overview page of
+[`xams-ctl status`](../operating/index.md#every-day) and on the System health page of
 [the web interface](../operating/webui.md#overview):
 
 ```

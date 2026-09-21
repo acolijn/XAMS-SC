@@ -391,7 +391,10 @@ def test_the_overview_says_alarms_disabled_not_running(webui):
     http, _, bus = webui
     bus.deliver("xams/status/alarms/state", "running")
     notify_status(bus, False)
-    text = http.get("/").text
+    # /system, not /: the services table moved there when the P&ID became the
+    # landing page. The badge still says it on every page; this is about the
+    # row that says what the engine is DOING.
+    text = http.get("/system").text
     assert "alarms disabled" in text
     assert "ALARMS ARE DISABLED" in text
 
@@ -400,7 +403,7 @@ def test_the_overview_says_running_when_they_are_on(webui):
     http, _, bus = webui
     bus.deliver("xams/status/alarms/state", "running")
     notify_status(bus, True)
-    text = http.get("/").text
+    text = http.get("/system").text
     assert "alarms disabled" not in text
 
 
@@ -436,8 +439,13 @@ def test_the_badge_never_says_all_ok_with_alarms_off(webui):
 
     notify_status(bus, False)
     assert http.get("/healthz").text == "OK — ALARMS DISABLED"
-    # The page says it in its own words, above everything else on it.
-    assert "ALARMS ARE DISABLED" in http.get("/").text
+    # The health page says it in its own words, above everything else on it.
+    assert "ALARMS ARE DISABLED" in http.get("/system").text
+    # And the header badge carries it on EVERY page, including the P&ID that
+    # the site now opens on — which is the one somebody is actually looking
+    # at when the alarms are off.
+    assert "OK &mdash; ALARMS DISABLED" in http.get("/").text \
+        or "OK — ALARMS DISABLED" in http.get("/").text
 
 
 def test_a_live_alarm_still_outranks_the_switch(webui):

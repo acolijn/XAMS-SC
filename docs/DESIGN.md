@@ -923,8 +923,10 @@ Separated by how often they are touched and how much a mistake costs.
 
 | Page | Contents |
 |---|---|
-| `/` | the overview above, self-refreshing; carries the flow-integrator reset (§7.5) |
-| `/mimic` | the P&ID with live values on it (§8.2); clicking a value opens its history (§8.2a) |
+| `/` | the P&ID with live values on it (§8.2), read-only; clicking a value opens its history (§8.2a) |
+| `/system` | the health overview above, self-refreshing |
+| `/hv` | Control: the CAEN setpoints and outputs, the cryostat setpoint, and the flow-integrator reset (§7.5, §10, §10a) |
+| `/mimic` | a 301 to `/`, kept so bookmarks and the manual still work |
 | `/status` | per channel: value, unit, age, `quality` |
 | `/logs` | the last lines of each service log — saves logging in and hunting for files |
 | `/hv` | the high-voltage page: per channel `VSET`, `VMON`, `IMON`, state, and the control actions (§10a) |

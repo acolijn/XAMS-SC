@@ -129,8 +129,8 @@ class TestItCannotHappenByAccident:
         assert r.status_code == 405
         assert not [t for t, _ in bus.published if t == TOPIC_FLOW_RESET]
 
-    def test_loading_the_overview_resets_nothing(self, client, bus):
-        client.get("/")
+    def test_loading_the_control_page_resets_nothing(self, client, bus):
+        client.get("/hv")
 
         assert not [t for t, _ in bus.published if t == TOPIC_FLOW_RESET]
 
@@ -149,7 +149,7 @@ class TestTheCardShowsTheRate:
         """Nothing has been published to this fake bus, so every channel is
         absent. The card must still render — a monitoring page that breaks
         when the data stops is broken exactly when it is needed."""
-        r = client.get("/")
+        r = client.get("/hv")
 
         assert r.status_code == 200
         assert "Integrated flow" in r.text
@@ -202,7 +202,7 @@ class TestTheOperatorIsRemembered:
         reporting. Dropping it from this card is a display choice, not a
         decision to stop monitoring it.
         """
-        card = client.get("/").text.split("Lake Shore 335")[1].split("</div>")[0]
+        card = client.get("/hv").text.split("Lake Shore 335")[1].split("</div>")[0]
 
         assert "output 1" in card
         assert "output 2" not in card

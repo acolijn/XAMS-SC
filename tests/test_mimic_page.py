@@ -31,25 +31,25 @@ def page(client):
 
 
 def headings(html):
-    return re.findall(r"<h2>(.*?)</h2>", html, re.S)
+    """The card titles, without the "change ->" links that live inside them."""
+    return [re.sub(r"<[^>]+>", "", re.sub(r"<a\b.*?</a>", "", h, flags=re.S)).strip()
+            for h in re.findall(r"<h2>(.*?)</h2>", html, re.S)]
 
 
 class TestTheColumnOrder:
     def test_the_cards_are_in_the_order_somebody_reads_them(self, page):
-        found = [h.strip() for h in headings(page)]
-        sidebar = [h for h in found if h != "P&amp;I &mdash; live values"]
+        sidebar = [h for h in headings(page)
+                   if h != "P&amp;I &mdash; live values"]
 
         assert sidebar == ["Cryostat setpoint", "Xenon moved", "High voltage",
                            "Mains", "Alarms"]
 
     def test_alarms_are_last_because_that_card_changes_height(self, page):
-        sidebar = [h.strip() for h in headings(page)]
-
-        assert sidebar[-1] == "Alarms", \
+        assert headings(page)[-1] == "Alarms", \
             "a card that grows must not push the stable ones down the page"
 
     def test_the_status_line_comes_before_every_card(self, page):
-        assert page.index('id="s-status"') < page.index("<h2>Cryostat setpoint</h2>")
+        assert page.index('id="s-status"') < page.index("Cryostat setpoint")
 
 
 class TestTheDrawingIsNotRepeated:
@@ -89,3 +89,32 @@ class TestLiveness:
 
     def test_going_stale_is_reversible(self, page):
         assert 'body.classList.remove("stale")' in page
+
+
+class TestWhereControlLives:
+    """The P&ID does not write to instruments; it says where to (§8.2).
+
+    This is the page left open on a screen all day, and a setpoint box on it
+    is the wrong thing to reach for by accident. The cards link to the
+    Control page instead, which costs a deliberate navigation — the same
+    reasoning that keeps the CAEN front-panel enable a hand operation.
+    """
+
+    def test_the_drawing_writes_to_no_instrument(self, page):
+        """The `/operator` form in the header is not one: it sets a cookie
+        naming who is at the keyboard, which is how the audit trail gets a
+        name, and it touches no hardware."""
+        for action in ('action="/hv/apply"', 'action="/hv/output"',
+                       'action="/lakeshore/setpoint"',
+                       'action="/lakeshore/range"', 'action="/flow/reset"'):
+            assert action not in page, f"{action} appeared on the P&ID"
+
+    def test_each_controllable_card_says_where_to_change_it(self, page):
+        for anchor in ("/hv#cryostat", "/hv#flow", "/hv#hv"):
+            assert anchor in page, f"no way through to {anchor}"
+
+    def test_the_read_only_cards_offer_nothing(self, page):
+        """Mains and Alarms are not controls and must not pretend to be."""
+        mains = page[page.index("<h2>Mains"):page.index("<h2>Alarms")]
+
+        assert "change &rarr;" not in mains

@@ -14,12 +14,24 @@ remote viewing is ever wanted.
 
 | Tab | The question it answers |
 |---|---|
-| **Overview** | Is everything all right — and the controls that change something |
+| **P&I** | What is the plant doing — the landing page, and read-only |
 | **Channels** | What is every channel reading, right now |
-| **P&I** | Where in the plant is that number |
-| **High voltage** | What are both CAEN supplies actually doing |
+| **Control** | I want to change something |
+| **System health** | Is the *software* all right |
 | **Alarms** | What fired, what *would* fire, and who gets told |
 | **Logs** | What did a service say when it went wrong |
+
+One tab per question. The Overview used to answer two — "is everything all
+right?" and "change something" — because the cryostat setpoint and the flow
+reset had nowhere else to be. Those are asked at different moments, so they
+are on different pages now, and the page that answers neither is the one the
+site opens on.
+
+**The P&I writes to nothing.** It is the page left open on a screen all day,
+and a setpoint box on an unattended display is the wrong thing to reach for by
+accident. Its cards link to Control instead, which costs a deliberate
+navigation — the same reasoning that keeps the CAEN front-panel enable a hand
+operation (§10a).
 
 Two links lead off the site: **Grafana ↗** for history and plots, **Manual ↗**
 for this documentation, served by the same process so it is present on the lab
@@ -85,9 +97,9 @@ needs authentication, which this interface does not have.
 
 ---
 
-## Overview
+## System health
 
-The question it answers is *is everything all right*, and it is built so that a
+The question it answers is *is the software all right*, and it is built so that a
 healthy system is a boring page: no alarm card, no unhealthy channels, green
 dots.
 
@@ -136,8 +148,10 @@ ignore.
 
 ## The controls
 
-Two pages act on hardware: **Overview** carries the Lake Shore and the flow
-integrator, **High voltage** carries the supplies. Everything below is confirmed
+**One page acts on hardware: Control.** The CAEN supplies, the cryostat
+setpoint and the flow-integrator reset are all on it, because "I want to
+change something" is one question and it should have one answer. The P&I
+links here rather than carrying the forms itself. Everything below is confirmed
 before it is sent, audited with your name, and answered by the service that owns
 the instrument — never by the web process, which holds no permitted range and no
 instrument handle. A command from this UI and one from `xams-ctl` get identical
