@@ -480,6 +480,26 @@ def cmd_reload(args) -> int:
     return 0 if not any(acks[n].get("error") for n in refused) else 2
 
 
+def _session(client_id: str, ack_topic: str, args):
+    """A connected CommandSession for this invocation. See DESIGN.md §10.
+
+    The connect-wait, the settle, the publish and the poll used to be written
+    out by hand in each of the four command verbs below, each with its own
+    timeout — 8 s in flow-reset, 15 s in the others, against the web UI's
+    10 s — for no reason anybody had decided. They live in `bus.py` now, so
+    both halves of §10 share one implementation and one timeout.
+
+    Raises BrokerUnreachable, which every caller reports as "nothing was
+    sent". That is the honest reading: if the command never reached the
+    broker, the instrument never heard it.
+    """
+    from ..bus import CommandSession
+
+    return CommandSession(client_id, ack_topic,
+                          host=args.broker, port=args.port,
+                          sleep=time.sleep, monotonic=time.monotonic)
+
+
 def cmd_flow_reset(args) -> int:
     """Close the running flow-integrator period and open a new one (§7.5).
 
@@ -487,29 +507,17 @@ def cmd_flow_reset(args) -> int:
     history of how much passed through during each period survives — unlike a
     counter somebody zeroed, which is gone.
     """
-    from ..bus import TOPIC_FLOW_RESET, Bus
+    from ..bus import TOPIC_FLOW_RESET, BrokerUnreachable
 
     who = args.by or os.environ.get("USERNAME") or "unknown"
-    result = {}
+    ack_topic = "xams/ack/derived/flow_reset"
 
-    bus = Bus(client_id="xams-ctl-flow-reset", host=args.broker, port=args.port)
-    bus.subscribe("xams/ack/derived/flow_reset",
-                  lambda t, p: result.update(json.loads(p)))
-    bus.connect()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not bus.connected:
-        time.sleep(0.1)
-    if not bus.connected:
+    try:
+        with _session("xams-ctl-flow-reset", ack_topic, args) as session:
+            result = session.send(TOPIC_FLOW_RESET, ack_topic, {"by": who})
+    except BrokerUnreachable:
         print("broker not reachable; nothing was reset")
-        bus.disconnect()
         return 1
-
-    time.sleep(0.3)
-    bus.publish_raw(TOPIC_FLOW_RESET, json.dumps({"by": who}))
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline and not result:
-        time.sleep(0.2)
-    bus.disconnect()
 
     if not result:
         print("The derived service did not acknowledge. Is it running?")
@@ -536,47 +544,37 @@ def _hv_write(args, targets) -> int:
     waited for individually: a batch that reported "3 of 4 succeeded" without
     saying which would be worse than useless on a rack of electrodes.
     """
-    from ..bus import ACK_HV_VSET, TOPIC_HV_VSET, Bus
+    from ..bus import ACK_HV_VSET, TOPIC_HV_VSET, BrokerUnreachable
 
     who = args.by or os.environ.get("USERNAME") or "unknown"
-    acks = []
-
-    bus = Bus(client_id="xams-ctl-hv", host=args.broker, port=args.port)
-    bus.subscribe(ACK_HV_VSET, lambda t, p: acks.append(json.loads(p)))
-    bus.connect()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not bus.connected:
-        time.sleep(0.1)
-    if not bus.connected:
-        print("broker not reachable; nothing was sent")
-        bus.disconnect()
-        return 1
-    time.sleep(0.3)
-
     failures = 0
-    for channel, value in targets:
-        before = len(acks)
-        bus.publish_raw(TOPIC_HV_VSET, json.dumps(
-            {"channel": channel, "value": value, "by": who}))
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and len(acks) == before:
-            time.sleep(0.2)
 
-        if len(acks) == before:
-            print(f"  {channel:22s} NO ANSWER - is the caen service running?")
-            failures += 1
-            continue
-        ack = acks[-1]
-        if ack.get("ok"):
-            old = ack.get("old")
-            print(f"  {channel:22s} {old:+.1f} -> {ack['new']:+.1f} V"
-                  if isinstance(old, (int, float))
-                  else f"  {channel:22s} now {ack['new']:+.1f} V")
-        else:
-            print(f"  {channel:22s} REFUSED: {ack.get('reason')}")
-            failures += 1
+    try:
+        with _session("xams-ctl-hv", ACK_HV_VSET, args) as session:
+            for channel, value in targets:
+                # Every one of these is answered on the same topic, so "the
+                # next ack" is not the same question as "the answer to this
+                # command". The channel is already in both payloads.
+                ack = session.send(TOPIC_HV_VSET, ACK_HV_VSET,
+                                   {"channel": channel, "value": value,
+                                    "by": who},
+                                   match=("channel",))
+                if ack is None:
+                    print(f"  {channel:22s} NO ANSWER - is the caen service "
+                          f"running?")
+                    failures += 1
+                elif ack.get("ok"):
+                    old = ack.get("old")
+                    print(f"  {channel:22s} {old:+.1f} -> {ack['new']:+.1f} V"
+                          if isinstance(old, (int, float))
+                          else f"  {channel:22s} now {ack['new']:+.1f} V")
+                else:
+                    print(f"  {channel:22s} REFUSED: {ack.get('reason')}")
+                    failures += 1
+    except BrokerUnreachable:
+        print("broker not reachable; nothing was sent")
+        return 1
 
-    bus.disconnect()
     if failures:
         print()
         print(f"{failures} of {len(targets)} refused or unanswered. "
@@ -621,12 +619,12 @@ def cmd_hv_standby(args) -> int:
 
 
 def _hv_output(args, on: bool) -> int:
-    """Energise or de-energise HV channels. See DESIGN.md 10a.
+    """Energise or de-energise channels and report each answer (10a step 4).
 
-    This is NOT the enable switch. A channel has to be enabled by hand at the
-    supply first; this energises one that already is.
+    NOT the front-panel enable, which stays a hand operation. A channel must
+    already be enabled at the supply before this can do anything.
     """
-    from ..bus import ACK_HV_OUTPUT, TOPIC_HV_OUTPUT, Bus
+    from ..bus import ACK_HV_OUTPUT, TOPIC_HV_OUTPUT, BrokerUnreachable
 
     config = load()
     names = [args.channel] if args.channel else sorted(
@@ -636,43 +634,30 @@ def _hv_output(args, on: bool) -> int:
         return 1
 
     who = args.by or os.environ.get("USERNAME") or "unknown"
-    acks = []
-
-    bus = Bus(client_id="xams-ctl-hv-output", host=args.broker, port=args.port)
-    bus.subscribe(ACK_HV_OUTPUT, lambda t, p: acks.append(json.loads(p)))
-    bus.connect()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not bus.connected:
-        time.sleep(0.1)
-    if not bus.connected:
-        print("broker not reachable; nothing was sent")
-        bus.disconnect()
-        return 1
-    time.sleep(0.3)
-
     failures = 0
-    for name in names:
-        before = len(acks)
-        bus.publish_raw(TOPIC_HV_OUTPUT, json.dumps(
-            {"channel": name, "on": on, "by": who}))
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and len(acks) == before:
-            time.sleep(0.2)
 
-        if len(acks) == before:
-            print(f"  {name:22s} NO ANSWER - is the caen service running?")
-            failures += 1
-            continue
-        ack = acks[-1]
-        if ack.get("ok"):
-            state = "ON" if ack.get("on") else "off"
-            detail = ack.get("detail") or ""
-            print(f"  {name:22s} {state}" + (f"  ({detail})" if detail else ""))
-        else:
-            print(f"  {name:22s} REFUSED: {ack.get('reason')}")
-            failures += 1
+    try:
+        with _session("xams-ctl-hv-output", ACK_HV_OUTPUT, args) as session:
+            for name in names:
+                ack = session.send(TOPIC_HV_OUTPUT, ACK_HV_OUTPUT,
+                                   {"channel": name, "on": on, "by": who},
+                                   match=("channel",))
+                if ack is None:
+                    print(f"  {name:22s} NO ANSWER - is the caen service "
+                          f"running?")
+                    failures += 1
+                elif ack.get("ok"):
+                    state = "ON" if ack.get("on") else "off"
+                    detail = ack.get("detail") or ""
+                    print(f"  {name:22s} {state}"
+                          + (f"  ({detail})" if detail else ""))
+                else:
+                    print(f"  {name:22s} REFUSED: {ack.get('reason')}")
+                    failures += 1
+    except BrokerUnreachable:
+        print("broker not reachable; nothing was sent")
+        return 1
 
-    bus.disconnect()
     if failures:
         print()
         print(f"{failures} of {len(names)} refused or unanswered.")
@@ -706,34 +691,24 @@ def _set_notifications(args, enabled: bool) -> int:
     leave the alarms off with no way to re-arm them but editing a file the
     engine has already read.
     """
-    from ..bus import ACK_NOTIFY, TOPIC_NOTIFY, Bus
+    from ..bus import ACK_NOTIFY, TOPIC_NOTIFY, BrokerUnreachable
 
     who = args.by or os.environ.get("USERNAME") or "unknown"
-    acks = []
 
-    bus = Bus(client_id="xams-ctl-notify", host=args.broker, port=args.port)
-    bus.subscribe(ACK_NOTIFY, lambda t, p: acks.append(json.loads(p)))
-    bus.connect()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not bus.connected:
-        time.sleep(0.1)
-    if not bus.connected:
+    try:
+        with _session("xams-ctl-notify", ACK_NOTIFY, args) as session:
+            # No `match`: the switch has one target for the whole system, so
+            # there is nothing to tell one ack from another (§4.4a).
+            ack = session.send(TOPIC_NOTIFY, ACK_NOTIFY,
+                               {"enabled": enabled, "by": who})
+    except BrokerUnreachable:
         print("broker not reachable; nothing was sent")
-        bus.disconnect()
         return 1
-    time.sleep(0.3)
 
-    bus.publish_raw(TOPIC_NOTIFY, json.dumps({"enabled": enabled, "by": who}))
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline and not acks:
-        time.sleep(0.2)
-    bus.disconnect()
-
-    if not acks:
+    if not ack:
         print("NO ANSWER - is the alarms service running?")
         print("Nothing was changed.")
         return 1
-    ack = acks[-1]
     if not ack.get("ok"):
         print(f"refused: {ack.get('reason', 'no reason given')}")
         return 1

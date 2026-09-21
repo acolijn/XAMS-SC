@@ -70,11 +70,23 @@ def answers(bus, ack_topic, reply):
 
     A callable gets the published payload and returns the ack, so a test can
     answer differently per channel.
+
+    The channel of the command being answered is filled in unless the reply
+    names one, because the real service always carries it — every ack in
+    `caen.py`, refusals included, is `{"ok": ..., "channel": target, ...}`.
+    A double that left it out would be answering in a way the service never
+    does, and the discriminator that keeps two operators apart would have
+    nothing to match on.
     """
     def on_publish(topic, payload):
-        body = reply(json.loads(payload)) if callable(reply) else reply
-        if body is not None:
-            bus.deliver(ack_topic, json.dumps(body))
+        command = json.loads(payload)
+        body = reply(command) if callable(reply) else reply
+        if body is None:
+            return
+        body = dict(body)
+        if "channel" in command:
+            body.setdefault("channel", command["channel"])
+        bus.deliver(ack_topic, json.dumps(body))
     bus.on_publish = on_publish
 
 

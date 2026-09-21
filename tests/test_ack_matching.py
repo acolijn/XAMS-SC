@@ -26,7 +26,8 @@ import pytest
 
 from doubles import RecordingBus
 from xams_sc.api.state import SystemState
-from xams_sc.bus import (ACK_HV_VSET, ACK_NOTIFY, TOPIC_HV_VSET, TOPIC_NOTIFY)
+from xams_sc.bus import (ACK_HV_VSET, ACK_NOTIFY, TOPIC_HV_VSET,
+                        TOPIC_NOTIFY, AckInbox)
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def state():
     s = SystemState.__new__(SystemState)
     s.bus = RecordingBus()
     s._lock = threading.Lock()
-    s._acks = {}
+    s._acks = AckInbox()
     return s
 
 
@@ -132,14 +133,15 @@ class TestStaleAcks:
                        "by": "alice"},
                       timeout_s=0.3, match=("channel",))
 
-        assert [a["channel"] for a in state._acks[ACK_HV_VSET]] == ["hv_anode_vset"]
+        assert [a["channel"] for a in state._acks.pending(ACK_HV_VSET)] \
+            == ["hv_anode_vset"]
 
     def test_uncollected_acks_do_not_accumulate_without_bound(self, state):
         """A command that timed out leaves an ack nobody will ever claim."""
         for i in range(200):
             state._on_ack(ACK_HV_VSET, vset_ack(f"ghost_{i}", 0.0, 0.0))
 
-        assert len(state._acks[ACK_HV_VSET]) <= 32
+        assert len(state._acks.pending(ACK_HV_VSET)) <= 32
 
 
 class TestWithoutADiscriminator:

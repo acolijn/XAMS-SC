@@ -22,8 +22,10 @@ and reported rather than passing unnoticed.
 from __future__ import annotations
 
 import collections
+import json
 import logging
 import threading
+import time
 from typing import Callable
 
 import paho.mqtt.client as mqtt
@@ -261,3 +263,174 @@ class Bus:
     @property
     def subscriber_count(self) -> int:
         return len(self._handlers)
+
+class AckInbox:
+    """Collects acknowledgements and hands each to the command that asked.
+
+    Every command on this bus is answered on a topic shared by every other
+    command of the same kind, so "the next ack on this topic" is not the same
+    question as "the answer to my command". Two operators setting two
+    different HV channels at the same moment were shown each other's result,
+    and since the ack carries `old` and `new`, one of them read a confident
+    -4200 V for a channel they had never touched.
+
+    `match` names the fields that must agree between the command and the ack.
+    The discriminator is already on the wire — `channel` for the HV path,
+    `output` for the Lake Shore — so nothing new had to be published and no
+    instrument service had to change.
+
+    With no `match`, any ack on the topic will do, which is right for a
+    command with a single target such as the master notification switch.
+
+    Shared by the web UI, which keeps one of these for the life of the
+    process, and by `CommandSession`, which keeps one for the length of a
+    single CLI invocation.
+    """
+
+    def __init__(self, depth: int = 32):
+        self._lock = threading.Lock()
+        # A bounded deque per topic, not one slot. Two commands can be in
+        # flight on the same topic and the second ack must not evict the
+        # first before its waiter has looked. Bounded, because an ack nobody
+        # is waiting for — a command that already timed out — must not
+        # accumulate.
+        self._acks: dict[str, collections.deque] = {}
+        self._depth = depth
+
+    def deliver(self, topic: str, payload: str) -> None:
+        """Take an ack off the bus. Safe as a subscription handler."""
+        try:
+            ack = json.loads(payload)
+        except ValueError:
+            log.warning("unparseable acknowledgement on %s: %r", topic,
+                        payload[:80])
+            return
+        with self._lock:
+            self._acks.setdefault(
+                topic, collections.deque(maxlen=self._depth)).append(ack)
+
+    def open(self, topic: str, expected: dict) -> None:
+        """Discard what is stale FOR THIS COMMAND, and only that.
+
+        An ack already queued cannot be an answer to a command that has not
+        been published yet, so it is one of ours that already timed out.
+        Returning it would tell somebody a setpoint had moved when this
+        attempt was never answered at all.
+
+        Clearing the WHOLE queue here is what used to make the second
+        operator time out: their ack was already in it, and we threw it away
+        on the way past.
+        """
+        with self._lock:
+            queue = self._acks.setdefault(
+                topic, collections.deque(maxlen=self._depth))
+            keep = [a for a in queue if not _matches(a, expected)]
+            queue.clear()
+            queue.extend(keep)
+
+    def claim(self, topic: str, expected: dict) -> dict | None:
+        """The first queued ack that answers this command, if one has come."""
+        with self._lock:
+            queue = self._acks.get(topic)
+            if not queue:
+                return None
+            for ack in list(queue):
+                if _matches(ack, expected):
+                    queue.remove(ack)
+                    return ack
+        return None
+
+    def pending(self, topic: str) -> list[dict]:
+        with self._lock:
+            return list(self._acks.get(topic, ()))
+
+
+def _matches(ack: dict, expected: dict) -> bool:
+    return all(ack.get(k) == v for k, v in expected.items())
+
+
+class BrokerUnreachable(RuntimeError):
+    """The broker did not answer, so nothing was sent."""
+
+
+class CommandSession:
+    """One short-lived connection for sending commands and reading the answers.
+
+    This is the CLI's half of §10. It was written out by hand in four places —
+    `hv set`, `hv on`/`off`, `alarms on`/`off` and `flow-reset` — each with
+    its own connect-wait, its own settle, its own poll loop and its own
+    timeout. The timeouts disagreed with each other (8 s and 15 s) and with
+    the web UI (10 s), for no reason anybody had decided.
+
+    Used as a context manager, and it refuses rather than pretending:
+
+        with CommandSession("xams-ctl-hv", ACK_HV_VSET, host=..., port=...) as s:
+            ack = s.send(TOPIC_HV_VSET, ACK_HV_VSET, cmd, match=("channel",))
+
+    `send` returns the acknowledgement, or None if the service did not
+    answer. None is a FAILURE and callers must read it as one: if the service
+    is down the write did not happen, and saying otherwise would leave
+    somebody believing a setpoint had moved.
+    """
+
+    #: One timeout for every command from anywhere. The old values were 8 s
+    #: in flow-reset and 15 s in the HV and notification paths; the web UI
+    #: used 10 s. A CAEN write that has not been confirmed in this long is
+    #: not going to be.
+    DEFAULT_TIMEOUT_S = 15.0
+
+    def __init__(self, client_id: str, *ack_topics: str,
+                 host: str = "127.0.0.1", port: int = 1883,
+                 connect_timeout_s: float = 5.0, settle_s: float = 0.3,
+                 poll_s: float = 0.2, sleep=None, monotonic=None):
+        self.bus = Bus(client_id=client_id, host=host, port=port)
+        self.host, self.port = host, port
+        self.inbox = AckInbox()
+        self.connect_timeout_s = connect_timeout_s
+        self.settle_s = settle_s
+        self.poll_s = poll_s
+        # Injected so the CLI's fake clock reaches in here too; a real
+        # timeout in a test is a slow test that still proves nothing.
+        self._sleep = sleep or time.sleep
+        self._monotonic = monotonic or time.monotonic
+        for topic in ack_topics:
+            self.bus.subscribe(topic, self.inbox.deliver)
+
+    def __enter__(self) -> "CommandSession":
+        self.bus.connect()
+        deadline = self._monotonic() + self.connect_timeout_s
+        while self._monotonic() < deadline and not self.bus.connected:
+            self._sleep(0.1)
+        if not self.bus.connected:
+            self.bus.disconnect()
+            raise BrokerUnreachable(
+                "the broker at %s:%s did not answer" % (self.host, self.port))
+        # Let the subscriptions settle before publishing. Without this the
+        # command can go out before the ack subscription is live, and the
+        # answer is missed while the write has already happened — the worst
+        # of the two outcomes.
+        self._sleep(self.settle_s)
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self.bus.disconnect()
+        return False
+
+    def send(self, topic: str, ack_topic: str, payload: dict,
+             timeout_s: float | None = None,
+             match: tuple[str, ...] = ()) -> dict | None:
+        """Publish one command and wait for the ack that answers it."""
+        timeout_s = self.DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
+        expected = {k: payload[k] for k in match if k in payload}
+
+        self.inbox.open(ack_topic, expected)
+        self.bus.publish_raw(topic, json.dumps(payload))
+
+        deadline = self._monotonic() + timeout_s
+        while True:
+            ack = self.inbox.claim(ack_topic, expected)
+            if ack is not None:
+                return ack
+            if self._monotonic() >= deadline:
+                return None
+            self._sleep(self.poll_s)

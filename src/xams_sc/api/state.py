@@ -11,7 +11,6 @@ correct within a second of starting rather than after a full log interval.
 
 from __future__ import annotations
 
-import collections
 import json
 import logging
 import threading
@@ -20,7 +19,8 @@ from dataclasses import dataclass
 
 from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE, ACK_LS_SETPOINT,
                    ACK_NOTIFY, TOPIC_ALARM, TOPIC_BACKUP, TOPIC_FLOW_RESET,
-                   TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, Bus)
+                   TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, AckInbox,
+                   Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class SystemState:
         self._alarms: dict[str, dict] = {}
         self._flow_gaps: float = 0.0
         self._flow_ack: dict | None = None
-        self._acks: dict[str, collections.deque] = {}
+        self._acks = AckInbox()
         self._backup: dict | None = None
         self._limits: dict | None = None
         self._notify: dict | None = None
@@ -243,43 +243,22 @@ class SystemState:
         """
         expected = {k: payload[k] for k in match if k in payload}
 
-        def mine(ack: dict) -> bool:
-            return all(ack.get(k) == v for k, v in expected.items())
-
-        with self._lock:
-            pending = self._acks.setdefault(ack_topic, collections.deque(maxlen=32))
-            # Drop only what is stale FOR US. Clearing the whole queue here is
-            # what made the second operator time out: their ack was already in
-            # it, and we threw it away on our way past.
-            keep = [a for a in pending if not mine(a)]
-            pending.clear()
-            pending.extend(keep)
-
+        self._acks.open(ack_topic, expected)
         self.bus.publish_raw(topic, json.dumps(payload))
         deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            with self._lock:
-                for ack in list(pending):
-                    if mine(ack):
-                        pending.remove(ack)
-                        return ack
+        while True:
+            ack = self._acks.claim(ack_topic, expected)
+            if ack is not None:
+                return ack
+            if time.monotonic() >= deadline:
+                break
             time.sleep(0.1)
         return {"ok": False, "reason": "the %s service did not answer within "
                                        "%.0f s; nothing was changed"
                                        % (topic.split("/")[2], timeout_s)}
 
     def _on_ack(self, topic: str, payload: str) -> None:
-        try:
-            ack = json.loads(payload)
-        except ValueError:
-            return
-        with self._lock:
-            # A deque, not one slot per topic. Two commands can be in flight
-            # on the same topic, and the second ack must not evict the first
-            # before its waiter has looked. Bounded, because an ack nobody is
-            # waiting for — a command that already timed out — must not
-            # accumulate.
-            self._acks.setdefault(topic, collections.deque(maxlen=32)).append(ack)
+        self._acks.deliver(topic, payload)
 
     def _on_backup(self, topic: str, payload: str) -> None:
         try:
