@@ -114,6 +114,7 @@ class Bus:
         self._buffer: collections.deque[tuple[str, str, bool]] = collections.deque(maxlen=depth)
         self._buffer_depth = depth
         self._dropped = 0
+        self._dropped_logged = 0
         self._lock = threading.Lock()
         self._connected = threading.Event()
 
@@ -207,12 +208,14 @@ class Bus:
             pending, self._buffer = list(self._buffer), collections.deque(
                 maxlen=self._buffer_depth
             )
-            dropped, self._dropped = self._dropped, 0
+            total, since = self._dropped, self._dropped - self._dropped_logged
+            self._dropped_logged = total
 
-        if dropped:
+        if since:
             # The gap is recorded explicitly rather than passing silently.
             log.error(
-                "broker outage overflowed the buffer: %d messages lost", dropped
+                "broker outage overflowed the buffer: %d messages lost "
+                "(%d since this service started)", since, total
             )
         if pending:
             log.info("republishing %d buffered messages", len(pending))
@@ -221,7 +224,14 @@ class Bus:
 
     @property
     def dropped(self) -> int:
-        """Messages lost to buffer overflow since the last flush."""
+        """Messages lost to buffer overflow since this service started.
+
+        CUMULATIVE, and deliberately so. It used to be zeroed by `_flush`,
+        which meant that by the time anything asked, the answer was almost
+        always 0 — a counter for a data loss that could not be read is not a
+        counter. A caller wanting the rate keeps its own previous value; a
+        caller wanting "has this system ever lost a message" can now ask.
+        """
         return self._dropped
 
     # ---------------------------------------------------------------- public API

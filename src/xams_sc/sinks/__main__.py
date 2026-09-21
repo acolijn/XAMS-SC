@@ -14,6 +14,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -29,6 +30,130 @@ from .jsonl_writer import JsonlWriter
 from .pg_writer import PgWriter
 
 log = logging.getLogger(__name__)
+
+
+class SinkHealth:
+    """Watches the two places data can be lost, and says so out loud.
+
+    Principle 4 is "fail loudly, never silently", and this is the one place
+    the principle is about the system's OWN data rather than an instrument's.
+    Until now it was the place that obeyed it least: `PgWriter` counted every
+    row it discarded at `max_pending`, and the only consumer logged the count
+    at DEBUG. The default level is INFO, so the system's stated worst case —
+    measurements thrown away — was invisible in normal operation.
+
+    Two counters matter, and both are cumulative:
+
+        pg.stats["dropped"]   rows discarded because the backlog was full
+        bus.dropped           publishes lost because the outage buffer was
+
+    A rise in either is real, unrecoverable loss: the row is not in the
+    database and never will be. It is reported at ERROR, and the service
+    publishes `degraded` so the loss is visible on /status and not only to
+    somebody reading the log at the time.
+
+    Reported on CHANGE, not on every cycle. A service that logs the same
+    error every five seconds for a week teaches people to filter it out,
+    which costs the next one. A reminder is repeated every `remind_after_s`
+    so a long outage does not scroll away entirely.
+
+    A backlog that is merely large is a warning, not a loss: the rows are
+    still in memory and will be written when the database returns.
+    """
+
+    def __init__(self, bus, pg=None, remind_after_s: float = 300.0,
+                 backlog_warn: int = 10_000, service: str = "sinks"):
+        self.bus = bus
+        self.pg = pg
+        self.remind_after_s = remind_after_s
+        self.backlog_warn = backlog_warn
+        self.service = service
+        self._seen_pg_dropped = 0
+        self._seen_bus_dropped = 0
+        self._degraded = False
+        self._warned_backlog = False
+        self._last_reminder = 0.0
+
+    def _losses(self) -> list[str]:
+        """What has been lost since the last look, in words."""
+        losses = []
+        if self.pg is not None:
+            total = self.pg.stats.get("dropped", 0)
+            if total > self._seen_pg_dropped:
+                losses.append(
+                    "%d measurement row(s) discarded because the write backlog "
+                    "was full (%d since this service started)"
+                    % (total - self._seen_pg_dropped, total))
+                self._seen_pg_dropped = total
+
+        total = getattr(self.bus, "dropped", 0)
+        if total > self._seen_bus_dropped:
+            losses.append(
+                "%d message(s) lost to the broker outage buffer overflowing "
+                "(%d since this service started)"
+                % (total - self._seen_bus_dropped, total))
+            self._seen_bus_dropped = total
+        return losses
+
+    def check(self, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        losses = self._losses()
+
+        if losses:
+            for loss in losses:
+                log.error("DATA LOST: %s", loss)
+            self._last_reminder = now
+            if not self._degraded:
+                # Loud beyond the log: /status shows this, and a service that
+                # is throwing data away is not "running".
+                self.bus.publish_state(self.service, ServiceState.DEGRADED)
+                self._degraded = True
+            return
+
+        if self._degraded:
+            # Nothing new was lost this cycle. Recovery is only real once the
+            # backlog has drained too, or the next full buffer would look like
+            # a fresh problem rather than the same one continuing.
+            if self._pending() <= self.backlog_warn:
+                log.warning("no further loss and the backlog has drained; "
+                            "%d row(s) and %d message(s) were lost in total",
+                            self._seen_pg_dropped, self._seen_bus_dropped)
+                self.bus.publish_state(self.service, ServiceState.RUNNING)
+                self._degraded = False
+            elif now - self._last_reminder >= self.remind_after_s:
+                log.error("STILL DEGRADED: %d row(s) lost so far, %d waiting "
+                          "to be written", self._seen_pg_dropped, self._pending())
+                self._last_reminder = now
+            return
+
+        pending = self._pending()
+        if pending > self.backlog_warn:
+            if not self._warned_backlog:
+                log.warning("the write backlog is %d rows and growing; nothing "
+                            "is lost yet, but it will be at %d", pending,
+                            self.pg.max_pending if self.pg else 0)
+                self._warned_backlog = True
+        elif self._warned_backlog:
+            log.info("the write backlog has drained")
+            self._warned_backlog = False
+
+    def _pending(self) -> int:
+        return self.pg.stats.get("pending", 0) if self.pg is not None else 0
+
+    @property
+    def degraded(self) -> bool:
+        return self._degraded
+
+    @property
+    def lost_rows(self) -> int:
+        """Measurement rows discarded since this service started."""
+        return self._seen_pg_dropped
+
+    @property
+    def lost_messages(self) -> int:
+        """Publishes lost to the outage buffer overflowing."""
+        return self._seen_bus_dropped
+
 
 
 def dsn_from_secrets() -> str | None:
@@ -153,14 +278,20 @@ def main(argv=None) -> int:
         except (ValueError, OSError):
             pass
 
+    health = SinkHealth(bus, pg)
     try:
         while not stop.is_set():
             stop.wait(5)
             jsonl.flush()
-            if pg:
-                log.debug("postgres: %s", pg.stats)
+            health.check()
     finally:
         log.info("shutting down; %d records archived this run", jsonl.written)
+        # Do not let a loss go unsaid because it happened hours ago and the
+        # ERROR has scrolled off. The last line of a run should name it.
+        if health.degraded or health.lost_rows or health.lost_messages:
+            log.error("THIS RUN LOST DATA: %d measurement row(s) discarded, "
+                      "%d message(s) lost to buffer overflow",
+                      health.lost_rows, health.lost_messages)
         jsonl.close()
         if pg:
             pg.close()
