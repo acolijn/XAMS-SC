@@ -129,17 +129,26 @@ class StubDrift:
 class FakePg:
     """A psycopg connection that records instead of connecting.
 
-    The sinks are all the same shape — take a row, execute one INSERT — so
-    what a test needs to see is which statement ran with which values.
+    Every sink is the same shape — take a payload, execute one or more
+    statements — so what a test needs to see is which statement ran with which
+    values, in what order. `calls` keeps that; `rows` is the parameters alone,
+    for the common case of asserting on one INSERT.
+
+    It is its own cursor. psycopg's real cursor is a separate object, but no
+    sink here depends on that, and one object keeps the assertions short.
     """
 
-    def __init__(self):
-        self.rows: list[tuple] = []
-        self.statements: list[str] = []
+    def __init__(self, rowcount: int = 1, fetch: list | None = None):
+        self.calls: list[tuple[str, tuple]] = []
         self.closed = False
+        self.rowcount = rowcount
+        # Queued `fetchone` results, consumed in order; None once exhausted,
+        # which is what psycopg returns for a query that matched nothing.
+        self._fetch = list(fetch or [])
+        # When set, every execute raises it — the database being down.
         self.fail_with: Exception | None = None
 
-    # psycopg's connection/cursor context-manager protocol, minimally
+    # -- psycopg's connection/cursor protocol, minimally -------------------
     def cursor(self):
         return self
 
@@ -149,21 +158,32 @@ class FakePg:
     def __exit__(self, *exc):
         return False
 
-    def execute(self, sql, row=None):
+    def execute(self, sql, params=None):
         if self.fail_with is not None:
             raise self.fail_with
-        self.statements.append(sql)
-        if row is not None:
-            self.rows.append(tuple(row))
+        self.calls.append((sql, tuple(params) if params is not None else ()))
 
     def executemany(self, sql, rows):
         if self.fail_with is not None:
             raise self.fail_with
-        self.statements.append(sql)
-        self.rows.extend(tuple(r) for r in rows)
+        for r in rows:
+            self.calls.append((sql, tuple(r)))
 
     def fetchone(self):
-        return None
+        return self._fetch.pop(0) if self._fetch else None
 
     def close(self):
         self.closed = True
+
+    # -- assertions --------------------------------------------------------
+    @property
+    def rows(self) -> list[tuple]:
+        """The parameters of every statement, in order."""
+        return [params for _, params in self.calls]
+
+    def matching(self, fragment: str) -> list[tuple]:
+        """Parameters of the statements whose SQL contains `fragment`.
+
+        Lets a test say "the INSERT into audit" without pasting the statement.
+        """
+        return [params for sql, params in self.calls if fragment in sql]

@@ -77,6 +77,16 @@ class AuditWriter:
             # Loud. This is the one sink whose failure means a write to an
             # instrument happened with no durable record of it in the database.
             log.error("COULD NOT STORE AN AUDIT RECORD (%s): %s", exc, row)
+            # Drop the handle, as the other two sinks do. Keeping a connection
+            # that has just failed means every later audit record fails too,
+            # so one blip costs the rest of the session rather than one row —
+            # in the sink that can least afford it.
+            try:
+                if self._conn is not None:
+                    self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
 
     def start(self) -> None:
         self.bus.subscribe(TOPIC_AUDIT,
