@@ -64,9 +64,12 @@ class _Drift:
 def http(tmp_path, monkeypatch):
     d = tmp_path / "config"
     d.mkdir()
-    for name in ("channels.yaml", "devices.yaml", "alarms.yaml",
-                 "recipients.yaml"):
+    for name in ("channels.yaml", "devices.yaml", "alarms.yaml"):
         shutil.copy(REPO_CONFIG / name, d / name)
+    # ALWAYS the template, never config/recipients.yaml: that file holds real
+    # colleagues' names and mobile numbers, it is gitignored, and a fresh clone
+    # does not have one.
+    shutil.copy(REPO_CONFIG / "recipients.example.yaml", d / "recipients.yaml")
     monkeypatch.setattr(config_module, "CONFIG_DIR", d)
     monkeypatch.setattr(app_module, "Bus", lambda **kw: _Bus())
     monkeypatch.setattr(app_module, "DriftWatcher", _Drift)
