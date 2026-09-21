@@ -49,7 +49,7 @@
       {% endfor %}
     {% endif %}
   </div>
-  {# Already escaped span by span in `_colourise`, which is where the escaping
+  {# Already escaped span by span in `logview.colourise`, which is where the escaping
      has to happen anyway to get the markup in at all. #}
   <pre>{{ text|safe }}</pre>
 </div>

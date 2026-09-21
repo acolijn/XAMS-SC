@@ -30,10 +30,8 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from datetime import datetime
 from functools import lru_cache
-from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -46,59 +44,23 @@ from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
                    ACK_LS_SETPOINT, ACK_NOTIFY, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
                    TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
                    TOPIC_NOTIFY, TOPIC_RELOAD, Bus)
-from ..config import (LOG_DIR, ConfigError, load, read_hv_defaults,
+from ..config import (ConfigError, load, read_hv_defaults,
                       read_recipients, recipient_warnings, recipients_path,
                       validate_recipients, write_hv_defaults,
                       write_recipients)
 from ..hv_status import (describe_status, is_disabled, is_energised,
                          status_faults)
 from ..grafana import DriftWatcher, base_url as grafana_base_url
+from .logview import (ROTATIONS, colourise, log_files, newest_first,
+                      rotated)
+from .mimic import check_mimic_tags
+from .recipients_form import people_from_form, recipient_changes
 from .state import SystemState
 
 log = logging.getLogger(__name__)
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
-
-
-def check_mimic_tags(config) -> list[str]:
-    """Compare the SVG's ids against channels.yaml, in BOTH directions (§8.2).
-
-    The SVG is a copy of a drawing that will eventually change, and a mimic
-    quietly out of date with the plant is a liability. This is what makes that
-    visible rather than silent — roughly ten lines, and it is what makes the
-    page survivable three years from now.
-
-    Both directions matter and they fail differently:
-
-      * an id with no channel  — the drawing shows an instrument this system
-        does not read, and the bubble would sit empty forever
-      * a channel with no id   — a reading nobody can find on the drawing,
-        which is the half-identity §3 warns about
-
-    Returns the problems. Logged at startup; never fatal, because a mimic that
-    has drifted is still more useful than no mimic.
-    """
-    svg_path = HERE / "static" / "xams_pid.svg"
-    if not svg_path.exists():
-        return ["the mimic SVG has not been built (run tools/build_mimic.py)"]
-
-    ids = set(re.findall(r'id="v-([^"]+)"', svg_path.read_text(encoding="utf-8")))
-    problems = []
-
-    for name in sorted(ids - set(config.channels)):
-        problems.append(f"the drawing has a value slot for {name!r}, which is "
-                        f"not a channel in channels.yaml")
-
-    # Only channels that describe a point in the plant belong on a P&ID. HV,
-    # UPS, heaters and derived values have no place on a piping drawing, and
-    # listing them as missing would be noise that trains people to ignore this.
-    on_drawing = {c.name for c in config.enabled_channels()
-                  if c.on_pid and (c.kind in ("rtd", "temperature")
-                                   or (c.kind == "voltage" and c.device == "cdaq"))}
-    for name in sorted(on_drawing - ids):
-        problems.append(f"{name!r} is read but has no place on the drawing")
-    return problems
 
 
 OPERATOR_COOKIE = "xams_operator"
@@ -231,84 +193,6 @@ def _limits_view(state) -> dict:
     return {"known": True, "rows": rows}
 
 
-def _people_from_form(form: dict) -> tuple[list[dict], list[dict]]:
-    """Rebuild the recipient list from the posted rows.
-
-    Rows arrive as `name-0`, `email-0`, `phone-0`, `enabled-0`, `remove-0`.
-    The index ties the fields of one person together and is otherwise
-    meaningless - the saved order is the order of the rows on the page.
-
-    An entirely blank row is dropped rather than refused: the page offers a
-    spare row at the bottom for adding somebody, and submitting without using
-    it must not be an error.
-    """
-    indices = sorted({key.split("-", 1)[1] for key in form
-                      if key.startswith("name-") and "-" in key},
-                     key=lambda i: (len(i), i))
-    people, removed = [], []
-    for i in indices:
-        person = {
-            "name": (form.get(f"name-{i}") or "").strip(),
-            "email": (form.get(f"email-{i}") or "").strip(),
-            # Kept as an empty string when blank, which MEANS "do not SMS
-            # this person" - they are notified by email alone. It is not a
-            # number somebody forgot to fill in.
-            "phone": (form.get(f"phone-{i}") or "").strip(),
-            "enabled": bool(form.get(f"enabled-{i}")),
-        }
-        if not any((person["name"], person["email"], person["phone"])):
-            continue
-        # Removal is a checkbox applied on save, never a button that deletes
-        # on click: this page sits open beside a self-refreshing UI, and a
-        # one-click irreversible delete next to that is the wrong affordance.
-        if form.get(f"remove-{i}"):
-            removed.append(person)
-            continue
-        people.append(person)
-    return people, removed
-
-
-def _recipient_changes(before: list[dict], after: list[dict],
-                       removed: list[dict]) -> list[dict]:
-    """What changed, as audit lines (§4.4).
-
-    Keyed by name, because that is what a person is called in a conversation
-    about who was on the list. It stays recoverable who would have been
-    notified when a given alarm fired - which matters most for somebody who
-    was REMOVED, since the file no longer mentions them at all.
-    """
-    def summarise(person):
-        bits = [person.get("email") or "no email",
-                person.get("phone") or "no phone",
-                "enabled" if person.get("enabled") else "disabled"]
-        return ", ".join(bits)
-
-    old_by_name = {(p.get("name") or "").casefold(): p for p in before}
-    new_by_name = {(p.get("name") or "").casefold(): p for p in after}
-    lines = []
-
-    for person in removed:
-        lines.append({"target": person.get("name") or "(unnamed)",
-                      "old": summarise(person), "new": "removed"})
-    for key, person in new_by_name.items():
-        old = old_by_name.get(key)
-        if old is None:
-            lines.append({"target": person.get("name"),
-                          "old": None, "new": summarise(person)})
-        elif summarise(old) != summarise(person):
-            lines.append({"target": person.get("name"),
-                          "old": summarise(old), "new": summarise(person)})
-    for key, old in old_by_name.items():
-        if key not in new_by_name and not any(
-                (r.get("name") or "").casefold() == key for r in removed):
-            # Vanished without the remove box being ticked - a blanked-out
-            # row. Recorded all the same; a person who stops being notified
-            # must leave a trace however they left.
-            lines.append({"target": old.get("name") or "(unnamed)",
-                          "old": summarise(old), "new": "removed"})
-    return lines
-
-
 def _audit(state, actor: str, action: str, target: str, old, new,
            result: str = "ok", detail: str = "") -> None:
     """Record a change on the audit topic (§10 rule 5).
@@ -339,130 +223,6 @@ def _json_age(age_s: float) -> float | None:
     same "no reading yet" is already reported for a service heartbeat.
     """
     return None if age_s is None or not math.isfinite(age_s) else round(age_s, 1)
-
-
-# `setup_logging` keeps 5 rotated files per service; anything outside this
-# range is not a log this system wrote.
-_ROTATIONS = (1, 2, 3, 4, 5)
-
-# The start of a log line, per the format in `setup_logging`: a date, a time.
-_RECORD = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
-
-
-def _log_files() -> dict[str, Path]:
-    """The logs the page may show, by the name it shows them under.
-
-    A whitelist by construction: the selected name is looked up here rather
-    than interpolated into a path, so `?service=../something` selects nothing
-    instead of reading it.
-    """
-    if not LOG_DIR.is_dir():
-        return {}
-    return {p.stem: p for p in sorted(LOG_DIR.glob("*.log"))}
-
-
-def _rotated(path: Path, n: int) -> Path:
-    """`caen.log` -> `caen.log.2`, as RotatingFileHandler names them."""
-    return path.with_name(f"{path.name}.{n}")
-
-
-def _newest_first(lines: list[str]) -> list[str]:
-    """Reverse the log RECORDS, not the lines.
-
-    A traceback is many lines of one record, and reversing line by line
-    prints it inside out — which is exactly the record somebody came to the
-    page to read. Lines that do not start a record stay with the line above
-    them, and a window that opens mid-record keeps its orphan lines together.
-    """
-    records: list[list[str]] = []
-    for line in lines:
-        if _RECORD.match(line) or not records:
-            records.append([line])
-        else:
-            records[-1].append(line)
-    return [line for record in reversed(records) for line in record]
-
-
-# One record's header, exactly as `setup_logging` writes it (service.py):
-#     2026-09-20 11:26:28,091 INFO     [sinks] xams_sc.sinks.pg_writer: text
-# The run of spaces between the fields is captured rather than assumed, so the
-# rendered line stays aligned with the file it came from - a log read side by
-# side with the real file must not shift under the reader.
-_HEADER = re.compile(
-    r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:,\d{3})?)"
-    r"(?P<gap1>\s+)(?P<level>[A-Z]+)(?P<gap2>\s+)"
-    r"(?P<service>\[[^\]]*\])(?P<gap3>\s*)"
-    r"(?P<logger>[\w.]+): (?P<message>.*)$")
-
-# The backup is driven from PowerShell (tools/backup.ps1), not through
-# `setup_logging`, and writes a shorter record: no milliseconds, no service
-# tag, no logger, and WARN where Python writes WARNING.
-#     2026-09-18 09:43:52 INFO    backup starting (target nikhef-backup:/...)
-# Without a pattern of its own every line of backup.log missed `_HEADER` and
-# came out as continuation grey - and backup.log is the one log where a failed
-# nightly copy has to catch the eye.
-_HEADER_PLAIN = re.compile(
-    r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
-    r"(?P<gap1>\s+)(?P<level>[A-Z]+)(?P<gap2>\s+)(?P<message>.*)$")
-
-# A class per level rather than a colour per level: the palette belongs in the
-# stylesheet with every other colour in the interface (§8.1), not in here.
-# WARN and WARNING are one severity spelled two ways - the shell writes one,
-# `logging` the other.
-_LEVEL_CLASS = {"DEBUG": "lg-debug", "INFO": "lg-info", "WARN": "lg-warn",
-                "WARNING": "lg-warn", "ERROR": "lg-error",
-                "CRITICAL": "lg-crit"}
-
-
-def _colourise(text: str) -> str:
-    """The log as HTML, one span per field, for the Logs tab (§8.1).
-
-    Done here rather than in the browser so that it is testable like the rest
-    of the page, and so a reader with JavaScript off still gets the colours.
-
-    EVERY piece is escaped BEFORE any markup goes near it. A log line is not
-    trusted text: it carries device replies, exception strings and MQTT
-    payloads straight off the wire, and one `<script>` in a CAEN error string
-    would otherwise run on this page.
-    """
-    out = []
-    for line in text.splitlines():
-        match = _HEADER.match(line)
-        # Only where the long format did not match: a `setup_logging` line
-        # carries milliseconds, which `_HEADER_PLAIN` refuses anyway, but
-        # trying that pattern first keeps it an argument, not a dependency.
-        plain = None if match else _HEADER_PLAIN.match(line)
-        head = match or plain
-        if head is None:
-            # A traceback body, or any line that does not start a record.
-            # Dimmed as one block so the eye falls to the next timestamp
-            # instead of reading the stack frames first.
-            out.append('<span class="lg-cont">%s</span>' % escape(line))
-            continue
-        level = head.group("level")
-        cls = _LEVEL_CLASS.get(level, "lg-info")
-        # ERROR and CRITICAL colour the MESSAGE too, not just the level word.
-        # Everything else leaves it in the body colour: if every line shouts,
-        # the one that matters stops standing out.
-        message = escape(head.group("message"))
-        if level in ("ERROR", "CRITICAL"):
-            message = '<span class="%s">%s</span>' % (cls, message)
-        stamp = ('<span class="lg-time">%s</span>%s'
-                 '<span class="%s">%s</span>%s'
-                 % (escape(head.group("time")), head.group("gap1"),
-                    cls, escape(level), head.group("gap2")))
-        if match is None:
-            # The shell format has no service and no logger to colour, and
-            # neither may be invented for it: the line has to read the same
-            # as the file it came from.
-            out.append(stamp + message)
-            continue
-        out.append(
-            '%s<span class="lg-svc">%s</span>%s'
-            '<span class="lg-name">%s</span>: %s'
-            % (stamp, escape(match.group("service")), match.group("gap3"),
-               escape(match.group("logger")), message))
-    return "\n".join(out)
 
 
 def _redirect_hv(error: str | None, ok: str | None = None):
@@ -1000,7 +760,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         who = operator_of(request, form.get("by", ""))
 
         before = read_recipients()
-        people, removed = _people_from_form(form)
+        people, removed = people_from_form(form)
 
         problems = validate_recipients(people)
         if problems:
@@ -1016,7 +776,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 "/alarms?error=" + quote(f"could not write the file: {exc}"),
                 status_code=303)
 
-        for line in _recipient_changes(before, people, removed):
+        for line in recipient_changes(before, people, removed):
             _audit(state, who, "recipients", line["target"],
                    line["old"], line["new"])
             log.warning("recipients: %s %s -> %s by %s", line["target"],
@@ -1150,13 +910,13 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         # Chosen from the whitelist, never pasted together out of what the URL
         # said: `logs/{service}.log` reads any .log file on the disk, loopback
         # binding or not.
-        choices = _log_files()
+        choices = log_files()
         current = choices.get(service)
-        rotations = [n for n in _ROTATIONS
-                     if current is not None and _rotated(current, n).exists()]
+        rotations = [n for n in ROTATIONS
+                     if current is not None and rotated(current, n).exists()]
         path = current if not older else (
-            _rotated(current, older) if current is not None
-            and older in _ROTATIONS else None)
+            rotated(current, older) if current is not None
+            and older in ROTATIONS else None)
 
         if path is None:
             text = "(no such log)"
@@ -1170,12 +930,12 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 # out grey.
                 content = path.read_text(encoding="utf-8-sig",
                                          errors="replace")
-                text = "\n".join(_newest_first(content.splitlines()[-lines:]))
+                text = "\n".join(newest_first(content.splitlines()[-lines:]))
             except Exception as exc:
                 text = f"could not read {path}: {exc}"
 
         return page(request, "logs.html", available=sorted(choices),
-                    selected=service, text=_colourise(text), rotations=rotations,
+                    selected=service, text=colourise(text), rotations=rotations,
                     older=older, lines=lines,
                     read_at=datetime.now().strftime("%H:%M:%S"))
 

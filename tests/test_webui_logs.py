@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from xams_sc.api import app as app_module
+from xams_sc.api import logview
 
 from doubles import RecordingBus, StubDrift  # noqa: F401
 
@@ -32,7 +33,9 @@ def pre(body: str) -> str:
 @pytest.fixture
 def logs(tmp_path, monkeypatch):
     """A log folder of our own, in place of the repository's."""
-    monkeypatch.setattr(app_module, "LOG_DIR", tmp_path)
+    # Patched where it is READ. The log helpers moved out of app.py into
+    # api/logview.py, and `log_files` resolves LOG_DIR in that module.
+    monkeypatch.setattr(logview, "LOG_DIR", tmp_path)
     return tmp_path
 
 
