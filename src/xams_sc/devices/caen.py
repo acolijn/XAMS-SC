@@ -39,6 +39,7 @@ stored signed (§7.2). This is almost certainly what the LabVIEW
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -55,6 +56,17 @@ from ..service import BaseService
 from .serial_id import IdentityError, resolve
 
 log = logging.getLogger(__name__)
+
+# The status-word decoding lives in `hv_status` so the web UI can use it
+# without importing a serial driver, and is re-exported here because this is
+# where anything working on the CAEN looks for it. Declared rather than left
+# to look accidental: without this they read as six unused imports, and the
+# next person to tidy up would delete them and break test_caen_protocol.
+__all__ = [
+    "CaenChannelReader", "CaenService",
+    "BIT_DISABLED", "BIT_ON", "FAULT_BITS", "STAT_BITS",
+    "describe_status", "status_faults",
+]
 
 # The status word and its decoding live in hv_status.py: they are pure logic
 # and the web UI needs them, and this module imports `serial`. Re-exported
@@ -115,6 +127,22 @@ class CaenChannelReader:
         self._serial = serial.Serial(self.port, self.baud, bytesize=8,
                                      parity=serial.PARITY_NONE, stopbits=1,
                                      timeout=1.5, write_timeout=1.5)
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """Hold the port for a sequence that must not be interleaved.
+
+        A serial instrument matches a reply to a query only by arrival order,
+        so a read-old / write / read-back has to be one conversation or the
+        1 Hz poll lands in the middle and hands its reply to the command.
+        The lock is reentrant, so the calls inside still take it themselves.
+
+        Public because the service needs it: it used to reach in and take
+        `reader._lock` directly, which worked and would have kept working
+        right up until somebody changed how this class locks.
+        """
+        with self._lock:
+            yield self
 
     def close(self) -> None:
         if self._serial is not None:
@@ -383,8 +411,6 @@ class CaenService(BaseService):
 
         try:
             for (vid, pid), expected in by_vidpid.items():
-                probes: dict[str, CaenChannelReader] = {}
-
                 mapping = resolve(vid, pid, self._probe, expected)
 
                 for spec in self._specs:
@@ -677,7 +703,7 @@ class CaenService(BaseService):
 
         # Held across read-old / write / read-back, so the 1 Hz poll cannot
         # land in the middle and hand us its reply instead of ours.
-        with reader._lock:
+        with reader.transaction():
             before_mag = reader.monitor(index, "VSET")
             sent, why = reader.set_voltage(index, magnitude)
             after_mag = reader.monitor(index, "VSET") if sent else None
@@ -802,7 +828,7 @@ class CaenService(BaseService):
             return
         channel, reader, index = resolved
 
-        with reader._lock:
+        with reader.transaction():
             word = reader.status(index)
             vset_mag = reader.monitor(index, "VSET")
 

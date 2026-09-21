@@ -35,6 +35,7 @@ reported as quality=error instead of a plausible-looking zero.
 from __future__ import annotations
 
 import json
+import contextlib
 import logging
 import threading
 import time
@@ -104,6 +105,23 @@ class LakeShore:
         # Reentrant, so a command can hold it across write-then-read-back and
         # still call query() underneath.
         self._lock = threading.RLock()
+
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """Hold the port for a sequence that must not be interleaved.
+
+        A serial instrument matches a reply to a query only by arrival order,
+        so a read-old / write / read-back has to be one conversation or the
+        1 Hz poll lands in the middle and hands its reply to the command.
+        The lock is reentrant, so the calls inside still take it themselves.
+
+        Public because the service needs it: it used to reach in and take
+        `reader._lock` directly, which worked and would have kept working
+        right up until somebody changed how this class locks.
+        """
+        with self._lock:
+            yield self
 
     def open(self) -> None:
         # 7-O-1: the 335's factory setting. Not a typo.
@@ -523,7 +541,7 @@ class LakeShoreService(BaseService):
         device = self._device
         # Held across read-old / write / read-back, so the 1 Hz poll cannot
         # land in the middle and hand us its reply instead of ours.
-        with device._lock:
+        with device.transaction():
             before = device.number("SETP? %d" % output)
             sent = device.send("SETP %d,%.3f" % (output, wanted))
             after = device.number("SETP? %d" % output) if sent else None
@@ -564,7 +582,7 @@ class LakeShoreService(BaseService):
         wanted = HEATER_RANGES[name]
 
         device = self._device
-        with device._lock:
+        with device.transaction():
             before = device.number("RANGE? %d" % output)
             sent = device.send("RANGE %d,%d" % (output, wanted))
             after = device.number("RANGE? %d" % output) if sent else None

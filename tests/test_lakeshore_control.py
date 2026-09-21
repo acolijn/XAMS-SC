@@ -18,6 +18,7 @@ port, which is not the instrument having obeyed — and a write that silently
 did not take, reported as success, is the worst outcome available.
 """
 
+import contextlib
 import json
 import threading
 
@@ -50,6 +51,17 @@ class FakeDevice:
         # without it passes tests the real object would fail, which is how the
         # race below reached the hardware in the first place.
         self._lock = threading.RLock()
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """As the real reader does: hold the port for one conversation.
+
+        Reentrant, because the calls the service makes inside it take the
+        lock themselves. This used to be a bare `_lock` attribute, mirrored
+        here only because the service reached in and took it.
+        """
+        with self._lock:
+            yield self
 
     def send(self, command):
         self.sent.append(command)

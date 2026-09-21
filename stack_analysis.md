@@ -144,10 +144,22 @@ That is the scaffolding working.
 | 3.6 | `app.py` 1 259 lines, four concerns | **closed** — three modules out, 1 019 lines |
 | 3.7 | No CI, no lockfile, no type checking | **open**, and downgraded — see below |
 | 3.8 | Security posture thin | **open**, unchanged and accepted |
-| 3.9 | `reader._lock` reached into from outside | **open**, trivial |
+| 3.9 | `reader._lock` reached into from outside | **closed** — `transaction()`, and it was four sites, not two |
 | 3.10 | Services card blind to `sinks`/`alarms`; pyflakes guard inert | **closed** — found mid-work, not by either review |
 
 Three of these deserve more than a row.
+
+### 3.9 — trivial, and it was hiding something
+
+Two sites in `caen.py` reached into `reader._lock`. Closing it found **two more
+in `lakeshore.py`** doing the same, and something better: both test doubles —
+`FakeReader` and `FakeDevice` — carried a `_lock` attribute of their own, for no
+reason except that production code reached in and took it. A double forced to
+mirror another object's PRIVATE state is the clearest possible evidence that the
+coupling is real rather than theoretical.
+
+`transaction()` is now a public context manager on both readers, and the two
+doubles implement it as an interface instead of imitating an attribute.
 
 ### 3.10 — two more, found by doing the work rather than by reading
 
@@ -334,9 +346,8 @@ power" on the first reading — are exactly the logic worth pinning.
 | 4 | Pin dependencies; commit a lockfile for the lab PC | hours | A reinstall should reproduce, not resolve |
 | 5 | CI: `pytest` + `pyflakes` on a clean box | hours | Proves the install, and that the guards are installed to run (§3.10) |
 | 6 | Tests for `alarms/__main__.py` and `daily.py` | 1 day | The last two meaningful 0 % modules |
-| 7 | `reader.transaction()` replacing `reader._lock` | hours | Small, prevents a future break |
-| 8 | `os.stat` check on `secrets.yaml` mode | hours | It holds a billable API key |
-| 9 | Document the sinks/PostgreSQL service dependency (§4.6) | minutes | The recovery drill is otherwise undiscoverable |
+| 7 | `os.stat` check on `secrets.yaml` mode | hours | It holds a billable API key |
+| 8 | Document the sinks/PostgreSQL service dependency (§4.6) | minutes | The recovery drill is otherwise undiscoverable |
 
 Items 1–3 are half a week together and close the last two places where this
 system can lose data quietly.

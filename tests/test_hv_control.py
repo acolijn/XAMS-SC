@@ -14,6 +14,7 @@ flipped. If the invariant holds, flipping the switch is always safe. If it does
 not, flipping it is a step into an unannounced voltage.
 """
 
+import contextlib
 import json
 
 import pytest
@@ -46,6 +47,17 @@ class FakeReader:
         self.written = []
         self.outputs = []
         self._lock = threading.RLock()
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """As the real reader does: hold the port for one conversation.
+
+        Reentrant, because the calls the service makes inside it take the
+        lock themselves. This used to be a bare `_lock` attribute, mirrored
+        here only because the service reached in and took it.
+        """
+        with self._lock:
+            yield self
 
     def status(self, channel):
         return self.stat if self.answers else None
