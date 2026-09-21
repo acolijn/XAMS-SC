@@ -382,6 +382,15 @@ class CaenService(BaseService):
         self._link_down: dict[str, int] = {}
         self._next_relink = 0.0
 
+    def owned_channels(self):
+        """Both supplies' channels, by device id rather than service name.
+
+        THE ONE SERVICE WHERE THE TWO DIFFER (§7.2). It is called `caen` and
+        reads `hv_1` and `hv_2`, so the inherited lookup found nothing and a
+        link that died marked none of these 32 channels as unreadable.
+        """
+        return list(self._channels)
+
     # --------------------------------------------------------------- identity
 
     def _probe(self, port: str) -> tuple[str, ...] | None:

@@ -279,6 +279,20 @@ class BaseService:
             )
         self._window.clear()
 
+    def owned_channels(self):
+        """The channels this service reads.
+
+        **By DEVICE, which is not always the service name.** `channels_for`
+        matches `channel.device`, and for most services the device id and the
+        service name happen to be the same word - `cdaq` reads channels whose
+        device is `cdaq`. The CAEN service is the exception: it is called
+        `caen` and its channels belong to `hv_1` and `hv_2`, so asking for
+        `channels_for("caen")` returned an EMPTY list and `_publish_error`
+        marked nothing at all. A service whose device ids differ from its
+        name overrides this.
+        """
+        return self.config.channels_for(self.name)
+
     def _publish_error(self, reason: str) -> None:
         """Mark every channel of this service as unreadable.
 
@@ -286,7 +300,17 @@ class BaseService:
         read is published with quality=error, not left at its last value.
         """
         now = utcnow()
-        for ch in self.config.channels_for(self.name):
+        channels = self.owned_channels()
+        if not channels:
+            # There is nothing this can do about it, but silence here is the
+            # exact failure principle 4 forbids: the retained topics keep the
+            # last good values and the page shows a plant that is not being
+            # read. Say so, so it is in the log rather than only in the
+            # absence of one.
+            log.error("%s cannot name the channels it reads, so a failed "
+                      "read marks NOTHING as bad and the last good values "
+                      "stand. This is a bug in owned_channels().", self.name)
+        for ch in channels:
             self.bus.publish_measurement(
                 Measurement(t=now, channel=ch.name, value=None, unit=ch.unit,
                             quality=Quality.ERROR)
