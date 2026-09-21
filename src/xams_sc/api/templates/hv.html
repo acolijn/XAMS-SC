@@ -178,7 +178,7 @@
    the operator has filled in - which is what §10a asks for. Empty boxes are
    left alone, so one channel or eight is the same gesture. #}
 <form method="post" action="/hv/apply" id="setpoints"
-      onsubmit="return confirm('Apply the setpoints you have entered?\n\nEach channel that is energised will ramp to its new value at the board’s own rate.');">
+      onsubmit="return confirmSetpoints(this)">
 {# STACKED, not side by side. The two supplies shared a row until the table
    grew a VSET column, a setpoint box and an energise button; eleven columns
    in half a window is narrower than the content deserves. Full width each,
@@ -259,9 +259,19 @@
                  placeholder="disabled"
                  title="this channel is switched off at the supply. Flip its enable first - it stays at zero volts until energised - and the default will appear here.">
         {% else %}
+          {# `data-*` carries what the CONFIRMATION needs to name the change
+             in volts rather than in the abstract (§8.1). Read from the
+             server-rendered row, so there is no second copy of anything: the
+             limits are the VSET channel's, which is the pair the supply
+             validates against. #}
           <input type="text" name="{{ c.vset_channel }}" form="setpoints"
                  class="vset-box" inputmode="decimal" placeholder="set V"
                  data-default="{{ c.default if c.default is not none else '' }}"
+                 data-label="{{ c.label }}"
+                 data-now="{{ c.vset.formatted() if (c.vset and c.vset.healthy) else '' }}"
+                 data-energised="{{ '1' if c.energised else '0' }}"
+                 data-min="{{ c.vset_limits.get('min') if c.vset_limits.get('min') is not none else '' }}"
+                 data-max="{{ c.vset_limits.get('max') if c.vset_limits.get('max') is not none else '' }}"
                  aria-label="new setpoint for {{ c.label }}">
         {% endif %}
       </td>
@@ -388,6 +398,83 @@ function loadDefaults() {
 }
 function clearBoxes() {
   document.querySelectorAll('.vset-box').forEach(function (b) { b.value = ''; });
+}
+
+// THE CONFIRMATION, IN VOLTS (§8.1, §10a).
+//
+// This used to be one line - "Apply the setpoints you have entered?" - on the
+// most dangerous control in the system. DESIGN §8.1 asks for the new value to
+// be RETYPED as deliberate friction, and what stands here instead names every
+// channel, what it holds now and what it is being moved to, so the operator
+// confirms a number rather than an intention.
+//
+// The failure mode §8.1 cites, an extra zero, is already refused twice: by
+// the software range from channels.yaml and by the board's own MAXV. What a
+// dialog catches that neither of those can is the WRONG-BUT-LEGAL value -
+// the gate's voltage typed into the cathode's box, which is in range, which
+// the supply will accept, and which nothing downstream can know was a
+// mistake.
+//
+// It also says which channels move NOW. A setpoint on an energised channel
+// ramps immediately; on a channel that is switched on but not energised it
+// is only stored, and that is the whole of §10a's middle state. The old
+// dialog said "each channel that is energised will ramp" without saying
+// which ones those were.
+//
+// The numbers come from data-* on each box, rendered by the server from the
+// same row the table shows. Nothing is recomputed here and no limit is
+// duplicated: out of range is REPORTED, never refused, because the supply is
+// the authority on that (§8.1) and a page that refuses on its own would be a
+// second gate to keep in step.
+function confirmSetpoints(form) {
+  var moves = [], problems = [];
+
+  // form.elements, not querySelectorAll: the boxes sit in the table and are
+  // tied to this form by their `form` attribute, so they are not descendants
+  // of it.
+  Array.prototype.forEach.call(form.elements, function (box) {
+    if (!box.name || !box.classList || !box.classList.contains('vset-box')) return;
+    var text = (box.value || '').trim();
+    if (!text) return;                       // an empty box applies nothing
+
+    var label = box.dataset.label || box.name;
+    var now = box.dataset.now || 'unknown';
+    var value = Number(text);
+
+    if (text === '' || isNaN(value)) {
+      problems.push(label + ': "' + text + '" is not a number');
+      return;
+    }
+
+    var min = box.dataset.min === '' ? null : Number(box.dataset.min);
+    var max = box.dataset.max === '' ? null : Number(box.dataset.max);
+    if (min !== null && max !== null && (value < min || value > max)) {
+      problems.push(label + ': ' + text + ' V is outside ' + min + ' to ' +
+                    max + ' V - the supply will refuse it');
+    }
+
+    moves.push('  ' + label + ':  ' + now + ' V  ->  ' + text + ' V' +
+               (box.dataset.energised === '1'
+                 ? '   (energised: ramps now)'
+                 : '   (not energised: stored until you turn it on)'));
+  });
+
+  if (!moves.length && !problems.length) {
+    // Nothing to confirm and nothing to send. Stopping here saves a round
+    // trip that comes back saying "every box was empty".
+    alert('Every box is empty, so there is nothing to apply.');
+    return false;
+  }
+
+  var lines = ['Apply ' + moves.length +
+               (moves.length === 1 ? ' setpoint?' : ' setpoints?'), ''];
+  lines = lines.concat(moves);
+  if (problems.length) {
+    lines.push('', 'WARNING:');
+    problems.forEach(function (p) { lines.push('  ' + p); });
+  }
+  lines.push('', 'An energised channel ramps at the board’s own rate.');
+  return confirm(lines.join('\n'));
 }
 
 // THE SECOND CLICK. Energising is a round trip - command, read-back, ack,

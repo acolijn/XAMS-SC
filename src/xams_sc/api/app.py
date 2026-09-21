@@ -813,6 +813,14 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
                     "flags": "" if word is None else describe_status(word),
                     "expect": expect,
                     "limits": ch.limits or {},
+                    # The limits of the VSET channel, which is what the write
+                    # path validates against (caen.py). `limits` above belongs
+                    # to the VMON channel and happens to carry the same pair
+                    # today - relying on that is how `channels_for(self.name)`
+                    # came to mark nothing. The confirmation quotes the range
+                    # the supply will actually refuse against.
+                    "vset_limits": (default_channel.limits or {}
+                                    if default_channel else {}),
                     "sign": ch.sign,
                 })
             supplies.append({
