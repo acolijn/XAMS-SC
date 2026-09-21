@@ -11,6 +11,7 @@ correct within a second of starting rather than after a full log interval.
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import threading
@@ -84,7 +85,7 @@ class SystemState:
         self._alarms: dict[str, dict] = {}
         self._flow_gaps: float = 0.0
         self._flow_ack: dict | None = None
-        self._acks: dict[str, dict] = {}
+        self._acks: dict[str, collections.deque] = {}
         self._backup: dict | None = None
         self._limits: dict | None = None
         self._notify: dict | None = None
@@ -213,7 +214,8 @@ class SystemState:
         return None
 
     def command(self, topic: str, ack_topic: str, payload: dict,
-                timeout_s: float = 10.0) -> dict:
+                timeout_s: float = 10.0,
+                match: tuple[str, ...] = ()) -> dict:
         """Send a command and wait for the service to acknowledge it (§10).
 
         The UI never touches an instrument. It asks, over the bus, and reports
@@ -224,15 +226,43 @@ class SystemState:
         A timeout is reported as failure, NOT as success. If the service is
         down the write did not happen, and saying otherwise would leave
         somebody believing a setpoint had moved.
+
+        `match` NAMES THE FIELDS THAT MUST AGREE between the command and the
+        acknowledgement, and it is what keeps two operators apart. Every
+        waiter on `xams/ack/caen/vset` used to take whichever ack arrived
+        first, so two people setting two different channels at the same
+        moment were shown each other's result — one of them a confident
+        `-4200 V` for a channel they had not touched, the other a spurious
+        timeout. The discriminator is already in both payloads (`channel` for
+        the HV path, `output` for the Lake Shore), so nothing new has to be
+        put on the wire and no service had to change.
+
+        With no `match`, behaviour is as before: any ack on the topic will
+        do. That is right for a command with a single target, such as the
+        master notification switch, where there is nothing to tell apart.
         """
+        expected = {k: payload[k] for k in match if k in payload}
+
+        def mine(ack: dict) -> bool:
+            return all(ack.get(k) == v for k, v in expected.items())
+
         with self._lock:
-            self._acks.pop(ack_topic, None)
+            pending = self._acks.setdefault(ack_topic, collections.deque(maxlen=32))
+            # Drop only what is stale FOR US. Clearing the whole queue here is
+            # what made the second operator time out: their ack was already in
+            # it, and we threw it away on our way past.
+            keep = [a for a in pending if not mine(a)]
+            pending.clear()
+            pending.extend(keep)
+
         self.bus.publish_raw(topic, json.dumps(payload))
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             with self._lock:
-                if ack_topic in self._acks:
-                    return self._acks.pop(ack_topic)
+                for ack in list(pending):
+                    if mine(ack):
+                        pending.remove(ack)
+                        return ack
             time.sleep(0.1)
         return {"ok": False, "reason": "the %s service did not answer within "
                                        "%.0f s; nothing was changed"
@@ -240,10 +270,16 @@ class SystemState:
 
     def _on_ack(self, topic: str, payload: str) -> None:
         try:
-            with self._lock:
-                self._acks[topic] = json.loads(payload)
+            ack = json.loads(payload)
         except ValueError:
-            pass
+            return
+        with self._lock:
+            # A deque, not one slot per topic. Two commands can be in flight
+            # on the same topic, and the second ack must not evict the first
+            # before its waiter has looked. Bounded, because an ack nobody is
+            # waiting for — a command that already timed out — must not
+            # accumulate.
+            self._acks.setdefault(topic, collections.deque(maxlen=32)).append(ack)
 
     def _on_backup(self, topic: str, payload: str) -> None:
         try:

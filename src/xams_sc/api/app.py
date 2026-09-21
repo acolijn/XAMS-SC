@@ -619,7 +619,8 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
                 continue
             answer = state.command(TOPIC_HV_VSET, ACK_HV_VSET,
                                    {"channel": name, "value": value,
-                                    "by": who})
+                                    "by": who},
+                                   match=("channel",))
             if answer.get("ok"):
                 results.append(f"{_short(name)} now {answer['new']:+.1f} V")
                 log.warning("HV setpoint %s -> %+.1f by %s", name, value, who)
@@ -788,7 +789,8 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         wanted = on.strip().lower() in ("1", "true", "on", "yes")
         answer = state.command(TOPIC_HV_OUTPUT, ACK_HV_OUTPUT,
                                {"channel": channel.strip(), "on": wanted,
-                                "by": who})
+                                "by": who},
+                               match=("channel",))
         if answer.get("ok"):
             detail = answer.get("detail") or ("on" if wanted else "off")
             log.warning("HV output %s -> %s by %s", channel,
@@ -814,7 +816,8 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         except ValueError:
             return _redirect_ls("that is not a number")
         result = state.command(TOPIC_LS_SETPOINT, ACK_LS_SETPOINT,
-                               {"output": 1, "value": wanted, "by": who})
+                               {"output": 1, "value": wanted, "by": who},
+                               match=("output",))
         if result.get("ok"):
             log.warning("setpoint changed to %.3f C by %s", wanted, who)
             return _redirect_ls(None, "setpoint now %.3f C" % result["new"])
@@ -827,7 +830,8 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
         who = operator_of(request, by)
         result = state.command(TOPIC_LS_RANGE, ACK_LS_RANGE,
                                {"output": 1, "range": (range or "").strip(),
-                                "by": who})
+                                "by": who},
+                               match=("output",))
         if result.get("ok"):
             log.warning("heater range set to %s by %s", result["new"], who)
             return _redirect_ls(None, "heater %s" % result["new"])
