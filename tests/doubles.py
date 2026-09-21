@@ -21,6 +21,47 @@ from paho.mqtt.client import topic_matches_sub
 UI_ORIGIN = "http://127.0.0.1:8000"
 
 
+def stub_commands(app):
+    """Answer every bus round trip at once, for tests that are not about it.
+
+    `state.command` waits 10 s for an acknowledgement and `reset_flow` waits
+    8 s, and with no service behind the broker they wait the whole of it. A
+    test that only wants to know whether a request REACHED the handler pays
+    that in full: the cross-site tests took 85 s, four fifths of the entire
+    suite, sitting in timeouts on purpose-built failures.
+
+    That matters beyond the wall clock. A suite that takes two minutes stops
+    being run before a commit, and the tests most likely to be skipped are
+    the ones that were slow because they were thorough.
+
+    Only for tests whose subject is something in FRONT of the round trip -
+    the middleware, the routing, the redirect. The round trip has its own
+    tests (test_webui_flow_reset, test_command_session, test_ack_matching)
+    and those must keep using the real thing.
+
+    Every call is recorded on `app.state.commands`. Without that, a test
+    asserting that a refused request reached no instrument would be asserting
+    nothing: the stub publishes nothing either way, so an ACCEPTED request
+    would leave the bus just as empty as a refused one.
+    """
+    app.state.commands = []
+
+    def command(topic, ack_topic, payload, timeout_s=10.0, match=()):
+        app.state.commands.append((topic, payload))
+        # Shaped like a real acknowledgement: `new` is formatted with %+.1f
+        # by two handlers and `detail` is read by a third, so a bare
+        # {"ok": True} would fail inside the handler rather than in the test.
+        return {"ok": True, "new": 0.0, "detail": "stubbed", "reason": ""}
+
+    def reset_flow(who, timeout_s=8.0):
+        app.state.commands.append(("flow/reset", {"by": who}))
+        return {"total_g": 0.0, "gaps_s": 0.0}
+
+    app.state.system.command = command
+    app.state.system.reset_flow = reset_flow
+    return app
+
+
 def ui_client(app):
     """A TestClient that reaches the app the way a BROWSER does.
 

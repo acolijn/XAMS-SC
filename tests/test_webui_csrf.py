@@ -70,16 +70,31 @@ def test_referer_stands_in_for_a_missing_origin(csrf_client, path, data):
     assert r.status_code != 403, path
 
 
-def test_nothing_reaches_the_bus_when_a_post_is_refused(csrf_client, bus):
+def test_no_command_is_attempted_when_a_post_is_refused(csrf_client):
     """The refusal happens BEFORE the handler, not inside it.
 
-    A 403 with the command already on `xams/cmd/#` would be a test passing
-    over a high voltage that had moved.
+    A 403 with the command already sent would be a test passing over a high
+    voltage that had moved.
+
+    Asserted on the commands the handler ATTEMPTED, not on what reached the
+    bus. The round trip is stubbed here for speed, and a stub publishes
+    nothing whether it is called or not - so an empty bus would have been an
+    empty assertion. The second half proves this one can fail: the same
+    request from our own origin does record a command.
     """
-    csrf_client.post("/hv/output",
-                     data={"channel": "hv_cathode_vset", "on": "0"},
-                     headers={"origin": EVIL}, follow_redirects=False)
-    assert bus.published == []
+    commands = csrf_client.app.state.commands
+    data = {"channel": "hv_cathode_vset", "on": "0"}
+
+    csrf_client.post("/hv/output", data=data, headers={"origin": EVIL},
+                     follow_redirects=False)
+    assert commands == [], "the handler ran on a cross-site request"
+
+    csrf_client.post("/hv/output", data=data,
+                     headers={"origin": "http://127.0.0.1:8000"},
+                     follow_redirects=False)
+    assert len(commands) == 1, (
+        "the accepted request did not reach the handler either, so the "
+        "assertion above proves nothing")
 
 
 @pytest.mark.parametrize("host", ["evil.example", "attacker.test:8000",
@@ -138,10 +153,17 @@ def test_a_name_that_merely_contains_a_loopback_name_is_refused(csrf_client):
                                headers={"host": host}).status_code == 421, host
 
 
-def test_the_ui_still_works_from_its_own_origin(client):
-    """The other half. `client` sends Host and Origin as a browser does."""
-    assert client.get("/").status_code == 200
-    r = client.post("/flow/reset", data={"by": "ap"}, follow_redirects=False)
+def test_the_ui_still_works_from_its_own_origin(csrf_client):
+    """The other half, and the one that matters most.
+
+    A check that refuses everything passes every test above and leaves
+    nobody able to turn the heater off. The Origin is set by hand here
+    because `csrf_client` deliberately sends none.
+    """
+    assert csrf_client.get("/").status_code == 200
+    r = csrf_client.post("/flow/reset", data={"by": "ap"},
+                         headers={"origin": "http://127.0.0.1:8000"},
+                         follow_redirects=False)
     assert r.status_code == 303
 
 
@@ -155,12 +177,13 @@ def test_a_port_other_than_8000_does_not_lock_itself_out(config_dir, bus,
     """
     from fastapi.testclient import TestClient
 
-    from doubles import StubDrift
+    from doubles import StubDrift, stub_commands
     from xams_sc.api import app as app_module
 
     monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    app = app_module.create_app(http_host="127.0.0.1", http_port=8080)
+    app = stub_commands(
+        app_module.create_app(http_host="127.0.0.1", http_port=8080))
     moved = TestClient(app, base_url="http://127.0.0.1:8080",
                        headers={"origin": "http://127.0.0.1:8080"})
     assert moved.get("/api/state").status_code == 200

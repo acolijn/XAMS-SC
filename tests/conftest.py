@@ -20,7 +20,7 @@ import shutil
 import pytest
 
 from doubles import (UI_ORIGIN, FakePg, RecordingBus,  # noqa: F401
-                     StubDrift, ui_client)             # (re-exported)
+                     StubDrift, stub_commands, ui_client)  # (re-exported)
 from xams_sc import config as config_module
 
 REPO_CONFIG = config_module.ROOT / "config"
@@ -94,7 +94,12 @@ def csrf_client(config_dir, bus, monkeypatch):
 
     monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    return TestClient(app_module.create_app(), base_url=UI_ORIGIN)
+    # The bus round trip is stubbed: this fixture is for tests about what
+    # happens BEFORE a request reaches a handler, and waiting out a 10 s
+    # acknowledgement timeout to learn that it got there is the reason the
+    # suite used to take two minutes. See `stub_commands`.
+    return TestClient(stub_commands(app_module.create_app()),
+                      base_url=UI_ORIGIN)
 
 
 @pytest.fixture
