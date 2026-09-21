@@ -25,6 +25,12 @@ api = [
     # looking like it: FastAPI raises at import time on a Form parameter
     # when this is absent, so the web UI would not start at all.
     "python-multipart>=0.0.9",
+    # Every page is a Jinja template, and `Jinja2Templates` raises at import
+    # time without this. FastAPI does NOT depend on it, so it was only ever
+    # present by accident: mkdocs pulls it in, so any machine that had built
+    # the manual had a working web UI and any machine that had not did not.
+    # A fresh `pip install -e .[api]` produced a UI that died on startup.
+    "jinja2>=3.1",
 ]
 # Alarm delivery. The same gateway the LabVIEW system uses, so the numbers,
 # the message format and the costs are already known (§11).
@@ -34,6 +40,13 @@ notify = [
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",       # fastapi.testclient, for the web UI tests
+    # The suite imports the CAEN and Lake Shore services, and both import
+    # `serial` at module level, so the tests do not collect without it. It is
+    # in `hardware` too, but that extra also pulls nidaqmx and pywinusb, which
+    # a laptop cannot install — and running the tests must not require the
+    # hardware stack. Same constraint as `hardware`, so a machine with both
+    # resolves to one pyserial.
+    "pyserial>=3.5",
     # Undefined-name checking. A module that imports is not a module whose
     # functions can run, and a NameError in an unexercised branch is invisible
     # until somebody in the lab runs the command. See tests/test_no_undefined_names.py.
