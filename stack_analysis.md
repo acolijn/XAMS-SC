@@ -1,343 +1,326 @@
 # XAMS Slow Control — stack analysis
 
-**Date:** 2026-09-21 · **Commit:** `origin/main` @ `9bfe277` · **Scope:** the whole
-stack — drivers, bus, storage, alarms, web UI, CLI, configuration, tests, tooling.
+**Second pass, 2026-09-21.** The first pass is in this file's history at
+`32d0ab6`; this replaces it rather than annotating it, because enough has changed
+that a marked-up version would be harder to read than a fresh one.
 
-This is a review of the code as it stands, not of the design specification. Where
-the two disagree, that is noted. Findings are ordered by how much they would cost
-if they went wrong, not by how easy they are to fix.
+Twelve commits separate the two. §3 says what happened to each of the first
+pass's findings, including the two I got wrong. §4 is new ground.
+
+**Scope:** drivers, bus, storage, alarming, web UI, CLI, configuration, tests,
+tooling. A review of the code as it stands, not of the specification.
 
 ---
 
 ## 1. What the stack is
 
-Eight Python processes on one lab PC, joined by a loopback MQTT broker:
+Eight Python processes on one lab PC, joined by a loopback MQTT broker.
 
 | Layer | Modules | LOC |
 |---|---|---|
 | Instrument drivers | `devices/{caen,cdaq,lakeshore,ups,derived,sim}.py` | ~2 400 |
-| Service framework | `service.py`, `bus.py`, `model.py`, `scaling.py` | ~840 |
+| Service framework | `service.py`, `bus.py`, `model.py`, `scaling.py` | ~1 030 |
 | Configuration | `config.py` + `config/*.yaml` | ~570 |
-| Storage sinks | `sinks/{jsonl,pg,audit,alarm,flow}_writer.py` | ~570 |
-| Alarming | `alarms/{engine,notify,mail,flight_recorder,daily}.py` | ~1 300 |
-| Web UI | `api/{app,state}.py` + 8 Jinja templates | ~1 730 |
+| Storage sinks | `sinks/*.py` | ~700 |
+| Alarming | `alarms/*.py` | ~1 300 |
+| Web UI | `api/{app,state,logview,recipients_form,mimic}.py` + 8 templates | ~1 800 |
 | Operator CLI | `cli/xams_ctl.py` | ~900 |
 | Tools | `tools/*.py`, `tools/*.ps1` | ~2 000 |
 
-About 4 600 executable statements in `src/`, 525 tests, 33 pages of documentation.
-76 channels defined, 63 enabled, read at 1 Hz and published as 10 s means.
+About 9 950 lines of Python under `src/`, 7 300 lines of tests across 31 files,
+33 pages of documentation. 76 channels defined, 63 enabled, read at 1 Hz and
+published as 10 s means.
 
-The shape is a clean fan-out: drivers publish and forget; storage, alarming and
-the UI are independent subscribers. Nothing but the sinks touches PostgreSQL, and
-nothing but a driver touches an instrument.
+| | First pass | Now |
+|---|---:|---:|
+| Tests | 488 (+1 silently skipped) | **644** |
+| Coverage | 52 % | **61 %** |
+| Modules at 0 % | 8 | **4** |
+| Largest file | `app.py`, 1 259 lines | `app.py`, 1 019 |
 
 ---
 
 ## 2. Strong points
 
-These are not politeness. They are the things a reviewer would be pleased to find
-and usually does not.
-
 ### 2.1 The bus boundary is real, not aspirational
 
-`bus.py` is the only module that knows MQTT exists, and every service reaches
-hardware or storage through it. The consequence shows up in the history: the audit
-writer, the alarm-state writer and the flow-period writer were each added without
-touching a driver. That is the test of a layering claim, and this one passes.
+`bus.py` is the only module that knows MQTT exists. The proof is in the history:
+the audit writer, the alarm-state writer and the flow-period writer were each
+added without touching a driver, and this session added a health watcher and a
+shared command protocol the same way.
 
-Two specific decisions are better than the obvious alternative:
-
-- **Handlers are a list, not a dict keyed by topic** (`bus.py:124`). Three
-  consumers legitimately subscribe to `xams/meas/#`. A dict would have let the
-  second silently displace the first — a bug that shows up months later as missing
-  data, with no error anywhere.
-- **The outage buffer is bounded** (`bus.py:110`), so a broker outage costs a
-  recorded gap rather than a memory leak. The same reasoning is applied again in
-  `PgWriter.max_pending`. Consistency of reasoning across modules is rarer than
-  correctness in any one of them.
+Two decisions are better than the obvious alternative. **Handlers are a list,
+not a dict keyed by topic** — three consumers legitimately subscribe to
+`xams/meas/#`, and a dict would have let the second silently displace the first.
+**The outage buffer is bounded**, so a broker outage costs a recorded gap rather
+than a memory leak; `PgWriter.max_pending` applies the same reasoning again.
+Consistency of reasoning across modules is rarer than correctness in any one.
 
 ### 2.2 The HV write path is genuinely defensive
 
-`caen.py:_handle_vset` is the safety-critical function in the system, and it reads
-like someone thought about it for a long time. In order: parse, resolve the channel
-by name, require `kind == "hv_vset"` and `enabled`, refuse in simulation, require a
-live reader, check the software range from `channels.yaml`, **read the board's
-status word and refuse a non-zero setpoint on a channel that is not enabled**, then
-write and read back before calling it successful.
+`caen.py:_handle_vset` is the safety-critical function, and it reads like
+someone thought about it for a long time. Parse, resolve by name, require
+`kind == "hv_vset"` and `enabled`, refuse in simulation, require a live reader,
+check the range from `channels.yaml`, **read the board's status word and refuse
+a non-zero setpoint on a channel that is not enabled**, then write and read back
+before calling it successful.
 
-The status-word check is the good one. Without it a person could stage 4.2 kV on a
-disabled channel, walk to the supply, flip the hand switch and get exactly the
-unannounced ramp the design exists to prevent. Refusing that is not obvious, and
-the comment explains why it is there — so the next person will not "simplify" it
-away.
+The status-word check is the good one. Without it somebody could stage 4.2 kV on
+a disabled channel, walk to the supply, flip the hand switch and get exactly the
+unannounced ramp the design exists to prevent. The comment explains why it is
+there, so the next person will not simplify it away.
 
-The deliberate omissions are as good as the checks: nothing writes `MAXV`, `RUP`,
-`RDW`, `TRIP` or `ISET`, and the channel enable stays a hand operation.
+The omissions are as good as the checks: nothing writes `MAXV`, `RUP`, `RDW`,
+`TRIP` or `ISET`, and the channel enable stays a hand operation.
 
 ### 2.3 Configuration really is data
 
-Adding a sensor is a YAML entry. `config.py` validates strictly at startup —
-duplicate names, bad `kind`, `sign` outside {-1, 1}, `limits` with `min > max`,
-`rtd` kind without an `rtd:` block — and raises `ConfigError` rather than failing at
-the first bad read six months later. A channel with no `limits` refuses every write,
-which is the correct default: a range nobody wrote down is not permission.
+Adding a sensor is a YAML entry. `config.py` validates strictly at startup and
+raises `ConfigError` rather than failing at the first bad read six months later.
+A channel with no `limits` refuses every write — a range nobody wrote down is
+not permission.
 
-The config hash (SHA-256 over the normalised `channels`/`devices`/`alarms`, first 7
-hex) is written into every JSONL day header. That makes archived data
-self-describing — you can tell which configuration produced a file without
-consulting git. `recipients.yaml` and `hv_defaults.yaml` are deliberately excluded
-because they do not affect the data. That distinction is correct and is documented.
+The config hash (SHA-256 over the normalised channels/devices/alarms, first 7
+hex) goes into every JSONL day header, so archived data is self-describing.
+`recipients.yaml` and `hv_defaults.yaml` are excluded because they do not affect
+the data. That distinction is correct and documented.
 
 ### 2.4 The file archive is the source of truth
 
-JSONL first, PostgreSQL as an index over it, with `flush()` + `os.fsync()` at least
-every 10 s. A database loss is a re-import, not a data loss. The two-writer topology
-(one local, one on a Nikhef VM) falls out of this for free, and a VM outage is
-invisible to everything local.
+JSONL first, PostgreSQL as an index over it, `flush()` + `os.fsync()` at least
+every 10 s. A database loss is a re-import, not a data loss. The two-writer
+topology falls out for free.
 
-### 2.5 The command path has one owner
+### 2.5 The command path has one owner — and now one implementation
 
-The UI never touches an instrument. It publishes to `xams/cmd/...` and waits for an
-ack, so validation, read-back and the audit record happen in the one process that
-owns the hardware — identically whether the request came from a browser or from
-`xams-ctl`. A timeout is reported as **failure**, never as success. That is the right
-default and it is easy to get wrong.
+The UI never touches an instrument. It publishes to `xams/cmd/...` and waits for
+an ack, so validation, read-back and the audit record happen in the one process
+that owns the hardware. **A timeout is reported as failure, never as success.**
 
-### 2.6 The comments explain *why*
+§10 used to be written out five times. It is now `AckInbox` and `CommandSession`
+in `bus.py`, shared by the web UI and all four CLI verbs, with one timeout
+instead of three that disagreed.
 
-Almost every non-obvious line carries the reason it exists, often with the failure
-that motivated it. `operator_names()` spends fifteen lines explaining why the
-"acting as" box offers suggestions rather than a closed list, and why a plausible
-wrong name in the audit trail is worse than `webui (unnamed)`. That is the comment
-style that survives contact with a new student, which is the stated design goal.
+### 2.6 Silence is now evidence everywhere
+
+All seven services publish a heartbeat and the `/status` page holds all seven to
+the same 60 s window. The two that used to be exempt were the archive and the
+notifier — the two the page could never show as broken.
+
+The sinks say so when they discard data: `ERROR`, plus a `degraded` state that
+reaches `/status`, plus a run summary at shutdown.
+
+### 2.7 The comments explain *why*
+
+Almost every non-obvious line carries the reason it exists, often with the
+failure that motivated it. `operator_names()` spends fifteen lines on why the
+"acting as" box offers suggestions rather than a closed list. `ups.py` records
+the three routes tried to read the UPS and why two were rejected — including
+"a channel that cannot detect the thing it monitors is worse than no channel",
+which is a sentence most codebases would have replaced with the broken
+approximation.
 
 There are **zero** `TODO`, `FIXME`, `XXX` or `HACK` markers in `src/`.
 
-### 2.7 A test that catches undefined names
+### 2.8 The test scaffolding now exists
 
-`tests/test_no_undefined_names.py` runs pyflakes over the tree. A module that
-imports is not a module whose functions run, and a `NameError` in an unexercised
-branch is otherwise invisible until somebody in the lab runs the command. Given the
-coverage gaps in §3.1 this is doing real work.
-
-### 2.8 The documentation is unusually good
-
-33 pages, built with mkdocs and served by the web UI itself at `/manual`, with a
-drift check (`check_mimic_tags`) that flags channels missing from the P&ID drawing.
-Documentation that the system verifies against itself does not rot quietly.
+`tests/doubles.py` and `tests/conftest.py` hold one `RecordingBus`, one
+`StubDrift` and one `FakePg`. The doubles mirror the real objects where it
+matters, and three separate fidelity bugs were found and fixed this session by
+tests that failed because a double was *easier* than the thing it replaced.
+That is the scaffolding working.
 
 ---
 
-## 3. Weak points
+## 3. The first pass's findings, and what happened to them
 
-### 3.1 Coverage is 52 %, and the gaps are in the wrong places
+| | Finding | Status |
+|---|---|---|
+| 3.1 | Coverage 52 %, gaps in the wrong places | **partly closed** — 61 %, sinks and CLI covered; four modules still at 0 % |
+| 3.2 | Dropped rows logged at DEBUG | **closed** — `ERROR` + `degraded` + run summary |
+| 3.3 | 33-minute backlog drain | **closed** — `drain()` clears in one cycle |
+| 3.4 | Acks had no correlation id | **closed**, differently — see below |
+| 3.5 | CLI reimplemented the ack protocol | **closed** — `CommandSession` |
+| 3.6 | `app.py` 1 259 lines, four concerns | **closed** — three modules out, 1 019 lines |
+| 3.7 | No CI, no lockfile, no type checking | **open**, and downgraded — see below |
+| 3.8 | Security posture thin | **open**, unchanged and accepted |
+| 3.9 | `reader._lock` reached into from outside | **open**, trivial |
 
-Measured, not estimated (`coverage run -m pytest`):
+Three of these deserve more than a row.
 
-| Module | Stmts | Cover | Why it matters |
-|---|---:|---:|---|
-| `sinks/audit_writer.py` | 49 | **0 %** | The audit trail is a safety claim. Nothing tests that it writes. |
-| `sinks/alarm_writer.py` | 72 | **0 %** | Alarm history persistence, untested. |
-| `sinks/flow_writer.py` | 66 | **0 %** | Flow periods, untested. |
-| `sinks/__main__.py` | 109 | **0 %** | The supervisor for all three. |
-| `alarms/__main__.py` | 115 | **0 %** | Wires the engine to the bus and notifier. |
-| `alarms/daily.py` | 77 | **0 %** | The daily report. |
-| `devices/ups.py` | 142 | **0 %** | Mains-loss detection. |
-| `cli/xams_ctl.py` | 549 | **15 %** | The operator's interface during an incident. |
-| `service.py` | 218 | **32 %** | The run loop, reconnect and window emission every driver inherits. |
+### 3.4 — the fix was cheaper than the diagnosis
 
-The tested part is tested well — `config.py` 92 %, `app.py` 82 %, `engine.py` 81 %.
-The untested part is the part that runs unattended at three in the morning. The CLI
-at 15 % is the sharpest edge: it is what someone reaches for when the web UI is
-unreachable, which is precisely when it must not have a `NameError` in an error
-branch.
+I proposed a correlation id echoed by every service: eight publish sites across
+three services that talk to hardware. Reading the code showed the discriminator
+was **already on the wire** — `channel` on every CAEN ack, `output` on every
+Lake Shore one. Matching on what is already there cost one method and four call
+sites, and no instrument service changed.
 
-The `__main__` modules are process entry points and awkward to test, which is why
-they got skipped. They are also where the wiring bugs live.
+The bug was worse than described. Reproduced against the old code:
 
-**The cause was scaffolding cost, and that part is now fixed.** There was no
-`conftest.py`. `FakeBus` was hand-built ten times, `StubDrift` four, the
-`config_dir` fixture four — so every new test file began with forty lines of setup
-before it tested anything, and nobody started. The copies had drifted, too: three
-recorded parsed payloads where the rest recorded strings, two keyed handlers by
-topic where the real bus keeps a list (leaving those files structurally unable to
-catch the fan-out bug they nominally covered), and two imported their doubles from
-*other test modules*. When `recipients.yaml` left the repository, three of the four
-`config_dir` copies were updated and the fourth was not — which is how the suite
-came to fail on a fresh clone.
-
-One `tests/doubles.py` and one `tests/conftest.py` now hold a single `RecordingBus`,
-`StubDrift` and `FakePg`, and 14 test files were migrated onto them: 192 insertions
-against 535 deletions, net −343 lines, suite unchanged at green. Coverage did not
-move and was not meant to — this buys nothing except that the next test is cheap to
-write, which is the precondition for everything below.
-
-### 3.2 A dropped database row is logged at DEBUG
-
-Principle 4 is "fail loudly, never silently". `PgWriter._dropped` increments when
-`max_pending` (100 000 rows) is reached, and the only consumer is
-`sinks/__main__.py:161`, which logs `pg.stats` at **`log.debug`**. Default log level
-is INFO. So the system's own stated worst case — data discarded — is invisible in
-normal operation.
-
-The same applies to `Bus.dropped`: it is reset inside `_flush()`, so the property
-almost always reads 0 when anybody asks. The overflow *is* logged at ERROR, which is
-right; the counter just cannot be queried afterwards.
-
-**Neither of these raises an alarm**, though the alarm engine is right there and the
-design says a gap must be visible.
-
-### 3.3 Drain rate after an outage is slower than it looks
-
-`PgWriter.pump()` calls `flush()` once per `flush_interval_s` (10 s), and `flush()`
-writes at most `batch_size` (500) rows. So the maximum drain is 50 rows/s. A full
-`max_pending` backlog of 100 000 rows takes **~33 minutes** to clear, during which
-new readings keep arriving and — at the cap — are being dropped.
-
-A `flush()` that loops until the pending list is empty or a time budget expires
-would drain in seconds. The current shape is fine in steady state and poor exactly
-when it is needed.
-
-### 3.4 Acks have no correlation id
-
-`state.command()` clears the ack topic, publishes, then polls for anything arriving
-on that topic:
-
-```python
-with self._lock:
-    self._acks.pop(ack_topic, None)
-self.bus.publish_raw(topic, json.dumps(payload))
-# ... poll for self._acks[ack_topic]
+```
+alice  asked for hv_cathode_vset    was shown hv_anode_vset
+bob    asked for hv_anode_vset      was shown None
 ```
 
-Two operators on two browsers setting two different HV channels at the same time
-both wait on `xams/ack/caen/vset`. Whichever ack lands first is returned to
-whichever request polls first. Each operator can be shown the other's result — and
-since the ack carries `old` and `new` voltages, the wrong number is displayed
-confidently.
+Alice got Bob's channel *and his voltage*; Bob got a spurious timeout, because
+`command` cleared the whole ack slot on its way past and threw away an ack
+belonging to somebody else.
 
-The window is short (the CAEN serial lock serialises the writes) and needs two
-simultaneous operators, so this is unlikely rather than impossible. It is also
-cheap to close: put a `cmd_id` in the command, echo it in the ack, ignore
-non-matching acks.
+### 3.7 — real, but I over-weighted it
 
-### 3.5 The CLI reimplements the ack protocol, three times
+I ranked CI first. The owner's objection was fair: he codes with an assistant
+that runs the suite every time, so CI-as-bug-catcher is largely redundant.
 
-`state.command()` is a clean 20-line send-and-await. `xams_ctl.py` does the same
-thing by hand for `hv set`, `hv output`, `notify` and `flow-reset` — with
-hand-rolled connect-wait loops, a `time.sleep(0.3)` settle, `acks.append` closures,
-and **a different timeout each time** (15 s in the CLI, 10 s in the UI).
+What survives the objection is narrower and worth keeping: **CI runs on a
+different machine with a fresh install**, and that catches a class nothing else
+here can. It found one immediately. `pip install -e .[api]` produced a web UI
+that died at import, because `jinja2` was undeclared — present only because
+mkdocs pulls it in, so a machine that had built the manual worked and one that
+had not did not. That was live on `origin/main` and would have hit the next
+lab-PC rebuild. Now declared, along with `pyserial` for the test suite.
 
-This is the largest duplication in the codebase and it sits on the control path. One
-shared `send_and_await(bus, topic, ack_topic, payload, timeout)` in `bus.py` would
-delete roughly 120 lines, unify the timeouts, and give both callers the correlation
-id from §3.4 at once. It would also be the single cheapest way to lift the CLI's
-15 % coverage, since the tested logic would move into a tested module.
+So: CI's job here is proving the install works, not proving the code works.
+Fifteen lines, low priority, not first.
 
-### 3.6 `app.py` is 1 255 lines and mixes four concerns
+### 3.8 — unchanged, and that is a decision
 
-It holds route handlers, form parsing, an audit helper, log-file reading, ANSI
-colourisation (`_colourise`, `_newest_first`, `_rotated`, `_log_files` — about 120
-lines that have nothing to do with HTTP), P&ID drift checking, and recipient
-editing. `hv_defaults_save` alone runs from line 670 to 778.
+No authentication on a UI that can set high voltage; unauthenticated MQTT on
+which commands travel; `secrets.yaml` with no permission check. All three are
+mitigated by the loopback bind and argued explicitly in the code. The residual
+risk is that any local process, or a browser visiting a page that can reach
+`127.0.0.1:8000`, has full control authority. The operator cookie is
+`samesite="lax"`, which is the only CSRF defence and is incidental rather than
+chosen.
 
-Nothing here is wrong, but it is the file a new student will be most afraid of, and
-that conflicts with principle 1. The log-viewer helpers and the recipient-editing
-helpers are each a module-sized cohesive unit that could move out without touching a
-route.
-
-### 3.7 No CI, no lockfile, no type checking
-
-- **No `.github/`.** 525 tests that nobody is obliged to run. The
-  `test_template_handlers.py` fixture broke during the `recipients.yaml` purge and
-  reached `origin/main` unnoticed; the pyflakes guard in §2.7 had been skipping for
-  longer than anyone knows. Both are exactly the class of failure CI catches, and
-  neither is visible to someone reading a green local run.
-- **Every dependency is `>=` with no upper bound and no lockfile.** A fresh install
-  on the lab PC resolves to whatever PyPI serves that day. `paho-mqtt>=2.0`,
-  `fastapi>=0.110` and `psycopg[binary]>=3.1` can all ship a breaking change into a
-  reinstall of an instrument control system. There is already a
-  `StarletteDeprecationWarning` about `httpx` in the test output.
-- **No mypy, no ruff config.** pyflakes via a test is a good floor, but it will not
-  catch a `str` where a `float` is expected — and this codebase passes values
-  through JSON, YAML and a serial protocol, which is where those errors live.
-
-### 3.8 Security posture is honest but thin
-
-Both of these are *documented as* weaknesses, which is the right first step, but
-they remain:
-
-- **No authentication on the web UI.** It can set high voltage and energise
-  channels. The mitigation is the loopback bind — defensible for a lab PC, and
-  argued explicitly in `api/__main__.py`, which warns loudly on a non-loopback
-  `--host`. The residual risk is that anyone with a session on that PC (or any
-  local process, or a browser visiting a malicious page that can reach
-  `127.0.0.1:8000`) has full control authority. The operator cookie is
-  `samesite="lax"`, which blocks cross-site form POSTs in current browsers — that is
-  effectively the only CSRF defence, and it is incidental rather than chosen.
-- **MQTT is unauthenticated and QoS 0.** Anything that can open `127.0.0.1:1883` can
-  publish `xams/cmd/caen/vset`. Same loopback mitigation, same residual risk. QoS 0
-  on the *audit* topic is the part I would revisit: `TOPIC_AUDIT` exists so a write
-  record survives the database being down, but at QoS 0 a lost packet loses the
-  audit record silently.
-- **Secrets are a gitignored `config/secrets.yaml`** with no permission check and no
-  environment-variable path. Fine on a single-user lab PC; worth `os.stat` asserting
-  the mode is not world-readable, given the file holds an SMS gateway API key that
-  costs money per message.
-
-### 3.9 Reaching into another object's lock
-
-`caen.py:680` and `caen.py:805` do `with reader._lock:` — the service grabbing the
-reader's private lock. It is correct today (it is an `RLock` and the intent is to
-hold the serial port across a write-then-read-back), but it is the kind of coupling
-that breaks when someone changes `CaenChannelReader`'s internals. A public
-`reader.transaction()` context manager says the same thing and is safe to rely on.
+For a single-user lab PC this is defensible. It is recorded here so it stays a
+decision rather than becoming an assumption.
 
 ---
 
-## 4. What I would do, in order
+## 4. New findings
 
-| # | Change | Effort | Why this order |
+### 4.1 Three sinks block the bus thread on a dead database
+
+`AlarmWriter`, `AuditWriter` and `FlowPeriodWriter` call
+`psycopg.connect(connect_timeout=5)` **inside the MQTT callback**. All five
+writers share one `Bus`, so one paho client, so one callback thread, and
+`_on_message` dispatches handlers sequentially. `PgWriter` does not do this — it
+queues in the handler and writes on a pump thread.
+
+Observed live during a deliberate outage, five seconds apart to the millisecond:
+
+```
+09:02:34,727  could not record alarm for ttamb: connection timeout expired
+09:02:39,831  could not record alarm for tt302: ...
+09:02:44,926  could not record alarm for p101: ...
+```
+
+While the database is down, each of those burns five seconds of the only thread
+that also feeds the JSONL archive.
+
+**But the trigger is narrow, and I initially overstated this.** `AlarmWriter`
+checks for a repeat *before* connecting, so retained re-deliveries cost nothing;
+only genuine transitions connect. Audit records happen when somebody writes to
+an instrument. The burst above was a **startup artefact** — a fresh subscriber
+receives every retained alarm topic at once and each looks like a first-time
+transition.
+
+Worst case I can construct: an alarm cascade during a database outage, twenty
+channels, ~100 s of stalled archiving. Measurements queue in paho rather than
+vanishing; at ~6 msg/s you would need ~160 s of continuous stalling to reach
+mosquitto's default 1 000-message queue limit for a slow QoS 0 consumer.
+
+**Not urgent.** Recorded as a known characteristic. If a long outage with active
+alarms ever happens, the fix is a reconnect backoff (an hour) or matching
+`PgWriter`'s queue-and-pump (half a day).
+
+### 4.2 `max_pending` is unreachable and untunable
+
+Hard-coded at 100 000, constructed as `PgWriter(bus, dsn)` with no override. At
+~6 rows/s that is **4.4 hours** before a single row is dropped — so the §3.2
+work cannot be demonstrated, and on a machine with less RAM the size of that
+buffer is a decision nobody can make. A `--max-pending` argument would fix both.
+
+### 4.3 The archive is not fsynced at the day rollover
+
+`jsonl_writer._ensure_file` closes the previous day's file without syncing it.
+`close()` flushes userspace to the OS but does not fsync, so a power loss shortly
+after midnight can lose up to 10 s of the previous day — in the file the design
+calls the truth, and whose own docstring promises "a power loss costs seconds,
+not hours". One line: sync before close.
+
+### 4.4 The integrator's state file is not durably written
+
+`IntegratorState.save` writes a temp file and `replace`s it — atomic against a
+crash mid-write, which is the main risk and is handled. Neither the temp file
+nor the directory is fsynced, so a power loss immediately after can still leave
+the old or a zero-length file. This is the **only stateful service**, and the
+total is the thing a restart must not lose.
+
+### 4.5 `next_log` catches up after a stall
+
+`service.py:_loop` advances `next_log += self.log_interval_s` where the read
+schedule uses `next_read = now + self.interval_s`. After a stall longer than the
+log interval, the log branch fires repeatedly to catch up, emitting a burst of
+heartbeats. Harmless — `_emit_window` clears the window, so only the first
+carries data — but inconsistent with the line above it. A nit.
+
+### 4.6 `ups.py` is 0 % covered and trivially testable
+
+142 statements, no tests, and it is the mains-loss detector. The hardware is
+behind a `UpsReader` the service holds, so `read()` can be tested against a fake
+in an afternoon. The two-signal derivation of `on_battery` and the `None` start
+for `_last_on_battery` — which correctly suppresses a spurious "back on line
+power" on the first reading — are exactly the logic worth pinning.
+
+---
+
+## 5. What I would do next
+
+| # | Change | Effort | Why |
 |---|---|---|---|
-| 1 | Add GitHub Actions: `pytest` + `pyflakes` on push | hours | Everything else is easier to land safely once this exists. Would have caught the fixture break. |
-| 2 | Alarm on dropped rows and buffer overflow; move `pg.stats` to INFO | hours | Closes the gap between principle 4 and the code. The mechanism is already there. |
-| 3 | `send_and_await()` in `bus.py`, with a `cmd_id`; use it in the UI and all four CLI commands | 1 day | Fixes §3.4 and §3.5 together, deletes ~120 lines, lifts CLI coverage as a side effect. |
-| 4 | Tests for `sinks/audit_writer.py`, `alarm_writer.py`, `flow_writer.py` | 1 day | 0 % on the audit trail is the coverage gap with the worst consequence. The `fake_pg` fixture for this already exists. |
-| 5 | Loop `flush()` until drained or out of budget | hours | Turns a 33-minute recovery into seconds. |
-| 6 | Pin dependencies: add upper bounds, commit a `requirements.lock` for the lab PC | hours | A reinstall should reproduce, not resolve. |
-| 7 | Split `app.py`: `api/logview.py`, `api/recipients_form.py` | 1 day | Principle 1. Pure move, no behaviour change. |
-| 8 | Smoke tests for the `__main__` wiring modules | 1–2 days | Import, construct, assert the subscriptions exist. Catches wiring bugs cheaply. |
-| 9 | `reader.transaction()` replacing `reader._lock` | hours | Small, tidy, prevents a future break. |
-| 10 | `os.stat` check on `secrets.yaml` mode at startup | hours | Cheap, and it holds a billable API key. |
+| 1 | `--max-pending` on the sinks | hours | Makes §3.2 demonstrable; makes the buffer a decision |
+| 2 | fsync at the day rollover and in `IntegratorState.save` | hours | Two one-line durability gaps in the two files that must survive |
+| 3 | Tests for `ups.py` | half a day | 0 % on mains-loss detection, easy to reach |
+| 4 | Pin dependencies; commit a lockfile for the lab PC | hours | A reinstall should reproduce, not resolve |
+| 5 | CI: `pytest` + `pyflakes` on a clean box | hours | Proves the install, which is the part nobody else can check |
+| 6 | Tests for `alarms/__main__.py` and `daily.py` | 1 day | The last two meaningful 0 % modules |
+| 7 | `reader.transaction()` replacing `reader._lock` | hours | Small, prevents a future break |
+| 8 | `os.stat` check on `secrets.yaml` mode | hours | It holds a billable API key |
 
-Items 1, 2, 5, 6, 9 and 10 are each under a day and together address the two
-findings that would actually cost data (§3.2, §3.3) plus the reproducibility gap.
+Items 1–3 are half a week together and close the last two places where this
+system can lose data quietly.
 
 ---
 
-## 5. Overall
+## 6. Overall
 
-This is well above the norm for lab instrument software. The architecture is sound
-and — unusually — the code actually obeys it; the safety-critical path is thought
-through rather than merely guarded; the documentation is both extensive and
-self-checking; and the comments record reasoning rather than restating syntax. It is
-plainly the work of someone who had watched a previous system fail on
-maintainability and set out not to repeat it.
+This remains well above the norm for lab instrument software, and the gap has
+widened. The architecture was sound and the code obeyed it; what has changed is
+that the delivery discipline now matches. The test scaffolding exists, the
+storage path is covered, the command protocol has one implementation, and the
+two counters that record data loss are wired to something a person will see.
 
-The weaknesses are of one kind: **the engineering discipline visible in the design
-has not been extended to the delivery pipeline.** There is no CI, dependencies float,
-the process entry points are untested, and the system's own "fail loudly" principle
-is not applied to its own data-loss counters. None of that is architectural. All of
-it is a week or two of unglamorous work, and the first two items on the list above
-would remove most of the risk.
+The findings that remain are small and specific: two missing `fsync` calls, an
+untunable constant, a module that nobody has tested, and a set of security
+trade-offs that are recorded and accepted rather than overlooked. None is
+architectural. None would take more than a day.
+
+The one pattern worth naming, because it recurred: **three times this session a
+test failed because a double was easier than the object it stood in for** — a
+bus that connected synchronously when the real one does not, acks that omitted a
+field every real ack carries, a fixture that patched `_connect` but not `_conn`.
+Each was fixed in the double rather than worked around in the test. A suite whose
+doubles lag the real objects certifies behaviour nothing has, and that is a
+harder failure to notice than a red test.
 
 ---
-
-*Since this was written, the shared test scaffolding in §3.1 has been built and the
-`[dev]` extra installed; the coverage figures below predate neither, since neither
-changed them. Everything else stands.*
 
 *Method: full read of `bus.py`, `config.py`, `service.py`, `pg_writer.py`,
-`jsonl_writer.py`, `alarms/engine.py`, `api/app.py`, `api/state.py`,
-`devices/caen.py` and `cli/xams_ctl.py`; structural survey of the rest; coverage
-measured with `coverage run --source=src/xams_sc -m pytest` (525 passed).*
+`jsonl_writer.py`, `alarm_writer.py`, `audit_writer.py`, `flow_writer.py`,
+`sinks/__main__.py`, `alarms/engine.py`, `api/app.py`, `api/state.py`,
+`devices/caen.py`, `devices/ups.py`, `devices/derived.py`, `alarms/daily.py` and
+`cli/xams_ctl.py`; structural survey of the rest; coverage measured with
+`coverage run --source=src/xams_sc -m pytest` (644 passed). Live observation of a
+deliberate PostgreSQL outage on the production machine informed §4.1.*
