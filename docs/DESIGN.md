@@ -1003,7 +1003,7 @@ For debugging, `mosquitto_sub -t 'xams/#'` shows everything live with no UI invo
 
 ### 8.2 The P&ID mimic
 
-`/mimic` renders `notes/xams_piping_and_instrumentation.pdf` as a live diagram: the plant as drawn, with the current value written next to every instrument bubble. It answers the question the status table cannot — *where* is `tt203`, and what is it next to. This is the one place where the tag names of §3 stop being labels and become a map.
+`/` renders `notes/xams_piping_and_instrumentation.pdf` as a live diagram: the plant as drawn, with the current value written next to every instrument bubble. It answers the question the status table cannot — *where* is `tt203`, and what is it next to. This is the one place where the tag names of §3 stop being labels and become a map.
 
 It earns its own page rather than a place on `/`. The landing page must answer "is everything all right?" in one glance with no scrolling; a full P&ID needs zoom and attention. Both are wanted, and they are wanted at different moments.
 

@@ -26,9 +26,10 @@ anyone. If that fails, the document is unfinished however thorough it looks.
 
 ## Every day
 
-Open <http://127.0.0.1:8000>. The badge in the header is the whole system in one
-word; the System health page is the detail behind it. What each tab shows is in
-[The web interface](webui.md).
+Open <http://127.0.0.1:8000>. It lands on **P&I** — the plant drawn, with every
+reading in the place it physically belongs. The badge in the header is the
+whole system in one word, on every page; the **System health** tab is the
+detail behind it. What each tab shows is in [The web interface](webui.md).
 
 The same picture from a terminal, in
 `C:\Users\localadmin\Documents\XAMS-SC`:
@@ -42,12 +43,22 @@ heartbeat. Heartbeat ages come from the **retained MQTT topics, not the
 database** — the status view works even when PostgreSQL does not, which is
 precisely when it is needed.
 
+**All eight services publish a heartbeat**, `sinks` and `alarms` included, so
+silence means the same thing for any of them. Those two used to be exempt,
+which left the service that writes the archive and the service that telephones
+people as the two the status view could never show as broken.
+
 For history and plots: Grafana on <http://127.0.0.1:3000>, the **XAMS Overview**
 dashboard.
 
 ### What healthy looks like
 
-- every service running, every heartbeat a few seconds old;
+- every service running, every heartbeat a few seconds old — and **none of
+  them `degraded`**, which for the sinks means they have had to discard data
+  ([when the database is down](../software/storage.md#when-the-database-is-down));
+- the **P&I** updating: if it has stopped it says **NOT UPDATING** across the
+  top of its column and greys the drawing out, so a live-looking screen really
+  is live;
 - the **Channels not reading OK** card absent, and Grafana's equivalent panel
   **empty** — that emptiness is the point, because a frozen plausible value is
   worse than a gap;

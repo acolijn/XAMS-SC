@@ -129,6 +129,48 @@ restore](../operating/backup.md).
 
 ---
 
+## When the database is down
+
+The archive keeps running; the files are the truth and nothing about them
+depends on PostgreSQL. What happens to the database writer is worth knowing,
+because it is visible and it is meant to be.
+
+**Readings queue in memory and are written when the database returns.** The
+queue holds `max_pending` rows — 100 000, about four hours at the normal rate
+— and the sinks log a warning once the backlog passes 10 000:
+
+```
+the write backlog is 12480 rows and growing; nothing is lost yet, but it will be at 100000
+```
+
+*Nothing is lost yet* is the important half. A full backlog is a delay; the
+rows are in memory and will be written.
+
+**Past the cap, rows are discarded, and that is loss.** It is reported as an
+error and the service publishes `degraded`, so it shows on the System health
+page rather than only to somebody reading the log at the time:
+
+```
+DATA LOST: 143 measurement row(s) discarded because the write backlog was full
+```
+
+Reported when the number changes, with a reminder every five minutes — a
+service that logs the same error every five seconds for a week teaches people
+to filter it out. The last line of a run names any loss from the whole run,
+because an error at 03:00 has scrolled off by the time anybody asks how last
+night went.
+
+**The rows discarded are not lost from the system**, only from the database:
+they are in the JSONL archive, which is what makes the database disposable in
+the first place. Replay recovers them.
+
+**When the database comes back the backlog drains in one pass**, in seconds,
+not at one batch per flush interval. That matters because the slow version was
+still discarding new readings the whole time it was catching up — a recovery
+that loses data of its own is the wrong way round.
+
+---
+
 ## Provenance, again
 
 Every row carries `src`, and the archive does too: `xams` for a reading this

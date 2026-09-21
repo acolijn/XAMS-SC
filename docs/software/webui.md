@@ -106,7 +106,7 @@ must not read silence as a yes.
 
 ## The mimic
 
-`/mimic` serves a static SVG with live values written into it.
+`/` serves a static SVG with live values written into it.
 
 ```powershell
 python tools/build_mimic.py

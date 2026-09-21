@@ -236,6 +236,57 @@ If the database is filling and the JSONL archive is not, the archive is the one
 that matters: the files are the truth and the database is only an index over
 them (§9.3).
 
+### `sinks` shows amber, or the log says DATA LOST
+
+Amber on the System health page means `degraded`, and for the sinks that means
+one thing: rows have been discarded because the write backlog filled.
+
+```
+DATA LOST: 143 measurement row(s) discarded because the write backlog was full
+```
+
+**The readings are not gone from the system** — they are in the JSONL archive,
+which is the point of the archive. What is missing is the database's copy, and
+a replay recovers it. See [when the database is
+down](../software/storage.md#when-the-database-is-down).
+
+What to do, in order:
+
+1. **Is PostgreSQL up?** This almost always means it is not, or is
+   unreachable. `psql -U xams -d xams -c "select 1"`.
+2. **Bring it back.** The backlog drains in one pass, in seconds. The service
+   returns to green by itself once the queue is empty and nothing further has
+   been lost.
+3. **Replay the gap** from the archive if you want the database complete for
+   plotting — the unique index makes replaying a range twice harmless.
+
+A warning *before* any loss is the one to act on:
+
+```
+the write backlog is 12480 rows and growing; nothing is lost yet, but it will be at 100000
+```
+
+That is roughly four hours of grace at the normal rate. It is said once per
+episode, not every cycle.
+
+### The P&I says NOT UPDATING and the drawing is grey
+
+The page has had no answer from `/api/state` for twenty seconds. The drawing
+is withdrawn on purpose: every number on it is now as old as the message says,
+and a frozen plausible drawing is worse than an obviously dead one.
+
+It is the *page* that has stopped, not necessarily the plant. In order:
+
+1. **Is the web service running?** `xams-ctl status`, or the Windows service
+   `XAMS-webui`. This is the usual answer.
+2. **Reload the page.** If it comes back immediately, it was a browser tab the
+   machine suspended — laptops asleep do this.
+3. **Is the broker up?** The web process reads retained MQTT, so a dead broker
+   leaves it serving a page with nothing behind it.
+
+Individual channels greying out is a different thing entirely — that is one
+instrument not reading, and the rest of the drawing stays live.
+
 ---
 
 ## The cDAQ

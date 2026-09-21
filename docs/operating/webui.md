@@ -41,8 +41,14 @@ PC whether or not the building network is.
 
 ## When a page reloads
 
-Every page except **Logs** reloads itself **every ten seconds**, so a screen
-left open is never showing yesterday.
+**P&I** does not reload at all: it fetches `/api/state` every **five seconds**
+and rewrites the numbers in place, so the drawing never blinks and never loses
+your scroll position. If those fetches stop — the web service down, the network
+gone — it says **NOT UPDATING** and greys the whole drawing out after twenty
+seconds. A frozen plausible drawing is worse than an obviously dead one.
+
+Every other page except **Logs** reloads itself **every ten seconds**, so a
+screen left open is never showing yesterday.
 
 **It holds off while the page contains anything you have typed or loaded and
 not yet sent.** The question it asks is *does this page differ from what the
@@ -97,56 +103,106 @@ needs authentication, which this interface does not have.
 
 ---
 
-## System health
+## P&I
 
-The question it answers is *is the software all right*, and it is built so that a
-healthy system is a boring page: no alarm card, no unhealthy channels, green
-dots.
+The plant drawing with a live value in each instrument bubble — the page that
+answers *where is that sensor*, which a table of tag names cannot. It is the
+landing page, and it is **read-only**: nothing on it writes to an instrument.
 
-**Active alarms** appear at the top, and only when there are any. Each row
-gives the channel, the state, the threshold it crossed and the value that
-crossed it. *Acknowledged* means the repeating notification has been stopped —
-**it does not mean the condition is gone**, and the two must never be read as
-the same thing.
+Built from the original drawing by `tools/build_mimic.py`: rotated to
+landscape, frame and title block removed, recoloured for the dark interface,
+and cropped to the ink so the drawing gets the whole box rather than the blank
+paper the original sheet carried around it.
 
-**Services** — one row per service, with its state and how long ago it last sent
-a heartbeat. A few seconds is normal. All seven publish one, so **silent**
-means silent for any of them, including `sinks` and `alarms`. Green is beating
-and reporting itself running; amber is beating but degraded — the sinks go
-amber when they have had to discard data; red is silent, stopped, or in a
-state it should not be in.
+**A stale channel greys out and shows a dash**, exactly as on the Channels page
+and for the same reason.
 
-Note what this card cannot do: the alarm engine cannot report that the alarm
-engine has stopped. That needs the outside watchdog of §12.
+**Click a value to see its history.** A stale, greyed-out reading is still
+clickable — that is exactly when someone wants to know when it stopped, and
+what it was doing before. Valves, pipes and unmeasured tags such as `SG101`
+do nothing: only a value opens a plot, so the drawing never invites a click
+it can't answer. The popup shows a 1 h / 24 h / 7 d range and an *open in
+Grafana* link for the full toolbar; if Grafana is unreachable or embedding is
+not enabled on this host, the plot area stays blank but the link still works.
 
-**UPS & dashboards** — line power or `ON BATTERY`, battery charge and runtime,
-plus two housekeeping facts that ride along rather than taking a card of their
-own: whether the **nightly backup** ran, and whether the **Grafana dashboards**
-are saved to git. Both say `unknown` rather than `ok` when they cannot see;
-a check that reports green because it could not reach anything is worse than
-no check.
+The tags in the SVG are checked against `channels.yaml` when the service starts,
+and drift is reported **in both directions** — a bubble with no channel behind
+it, and a channel that appears nowhere on the drawing.
 
-**Lake Shore 335** — both sensor inputs, and per output the setpoint, the
-heater percentage and the power in watts. This card also carries the controls
-([below](#the-controls)).
+### The column beside the drawing
 
-**Integrated flow** — the total since the period started, the current rate
-underneath it, and the **Reset** button. The rate is shown as well as the total
-because the total answers *how much has gone through* and the rate answers *is
-it flowing now*; reading the second off a rising number is guesswork.
+Strictly the **complement** of the drawing: what has no place on a pipework
+diagram. Every pressure, temperature and flow rate is already drawn in the
+place it physically belongs, and a reading with two homes on one page is fine
+until the day the two disagree.
 
-**Channels not reading OK** — appears only when something is stale or erroring.
-This panel being empty is the point of the page.
+Top to bottom, and the order is deliberate:
 
-**Known faults** — channels disabled in `channels.yaml`, listed from the
-configuration. `tt202` is here. A disabled channel produces no data at all, so
-it cannot show up anywhere driven by measurements; listing it here keeps a known
-fault visible without leaving a permanently active alarm that people learn to
-ignore.
+| | |
+|---|---|
+| *status line* | whether anything is wrong. Fixed height, so it never moves |
+| **Cryostat setpoint** | what the cryostat is being held to, and what holding it costs |
+| **Xenon moved** | the integrated total since the period started |
+| **High voltage** | `VMON` and the decoded state of every channel |
+| **Mains** | line power or battery, charge, UPS runtime |
+| **Alarms** | what is firing, and whether anybody is being told |
+
+**Alarms is last because it is the only card that changes height.** It grows
+as alarms come and go, and anything below a growing card moves. The status
+line at the top says *whether* something is wrong and never moves; the card at
+the bottom says *which*, and is free to grow.
+
+The cryostat card shows the heater in **watts**, with the percentage beside
+it. Percent is of full scale, so it answers "how hard is it working" only once
+you know what full scale is; watts is the number to compare against the heat
+load.
+
+**The cards that correspond to something changeable carry a link** — *change
+→*, *reset →*, *set →* — which takes you to the matching section of
+[Control](#control). The forms are not on this page, and that is deliberate:
+this is the page left open on a screen all day, and a setpoint box on an
+unattended display is the wrong thing to reach for by accident.
+
+### When the page stops updating
+
+Every reading here comes from one fetch every five seconds. If that fetch
+fails once, nothing changes — making the whole drawing flicker because a packet
+went missing would be worse than the packet.
+
+If it has not succeeded for **twenty seconds**, the status line reads **NOT
+UPDATING** with the age of the last answer, and **the drawing is greyed out**.
+Withdrawn rather than annotated: a banner over a drawing that still looks live
+is half a warning.
+
+A browser tab that has been throttled in the background never reaches the
+failure at all, so elapsed time is checked on its own timer as well.
 
 ---
 
-## The controls
+## Channels
+
+Every channel, grouped by the service that reads it: value, unit, age, quality,
+alarm state and description. This is the page to open when a number somewhere
+else looks wrong, because it shows *when* the number was read as well as what it
+was.
+
+**A stale channel shows a dash, never its last number.** A frozen value
+displayed as though it were live invites a decision based on a reading that
+stopped being true an hour ago — that is the failure this kind of page exists to
+avoid.
+
+Quality is the driver's own verdict on the reading:
+
+| quality | means |
+|---|---|
+| `ok` | a real reading from a verified instrument |
+| `error` | the instrument answered, but not with a number — open circuit, out of range, link down. **No value is published** |
+| `unverified` | read from a device that has not proved its identity; never written to |
+| `stale` | nothing new has arrived within the staleness window |
+
+---
+
+## Control
 
 **One page acts on hardware: Control.** The CAEN supplies, the cryostat
 setpoint and the flow-integrator reset are all on it, because "I want to
@@ -203,10 +259,9 @@ Equivalently, from a terminal:
 .\.venv\Scripts\python.exe -m xams_sc.cli.xams_ctl flow-reset --by <you>
 ```
 
-### High voltage
-
-On the [High voltage](#high-voltage) page: setpoints, and energising a channel.
-See that section — it is long enough to belong with the page it describes.
+The cryostat and the flow integrator sit side by side at the top of the page;
+the high voltage, which needs far more room, is below them and has
+[a section of its own](#control-high-voltage).
 
 ### What cannot be changed here, by design
 
@@ -227,57 +282,10 @@ do not exist yet.
 
 ---
 
-## Channels
+## Control: high voltage
 
-Every channel, grouped by the service that reads it: value, unit, age, quality,
-alarm state and description. This is the page to open when a number somewhere
-else looks wrong, because it shows *when* the number was read as well as what it
-was.
-
-**A stale channel shows a dash, never its last number.** A frozen value
-displayed as though it were live invites a decision based on a reading that
-stopped being true an hour ago — that is the failure this kind of page exists to
-avoid.
-
-Quality is the driver's own verdict on the reading:
-
-| quality | means |
-|---|---|
-| `ok` | a real reading from a verified instrument |
-| `error` | the instrument answered, but not with a number — open circuit, out of range, link down. **No value is published** |
-| `unverified` | read from a device that has not proved its identity; never written to |
-| `stale` | nothing new has arrived within the staleness window |
-
----
-
-## P&I
-
-The plant drawing with a live value in each instrument bubble — the page that
-answers *where is that sensor*, which a table of tag names cannot.
-
-Built from the original drawing by `tools/build_mimic.py`: rotated to
-landscape, frame and title block removed, recoloured for the dark interface.
-
-**A stale channel greys out and shows a dash**, exactly as on the Channels page
-and for the same reason.
-
-**Click a value to see its history.** A stale, greyed-out reading is still
-clickable — that is exactly when someone wants to know when it stopped, and
-what it was doing before. Valves, pipes and unmeasured tags such as `SG101`
-do nothing: only a value opens a plot, so the drawing never invites a click
-it can't answer. The popup shows a 1 h / 24 h / 7 d range and an *open in
-Grafana* link for the full toolbar; if Grafana is unreachable or embedding is
-not enabled on this host, the plot area stays blank but the link still works.
-
-The tags in the SVG are checked against `channels.yaml` when the service starts,
-and drift is reported **in both directions** — a bubble with no channel behind
-it, and a channel that appears nowhere on the drawing.
-
----
-
-## High voltage
-
-Both CAEN supplies, eight channels each, stacked one above the other: `VSET`,
+The lower half of the **Control** page. Both CAEN supplies, eight channels
+each, stacked one above the other: `VSET`,
 `VMON`, `IMON`, the state, and the board's own protection settings. **This page
 also operates them** — setpoints and energising.
 
@@ -448,6 +456,50 @@ displayed from `devices.yaml`. The software alarms when a board disagrees with
 what is recorded and **cannot write any of them** (§8.3, §10 rule 2). Ramp rate,
 trip current and over-voltage limit live on the instrument, and that is what
 keeps this software out of the protection path.
+
+---
+
+## System health
+
+The question it answers is *is the software all right*, and it is built so that
+a healthy system is a boring page: no alarm card, no unhealthy channels, green
+dots.
+
+It used to be the landing page and carried the cryostat and flow controls as
+well, because they had nowhere else to be. They are on [Control](#control) now,
+and this page answers one question.
+
+**Active alarms** appear at the top, and only when there are any. Each row
+gives the channel, the state, the threshold it crossed and the value that
+crossed it. *Acknowledged* means the repeating notification has been stopped —
+**it does not mean the condition is gone**, and the two must never be read as
+the same thing.
+
+**Services** — one row per service, with its state and how long ago it last sent
+a heartbeat. A few seconds is normal. All seven publish one, so **silent**
+means silent for any of them, including `sinks` and `alarms`. Green is beating
+and reporting itself running; amber is beating but degraded — the sinks go
+amber when they have had to discard data; red is silent, stopped, or in a
+state it should not be in.
+
+Note what this card cannot do: the alarm engine cannot report that the alarm
+engine has stopped. That needs the outside watchdog of §12.
+
+**UPS & dashboards** — line power or `ON BATTERY`, battery charge and runtime,
+plus two housekeeping facts that ride along rather than taking a card of their
+own: whether the **nightly backup** ran, and whether the **Grafana dashboards**
+are saved to git. Both say `unknown` rather than `ok` when they cannot see;
+a check that reports green because it could not reach anything is worse than
+no check.
+
+**Channels not reading OK** — appears only when something is stale or erroring.
+This panel being empty is the point of the page.
+
+**Known faults** — channels disabled in `channels.yaml`, listed from the
+configuration. `tt202` is here. A disabled channel produces no data at all, so
+it cannot show up anywhere driven by measurements; listing it here keeps a known
+fault visible without leaving a permanently active alarm that people learn to
+ignore.
 
 ---
 
