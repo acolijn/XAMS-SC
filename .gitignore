@@ -39,3 +39,6 @@ tools/installers/
 # Coverage measurement output
 .coverage
 htmlcov/
+
+stack_analysis.md
+nikhef-vm-request.md
