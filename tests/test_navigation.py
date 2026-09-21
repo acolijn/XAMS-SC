@@ -100,3 +100,17 @@ class TestTheNavBar:
 
         for href in re.findall(r'href="(/[^"#]*)', nav):
             assert client.get(href).status_code == 200, href
+
+
+class TestTheControlPageLayout:
+    def test_the_two_small_cards_share_a_row(self, client):
+        """Stacked, they pushed the high voltage below the fold on a laptop,
+        and neither is wide enough to need a full row."""
+        body = client.get("/hv").text
+
+        assert "control-pair" in body
+        pair = body[body.index('class="control-pair"'):body.index('id="hv"')]
+        assert 'id="cryostat"' in pair and 'id="flow"' in pair
+
+    def test_they_fold_to_one_column_on_a_narrow_window(self, client):
+        assert "@media (max-width:900px)" in client.get("/hv").text

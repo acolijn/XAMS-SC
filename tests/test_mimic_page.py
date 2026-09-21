@@ -118,3 +118,32 @@ class TestWhereControlLives:
         mains = page[page.index("<h2>Mains"):page.index("<h2>Alarms")]
 
         assert "change &rarr;" not in mains
+
+
+class TestTheCryostatCard:
+    """Setpoint and heater effort, read as one thing. See DESIGN.md §8.2.
+
+    The heater was shown as a percentage of full scale, which answers "how
+    hard is it working" only once you know what full scale is. Watts is the
+    number you compare against the heat load, and it is the derived channel
+    `ls_heater_1_w` — the square-law transform in scaling.py, not a second
+    copy of the arithmetic here.
+    """
+
+    def test_the_heater_is_shown_in_watts(self, page):
+        assert 'id="s-ls_heater_1_w"' in page
+        assert "ls_heater_1_w" in page.split("function drawSide")[1], \
+            "the element is there but nothing fills it"
+
+    def test_the_percentage_survives_as_context(self, page):
+        """Not a replacement: full-scale percentage is what the instrument
+        actually reports, and it is worth seeing beside the watts."""
+        assert 'id="s-ls_heater_1"' in page
+
+    def test_the_card_no_longer_points_at_a_page_that_moved(self, page):
+        """It used to say "change it on the overview". The overview is not at
+        `/` any more, so that link pointed the P&ID at itself."""
+        card = page[page.index("Cryostat setpoint"):page.index("Xenon moved")]
+
+        assert '<a href="/">' not in card
+        assert "/hv#cryostat" in card

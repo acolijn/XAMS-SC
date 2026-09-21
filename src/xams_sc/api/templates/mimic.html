@@ -113,13 +113,26 @@
           <td class="num"><span id="s-ls_setpoint_1" class="dim">&mdash;</span>
               <span class="unit">&deg;C</span></td></tr>
       <tr><td>heater</td>
-          <td class="num"><span id="s-ls_heater_1" class="dim">&mdash;</span>
+          <td class="num"><span id="s-ls_heater_1_w" class="dim">&mdash;</span>
+              <span class="unit">W</span>
+              <span class="dim">&middot;</span>
+              <span id="s-ls_heater_1" class="dim">&mdash;</span>
               <span class="unit">%</span></td></tr>
     </table>
-    {# The watts and both sensors are on the drawing; what is not is the
-       number the cryostat is being HELD to, which is the one you want when
-       the temperatures on the drawing start moving. #}
-    <div class="note">Output 1. Change it on the <a href="/">overview</a>.</div>
+    {# Watts first: the percentage is of full scale, so it answers "how hard
+       is the heater working" only once you know what full scale is. Watts is
+       the number you compare against the heat load.
+
+       It IS also on the drawing, at the heater symbol, which breaks the rule
+       this column otherwise keeps - see `mimic_sidebar`. Kept because the
+       control loop reads as one thing here: what it is being held to, and
+       what that is costing. Both render from the same fetch of the same
+       channel, so unlike two SOURCES they cannot come to disagree.
+
+       Both cryostat sensors stay on the drawing only; what is not there is
+       the number the cryostat is being HELD to, which is the one you want
+       when the temperatures on the drawing start moving. #}
+    <div class="note">Output 1.</div>
   </div>
 
   <div class="card">
@@ -347,8 +360,11 @@ function drawSide(state) {
     setValue(node.id, by[node.id.slice(2)], 0);
   }
 
-  setValue("s-ls_setpoint_1", by["ls_setpoint_1"], 2);
-  setValue("s-ls_heater_1",   by["ls_heater_1"],   1);
+  setValue("s-ls_setpoint_1",  by["ls_setpoint_1"],  2);
+  // Watts is the reading; the percentage is of full scale and rides beside
+  // it as context, which is why it keeps no decimals.
+  setValue("s-ls_heater_1_w",  by["ls_heater_1_w"],  1);
+  setValue("s-ls_heater_1",    by["ls_heater_1"],    0);
   setValue("s-fm101_total",   by["fm101_total"],   1);
   setValue("s-ups_battery_pct", by["ups_battery_pct"], 0);
   setValue("s-ups_runtime_min", by["ups_runtime_min"], 0);
