@@ -161,6 +161,40 @@ class PgWriter:
             self._conn = None
             return 0
 
+    def drain(self, budget_s: float = 5.0, respect_stop: bool = True) -> int:
+        """Write everything pending, or as much as `budget_s` allows.
+
+        `flush` writes one batch. Calling it once per `flush_interval_s` —
+        which is what the pump used to do — caps the write rate at
+        `batch_size / flush_interval_s`: 500 rows per 10 s, or 50 a second.
+        Steady state is about five rows a second, so that looked ample and
+        was, right up to the moment it mattered. After an outage a full
+        backlog of `max_pending` needed over half an hour to clear, and for
+        every one of those minutes the queue was at its cap and DISCARDING new
+        readings. The recovery was slower than the failure and lost data of
+        its own.
+
+        Looping here costs nothing in steady state — one flush finds an empty
+        queue and stops — and turns that half hour into seconds.
+
+        The budget is what keeps a long drain from starving the stop signal
+        and from monopolising the database. Whatever is left simply goes in
+        the next cycle.
+        """
+        written = 0
+        deadline = time.monotonic() + budget_s
+        while not (respect_stop and self._stop.is_set()):
+            n = self.flush()
+            if n == 0:
+                # Either nothing is pending or the database is down. The
+                # second must break too: retrying a dead connection in a tight
+                # loop turns an outage into a busy wait.
+                break
+            written += n
+            if time.monotonic() >= deadline:
+                break
+        return written
+
     # -------------------------------------------------------------- subscriber
 
     def start(self) -> None:
@@ -174,7 +208,7 @@ class PgWriter:
 
         def pump():
             while not self._stop.is_set():
-                self.flush()
+                self.drain(budget_s=self.flush_interval_s / 2)
                 self._stop.wait(self.flush_interval_s)
 
         self._thread = threading.Thread(target=pump, name=f"pg-{self.label}", daemon=True)
@@ -184,10 +218,9 @@ class PgWriter:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5)
-        deadline = time.monotonic() + 10
-        while self._pending and time.monotonic() < deadline:
-            if self.flush() == 0:
-                break
+        # `respect_stop=False`: the stop flag is what brought us here, and a
+        # drain that honoured it would write nothing at all on the way out.
+        self.drain(budget_s=10.0, respect_stop=False)
         if self._conn is not None:
             try:
                 self._conn.close()
