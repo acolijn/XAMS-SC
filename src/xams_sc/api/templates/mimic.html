@@ -19,7 +19,18 @@
    It folds underneath on a narrow window rather than squeezing the drawing.
    A mimic narrow enough to need scrolling has stopped being a mimic — the
    same reasoning as the max-height on .mimic-body in base.html. */
-.mimic-layout { display:grid; gap:1.2rem; align-items:start;
+/* Tighter than the rest of the site, and only here. Every rem of chrome on
+   this page is a rem the drawing does not get, and the drawing is the page.
+   `main` is global but this block only ever renders on the mimic. */
+main { padding:.6rem; gap:.6rem; }
+
+/* The footer says what this UI writes and what it refuses to. This page
+   writes nothing at all, so it is the one place that note earns least — and
+   it costs three rem of drawing on the page most likely to be read from
+   across the room. It stays on Control, where the writes actually are. */
+footer { display:none; }
+
+.mimic-layout { display:grid; gap:.8rem; align-items:start;
                 grid-template-columns:minmax(0,1fr) 24rem; }
 @media (max-width:1180px) {
   .mimic-layout { grid-template-columns:minmax(0,1fr); }
@@ -88,8 +99,10 @@
 
 <div class="mimic-layout">
 
+{# NO CARD HEADING. The nav tab says P&I, and a card containing a piping
+   diagram does not need to announce that it contains one — it was costing
+   about 2rem of the drawing's height to say so. #}
 <div class="card">
-  <h2>P&amp;I &mdash; live values</h2>
   <div class="body mimic-body">
     {{ svg|safe }}
   </div>

@@ -176,15 +176,16 @@ tr:last-child td { border-bottom:none; }
    glance.
 
    So both dimensions are bounded. `max-height` caps it at the room left below
-   the header, nav and card title; preserveAspectRatio (xMidYMid meet, the
+   the header and the nav — the card title and the footer are both hidden on
+   that page, which is where the 6.8rem comes from; preserveAspectRatio (xMidYMid meet, the
    default) then fits the drawing inside whichever dimension binds first,
    centred, without distortion. Wide window: height decides. Narrow window:
    width decides. Either way it is fully visible and never scrolls. It is
    vector, so it stays sharp at whatever size that turns out to be. */
-.mimic-body { padding:.15rem; overflow:hidden; }
+.mimic-body { padding:.1rem; overflow:hidden; }
 .mimic-body svg {
   display:block; margin:0 auto;
-  width:100%; height:auto; max-height:calc(100vh - 8.5rem);
+  width:100%; height:auto; max-height:calc(100vh - 6.8rem);
 }
 
 /* The channels page draws one table per instrument, and by default each one

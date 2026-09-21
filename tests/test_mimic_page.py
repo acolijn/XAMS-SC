@@ -147,3 +147,34 @@ class TestTheCryostatCard:
 
         assert '<a href="/">' not in card
         assert "/hv#cryostat" in card
+
+
+class TestTheDrawingGetsTheRoom:
+    """Every rem of chrome on this page is a rem the drawing does not get.
+
+    The drawing is bounded in both dimensions so it is never scrolled — the
+    whole point of a mimic is that it is taken in at a glance. What bounds the
+    height is whatever the page furniture leaves, so the furniture is kept to
+    what earns its place.
+    """
+
+    def test_the_drawing_card_has_no_heading(self, page):
+        """The nav tab says P&I, and a card containing a piping diagram does
+        not need to announce that it contains one."""
+        before = page[:page.index('class="body mimic-body"')]
+
+        assert not before.rstrip().endswith("</h2>"), \
+            "a heading was put back above the drawing"
+        assert "live values" not in page
+
+    def test_the_footer_is_not_shown(self, page):
+        """It describes what this UI writes. This page writes nothing, and it
+        is the page read from across the room."""
+        assert "footer { display:none; }" in page
+
+    def test_the_drawing_is_still_bounded_so_it_never_scrolls(self, page):
+        """Bounded in BOTH dimensions: width by the column, height by what the
+        page furniture leaves. Unbounded height is how a mimic becomes a thing
+        you scroll, which is no longer a mimic."""
+        assert "max-height:calc(100vh" in page
+        assert ".mimic-body { padding:" in page and "overflow:hidden" in page
