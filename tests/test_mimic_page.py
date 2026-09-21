@@ -18,6 +18,7 @@ all day, that is the exact failure principle 4 names.
 
 from __future__ import annotations
 
+import pathlib
 import re
 
 import pytest
@@ -158,23 +159,66 @@ class TestTheDrawingGetsTheRoom:
     what earns its place.
     """
 
-    def test_the_drawing_card_has_no_heading(self, page):
-        """The nav tab says P&I, and a card containing a piping diagram does
-        not need to announce that it contains one."""
-        before = page[:page.index('class="body mimic-body"')]
-
-        assert not before.rstrip().endswith("</h2>"), \
-            "a heading was put back above the drawing"
-        assert "live values" not in page
-
-    def test_the_footer_is_not_shown(self, page):
-        """It describes what this UI writes. This page writes nothing, and it
-        is the page read from across the room."""
-        assert "footer { display:none; }" in page
-
     def test_the_drawing_is_still_bounded_so_it_never_scrolls(self, page):
         """Bounded in BOTH dimensions: width by the column, height by what the
         page furniture leaves. Unbounded height is how a mimic becomes a thing
         you scroll, which is no longer a mimic."""
         assert "max-height:calc(100vh" in page
         assert ".mimic-body { padding:" in page and "overflow:hidden" in page
+
+
+class TestTheDrawingFillsItsBox:
+    """The viewBox is cropped to the ink. See tools/build_mimic.py.
+
+    The PDF is a drawing sheet, so the page was bigger than the drawing: even
+    after the 10pt border inset there were 42 units of blank paper above the
+    ink and 76 below. In a box whose height is bounded — which is the whole of
+    §8.2 — that blank paper comes off the drawing before anything else gets a
+    say, so the mimic rendered about 14% smaller than it needed to, for a
+    reason nobody could see by looking at it.
+
+    Trimming page furniture did nothing, which was the clue: the drawing was
+    already fitting, and what it was fitting was mostly margin.
+    """
+
+    #: What the generator leaves, and why. The values are centred on their
+    #: tags and grow as they are filled in, so a tag near an edge must still
+    #: have room to say its number.
+    MARGIN_X, MARGIN_Y = 18.0, 12.0
+
+    @pytest.fixture
+    def viewbox(self):
+        import pathlib
+        svg = pathlib.Path("src/xams_sc/api/static/xams_pid.svg").read_text()
+        return [float(n) for n in
+                re.search(r'viewBox="([^"]+)"', svg).group(1).split()]
+
+    def test_it_no_longer_starts_at_the_sheet_corner(self, viewbox):
+        x, y, _, _ = viewbox
+
+        assert (x, y) != (0.0, 0.0), "the viewBox is still the whole sheet"
+
+    def test_the_drawing_is_wider_than_it_is_tall_by_more_than_the_sheet(
+            self, viewbox):
+        """The sheet was 1.425:1; the ink is about 1.56:1. A box that matches
+        the ink wastes nothing whichever dimension binds."""
+        _, _, w, h = viewbox
+
+        assert w / h > 1.5
+
+    def test_the_margins_are_the_ones_the_generator_intends(self):
+        """Regenerating must reproduce this, not undo it."""
+        build = pathlib.Path("tools/build_mimic.py").read_text()
+
+        assert f"INK_MARGIN_X = {self.MARGIN_X}" in build
+        assert f"INK_MARGIN_Y = {self.MARGIN_Y}" in build
+        assert "tighten_viewbox" in build
+
+    def test_the_generator_crops_after_writing_not_before(self):
+        """It measures by RENDERING the finished file, because the geometry is
+        a soup of relative path commands and the one thing certainly right
+        about a rendering is where the ink is."""
+        build = pathlib.Path("tools/build_mimic.py").read_text()
+        write = build.index("OUT.write_bytes")
+
+        assert build.index("box = tighten_viewbox(OUT)") > write

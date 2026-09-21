@@ -155,6 +155,54 @@ def channel_for(tag: str, channels: set[str]) -> str | None:
     return tag.lower() if tag.lower() in channels else None
 
 
+# How much blank paper to leave around the drawing once it is cropped to its
+# own ink. Generous on the sides because the live values are centred on their
+# tags and GROW as they are filled in — a placeholder em dash is a few units
+# wide and "-4200.0 V" is thirty — so a tag near the edge must still have room
+# to say its number. Vertical growth is only the line height, so less is kept.
+INK_MARGIN_X = 18.0
+INK_MARGIN_Y = 12.0
+
+
+def tighten_viewbox(path: Path) -> tuple[float, float, float, float] | None:
+    """Crop the viewBox to what is actually drawn, plus a margin.
+
+    The PDF is a drawing sheet, so the page is bigger than the drawing: after
+    the border inset there was still 42 units of blank paper above the ink and
+    76 below it. In a box whose height is bounded — which is the whole of
+    §8.2 — that blank paper is subtracted from the drawing before anything
+    else gets a say, so the mimic rendered about 14% smaller than it needed
+    to for no reason a reader could see.
+
+    Measured by rendering rather than by parsing: the geometry is a soup of
+    relative path commands, and the one thing that is certainly right about a
+    rendering is where the ink is.
+    """
+    doc = pymupdf.open(str(path))
+    page = doc[0]
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+    w, h, n, stride = pix.width, pix.height, pix.n, pix.stride
+    data, bg = pix.samples, pix.samples[0:pix.n]
+
+    minx, miny, maxx, maxy = w, h, -1, -1
+    for y in range(h):
+        row = data[y * stride: y * stride + w * n]
+        for x in range(w):
+            if row[x * n:(x + 1) * n] != bg:
+                minx = min(minx, x); maxx = max(maxx, x)
+                miny = min(miny, y); maxy = max(maxy, y)
+    doc.close()
+    if maxx < 0:
+        return None                      # nothing drawn; leave it alone
+
+    sx, sy = page.rect.width / w, page.rect.height / h
+    x0 = max(0.0, minx * sx - INK_MARGIN_X)
+    y0 = max(0.0, miny * sy - INK_MARGIN_Y)
+    x1 = min(page.rect.width, maxx * sx + INK_MARGIN_X)
+    y1 = min(page.rect.height, maxy * sy + INK_MARGIN_Y)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 def main() -> int:
     config = load()
     # Every channel in the file, not just the enabled ones: a disabled channel
@@ -368,6 +416,17 @@ def main() -> int:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+
+    # Crop to the ink. Done after writing because it is measured by rendering
+    # the finished file, values and all.
+    box = tighten_viewbox(OUT)
+    if box is not None:
+        x, y, w, h = box
+        root.set("viewBox", f"{x:.1f} {y:.1f} {w:.1f} {h:.1f}")
+        root.set("width", f"{w:.0f}")
+        root.set("height", f"{h:.0f}")
+        OUT.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+        print(f"  cropped to the ink: viewBox {x:.0f} {y:.0f} {w:.0f} {h:.0f}")
 
     print(f"  wrote {OUT.relative_to(ROOT)}  ({OUT.stat().st_size/1024:.0f} kB)")
     print(f"  rotated 90 CCW: {width:.0f}x{height:.0f} -> {height:.0f}x{width:.0f}")
