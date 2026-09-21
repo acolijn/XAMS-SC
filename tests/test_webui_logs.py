@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from xams_sc.api import app as app_module
 from xams_sc.api import logview
 
-from doubles import RecordingBus, StubDrift  # noqa: F401
+from doubles import RecordingBus, StubDrift, ui_client  # noqa: F401
 
 
 LINE = "2026-09-18 13:27:0%d INFO     [caen] xams_sc.devices.caen: %s"
@@ -43,7 +43,7 @@ def logs(tmp_path, monkeypatch):
 def client(logs, monkeypatch):
     monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    return TestClient(app_module.create_app())
+    return ui_client(app_module.create_app())
 
 
 class TestWhatItShows:

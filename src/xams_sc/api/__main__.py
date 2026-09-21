@@ -38,7 +38,8 @@ def main(argv=None) -> int:
 
     from .app import create_app
     try:
-        app = create_app(broker=args.broker, port=args.broker_port)
+        app = create_app(broker=args.broker, port=args.broker_port,
+                         http_host=args.host, http_port=args.port)
     except ConfigError as exc:
         print(f"FATAL: configuration is invalid: {exc}", file=sys.stderr)
         return 2

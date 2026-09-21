@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from xams_sc.api import app as app_module
-from doubles import RecordingBus, StubDrift  # noqa: F401
+from doubles import RecordingBus, StubDrift, ui_client  # noqa: F401
 
 MANUAL = app_module.HERE / "site"
 built = pytest.mark.skipif(
@@ -24,7 +24,7 @@ built = pytest.mark.skipif(
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    return TestClient(app_module.create_app())
+    return ui_client(app_module.create_app())
 
 
 def test_app_starts_without_the_manual(monkeypatch):
@@ -34,7 +34,7 @@ def test_app_starts_without_the_manual(monkeypatch):
     monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     monkeypatch.setattr(app_module.Path, "is_dir", lambda self: False)
-    client = TestClient(app_module.create_app())
+    client = ui_client(app_module.create_app())
     assert client.get("/healthz").status_code == 200
     assert client.get("/manual/").status_code == 404
 

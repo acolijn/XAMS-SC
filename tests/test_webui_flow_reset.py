@@ -18,7 +18,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from doubles import RecordingBus, StubDrift
+from doubles import RecordingBus, StubDrift, ui_client
 from xams_sc.api import app as app_module
 from xams_sc.bus import TOPIC_FLOW_RESET
 
@@ -52,7 +52,7 @@ def bus():
 def client(bus, monkeypatch):
     monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
-    return TestClient(app_module.create_app())
+    return ui_client(app_module.create_app())
 
 
 class TestTheResetReachesTheDerivedService:
@@ -113,8 +113,8 @@ class TestTheAnswerIsReportedHonestly:
         monkeypatch.setattr(app.state.system, "reset_flow",
                             lambda who, timeout_s=8.0: None)
 
-        r = TestClient(app).post("/flow/reset", data={"by": "ap"},
-                                 follow_redirects=False)
+        r = ui_client(app).post("/flow/reset", data={"by": "ap"},
+                                follow_redirects=False)
 
         assert r.status_code == 303
         assert "reset=failed" in r.headers["location"]

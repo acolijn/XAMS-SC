@@ -33,6 +33,7 @@ import math
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
@@ -78,6 +79,47 @@ def safe_next(target: str) -> str:
     if not target.startswith("/") or target.startswith("//"):
         return "/"
     return target
+# ------------------------------------------------- cross-site protection
+#
+# The loopback bind (see the module docstring) keeps the BUILDING network
+# out. It does NOT keep out the browser already running on this PC: any
+# page an operator opens can POST a form to 127.0.0.1:8000, and a plain
+# form POST needs no CORS preflight, so the browser sends it and the
+# command is carried out. `/alarms/notify` off, `/hv/output` off, a
+# setpoint written, all with a chosen name in the `by` field. Loopback is
+# a network boundary, not a browser one, and §8 leaned on it for both.
+
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _origin_of(url: str) -> str | None:
+    """`http://127.0.0.1:8000/hv?x=1` -> `http://127.0.0.1:8000`."""
+    if not url:
+        return None
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def allowed_hosts(host: str, port: int) -> frozenset[str]:
+    """The values of the `Host` header this server answers to.
+
+    Checked because nothing else checks it: without this, a domain the
+    attacker controls can be re-pointed at 127.0.0.1 (DNS rebinding) and
+    the browser then treats this site as SAME ORIGIN - which hands out
+    /api/state and the recipient list, names and mobile numbers included,
+    to a page on the internet. The Origin check below cannot see that,
+    because to the browser it genuinely is same-origin by then.
+
+    The bind address is included as well as loopback: §8 allows another
+    one with a recorded decision, and a UI that refuses every request
+    the moment somebody takes that decision is a trap.
+    """
+    names = {"127.0.0.1", "localhost", "[::1]", "::1", host.lower()}
+    # A default port is not written in the Host header; any other one is.
+    return frozenset({name if port == 80 else f"{name}:{port}"
+                      for name in names})
 
 
 def operator_of(request: Request, submitted: str = "") -> str:
@@ -245,7 +287,12 @@ def _redirect_ls(error: str | None, ok: str | None = None):
                             status_code=303)
 
 
-def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
+def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
+               http_host: str = "127.0.0.1",
+               http_port: int = 8000) -> FastAPI:
+    """The application. `http_host`/`http_port` are where THIS server
+    will be reached, which the cross-site check below needs to know: a
+    UI started on another port must not lock itself out."""
     # The INITIAL configuration only. Handlers read `state.config`, which is
     # replaced on `xams-ctl reload` — a description or a unit edited in
     # channels.yaml must appear on the page without restarting anything, or
@@ -265,6 +312,49 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883) -> FastAPI:
     # to Grafana per view, nor wait on one.
     drift = DriftWatcher()
     app.state.drift = drift
+
+    hosts = allowed_hosts(http_host, http_port)
+    origins = frozenset("http://" + h for h in hosts)
+
+    @app.middleware("http")
+    async def same_origin_only(request: Request, call_next):
+        """Refuse what did not come from this site's own pages.
+
+        Two checks, against two different attacks, and neither replaces the
+        other:
+
+          * the `Host` header, on EVERY request, against DNS rebinding
+          * the `Origin` (or failing that the `Referer`), on the methods that
+            change something, against an ordinary cross-site form POST
+
+        No token, no session, nothing to keep in step with ten templates -
+        which is the §8.1 trade: a student has to be able to read this.
+
+        `curl` posting to this port is refused too, and that is intended: the
+        CLI talks MQTT, not HTTP, and nothing in the repository posts here.
+        """
+        if request.headers.get("host", "").lower() not in hosts:
+            # 421, not 403: the request reached the wrong server for that
+            # name, which is exactly what this status is for.
+            log.warning("refused a request for host %r",
+                        request.headers.get("host", ""))
+            return PlainTextResponse("wrong host for this server",
+                                     status_code=421)
+        if request.method in UNSAFE_METHODS:
+            source = (request.headers.get("origin")
+                      or _origin_of(request.headers.get("referer", "")))
+            if source not in origins:
+                # Logged, and loudly: if a browser ever withholds both
+                # headers on a same-origin form, the operator sees a control
+                # that does nothing and this line is the only explanation
+                # anywhere. It is on the Logs page under `webui`.
+                log.warning("refused a cross-site %s %s (origin %r)",
+                            request.method, request.url.path, source)
+                return PlainTextResponse(
+                    "cross-site request refused - open this page from "
+                    "http://%s:%d and try again" % (http_host, http_port),
+                    status_code=403)
+        return await call_next(request)
 
     def page(request: Request, name: str, **context):
         status, css = state.overall()

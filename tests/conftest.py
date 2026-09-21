@@ -19,7 +19,8 @@ import shutil
 
 import pytest
 
-from doubles import FakePg, RecordingBus, StubDrift  # noqa: F401  (re-exported)
+from doubles import (UI_ORIGIN, FakePg, RecordingBus,  # noqa: F401
+                     StubDrift, ui_client)             # (re-exported)
 from xams_sc import config as config_module
 
 REPO_CONFIG = config_module.ROOT / "config"
@@ -60,21 +61,40 @@ def webui(config_dir, bus, monkeypatch):
     configuration at construction, so CONFIG_DIR must already point at the
     copy before the app is built.
     """
-    from fastapi.testclient import TestClient
-
     from xams_sc.api import app as app_module
 
     monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
     monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
     app = app_module.create_app()
     app.state.bus_for_test = bus
-    return TestClient(app), app, bus
+    # As a BROWSER reaches it, not as `testserver`: the app refuses a Host it
+    # does not serve (DNS rebinding) and a POST without a same-site Origin
+    # (CSRF). A client that skipped both would test a door nobody uses.
+    # `csrf_client` below is the one that omits them on purpose.
+    return ui_client(app), app, bus
 
 
 @pytest.fixture
 def client(webui):
     """Just the client, for tests that never look at the app or the bus."""
     return webui[0]
+
+
+@pytest.fixture
+def csrf_client(config_dir, bus, monkeypatch):
+    """A client that sets NO `Origin`, so a test can forge one.
+
+    Separate from `webui` rather than a flag on it: every other test wants
+    the browser's behaviour, and one that quietly lacked it would pass
+    while testing nothing.
+    """
+    from fastapi.testclient import TestClient
+
+    from xams_sc.api import app as app_module
+
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: bus)
+    monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
+    return TestClient(app_module.create_app(), base_url=UI_ORIGIN)
 
 
 @pytest.fixture

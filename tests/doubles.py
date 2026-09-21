@@ -16,6 +16,28 @@ import json
 from paho.mqtt.client import topic_matches_sub
 
 
+# Where the web UI is served, and therefore the only Host and Origin it
+# accepts. `create_app()` defaults to the same pair.
+UI_ORIGIN = "http://127.0.0.1:8000"
+
+
+def ui_client(app):
+    """A TestClient that reaches the app the way a BROWSER does.
+
+    `TestClient(app)` alone calls itself `testserver` and sends no `Origin`,
+    and the app refuses both: an unknown Host is DNS rebinding and a POST
+    with no same-site Origin is CSRF. Tests that built their own client that
+    way would all be testing the refusal instead of the page.
+
+    In one place because there is one answer: a test file that spelled the
+    origin out itself would go stale the day the port moves.
+    """
+    from fastapi.testclient import TestClient
+
+    return TestClient(app, base_url=UI_ORIGIN,
+                      headers={"origin": UI_ORIGIN})
+
+
 class RecordingBus:
     """Stands in for `Bus`: records instead of publishing.
 

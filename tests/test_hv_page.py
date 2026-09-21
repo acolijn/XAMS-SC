@@ -23,7 +23,7 @@ Four states, and the middle two are the ones worth care:
 import pytest
 from fastapi.testclient import TestClient
 
-from doubles import RecordingBus, StubDrift
+from doubles import RecordingBus, StubDrift, ui_client
 from xams_sc.api import app as app_module
 from xams_sc.api.state import ChannelView
 
@@ -51,7 +51,7 @@ def page(monkeypatch):
             return view(name, vmon)
 
         monkeypatch.setattr(state, "channel", channel)
-        response = TestClient(app).get("/hv")
+        response = ui_client(app).get("/hv")
         assert response.status_code == 200
         # ONLY the status cells of the tables. The explanatory card at the
         # bottom of the page spells out "ON", "enabled" and "off" in prose,
@@ -81,7 +81,7 @@ def page_html(monkeypatch):
             return view(name, vmon)
 
         monkeypatch.setattr(state, "channel", channel)
-        response = TestClient(app).get("/hv")
+        response = ui_client(app).get("/hv")
         assert response.status_code == 200
         return response.text
 
