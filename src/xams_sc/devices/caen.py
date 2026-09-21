@@ -733,6 +733,10 @@ class CaenService(BaseService):
         log.warning("VSET %s: %s -> %+.1f V, by %s", name,
                     ("%+.1f" % before) if before is not None else "unknown",
                     after, actor)
+        # BEFORE the ack, as the energise path does: the web UI waits on the
+        # ack and renders the moment it arrives, so a reading published after
+        # it arrives after the page it was meant to correct.
+        self._publish_vset_now(channel, after, after_mag)
         self.bus.publish_raw(ACK_HV_VSET, json.dumps(
             {"ok": True, "channel": name, "old": before, "new": after,
              "by": actor}, separators=(",", ":")))
@@ -798,6 +802,35 @@ class CaenService(BaseService):
         self.bus.publish_measurement(
             Measurement(t=utcnow(), channel=stat.name, value=float(word),
                         unit=stat.unit, raw=float(word), quality=Quality.OK))
+
+    def _publish_vset_now(self, channel, value: float,
+                          magnitude: float) -> None:
+        """Publish a setpoint read back from a write, out of cadence.
+
+        The twin of `_publish_status_now`, and it exists for the same reason:
+        the poll reads every second and publishes every ten, so a setpoint
+        written just after a publish went on reading as the OLD voltage on
+        the Control page for most of the following ten seconds. Energising
+        was given this and changing a setpoint was not, which made the two
+        controls on one page behave differently for no reason anybody could
+        see.
+
+        The window is dropped for this channel deliberately. It holds samples
+        from both sides of the write, and `_emit_window` means them - so the
+        page would have shown an average of the old setpoint and the new one.
+        That is worse here than a wrong bitmask is: it is a plausible voltage
+        that was never set, on the page somebody reads to find out where the
+        supply is going. Ten seconds of samples are lost at the instant of a
+        command; the ack and the audit record the transition exactly.
+
+        The value is already trusted - it was read back inside the
+        transaction and checked against what was asked (VSET_TOLERANCE_V), or
+        this is not reached.
+        """
+        self._window.pop(channel.name, None)
+        self.bus.publish_measurement(
+            Measurement(t=utcnow(), channel=channel.name, value=value,
+                        unit=channel.unit, raw=magnitude, quality=Quality.OK))
 
     def _handle_output(self, topic: str, payload: str) -> None:
         """Energise or de-energise a channel - the "turn ON HV" of section 10a.

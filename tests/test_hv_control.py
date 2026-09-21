@@ -416,3 +416,72 @@ class TestEnergisingSaysSoAtOnce:
         assert "front panel" in answer["reason"]
         assert service.bus.measured("hv_nai_stat") is None
 
+
+
+class TestASetpointSaysSoAtOnce:
+    """The twin of `TestEnergisingSaysSoAtOnce`, for the other control.
+
+    Energising published its read-back immediately and writing a setpoint did
+    not, so two buttons on one page behaved differently: the supply switched
+    on in front of you, and a setpoint you had just applied went on reading
+    as the old voltage until the next publish ten seconds later. Nothing in
+    the UI could fix that - the number it renders is the last one published.
+    """
+
+    def test_the_setpoint_is_published_without_waiting_for_the_poll(self, service):
+        assert send(service, value=-1000.0)["ok"] is True
+        m = service.bus.measured("hv_cathode_vset")
+        assert m is not None, "the page still had to wait for the next poll"
+        assert m.value == -1000.0
+
+    def test_it_is_published_as_a_good_reading_with_the_right_units(self, service):
+        send(service, value=-1000.0)
+        m = service.bus.measured("hv_cathode_vset")
+        assert m.quality == Quality.OK
+        assert m.unit == "V"
+
+    def test_the_published_value_is_signed_and_the_raw_is_not(self, service):
+        """§7.2: the board reports magnitudes with POL separate, and this
+        system stores signed. The poll publishes both that way, and a
+        reading published out of cadence must not be the exception."""
+        send(service, value=-1000.0)
+        m = service.bus.measured("hv_cathode_vset")
+        assert m.value == -1000.0
+        assert m.raw == 1000.0
+
+    def test_it_matches_what_the_board_now_reports(self, service):
+        send(service, value=-1000.0)
+        assert abs(service.bus.measured("hv_cathode_vset").value) == \
+            service._readers["hv_2"].vset
+
+    def test_the_straddling_window_is_dropped(self, service):
+        """A mean of the old setpoint and the new one is a voltage nobody set.
+
+        Worse than the bitmask case it mirrors: it is PLAUSIBLE. The page
+        would have shown a number between the two, on the page somebody reads
+        to find out where the supply is going.
+        """
+        service._accumulate([Measurement(t=utcnow(), channel="hv_cathode_vset",
+                                         value=-500.0, unit="V", raw=500.0,
+                                         quality=Quality.OK)] * 9)
+        send(service, value=-1000.0)
+        assert "hv_cathode_vset" not in service._window
+
+    def test_only_the_channel_commanded_is_republished(self, service):
+        send(service, value=-1000.0)
+        assert service.bus.measured("hv_anode_vset") is None
+
+    def test_a_refused_write_publishes_nothing(self, service):
+        """Nothing was written, so there is nothing to say. Publishing the
+        value that is still there would be harmless; publishing the value
+        that was ASKED for would be a lie the page could not detect."""
+        service._readers["hv_2"].stat = DISABLED
+        assert send(service, value=-1000.0)["ok"] is False
+        assert service.bus.measured("hv_cathode_vset") is None
+
+    def test_a_write_that_did_not_take_publishes_nothing(self, service):
+        # `obey=False`: the board acknowledges and keeps the old value,
+        # which the read-back catches.
+        service._readers["hv_2"].obey = False
+        assert send(service, value=-1000.0)["ok"] is False
+        assert service.bus.measured("hv_cathode_vset") is None
