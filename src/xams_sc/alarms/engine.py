@@ -20,9 +20,11 @@ indistinguishable from one that never had a problem unless something says so.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from dataclasses import dataclass, field
@@ -82,6 +84,14 @@ class ChannelState:
     stale: bool = False
 
 
+# How many notifications may wait for the gateway before the engine starts
+# dropping them. Reached only when the gateway is unreachable AND alarms keep
+# transitioning - the CAEN link dying takes 32 channels with it - and at that
+# point the plant has a bigger problem than the queue. A bound is here so that
+# a wedged gateway cannot grow this without limit; the drop is LOUD.
+NOTIFY_QUEUE_MAX = 100
+
+
 class AlarmEngine:
     """Evaluates measurements against thresholds and raises alarms.
 
@@ -121,6 +131,11 @@ class AlarmEngine:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # Notification is NETWORK I/O and must not happen on the thread that
+        # evaluates measurements. See `_dispatch`. Created by `start()`,
+        # because a queue nobody drains is worse than no queue.
+        self._outbox: queue.Queue | None = None
+        self._notify_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------- evaluation
 
@@ -275,11 +290,74 @@ class AlarmEngine:
             log.exception("could not build the alarm email for %s; "
                           "falling back to plain text", state.channel)
 
+        self._dispatch(state.channel, text, channels, rich)
+
+    # ------------------------------------------------------------- dispatch
+    #
+    # WHY THE MESSAGE LEAVES ON ANOTHER THREAD.
+    #
+    # `on_measurement` runs on paho's network thread and holds `self._lock`
+    # all the way down to here. Sending used to happen on that thread, under
+    # that lock, and it is network I/O: `send_email` opens a NEW SMTP
+    # connection per recipient with a 20 s socket timeout, so an unreachable
+    # mail server costs 20 s per blocking step per person. The SMS client is
+    # given no timeout at all - the messagebird SDK takes none - so a gateway
+    # that accepts the connection and then says nothing blocks for good.
+    #
+    # While that ran, no measurement was evaluated, and paho could not send
+    # its keepalive either, so a 30 s stall dropped the broker connection.
+    # The alarm engine going deaf because it is busy telephoning about the
+    # first alarm is the failure this subsystem exists to prevent, and a
+    # cascade makes it worse rather than better: transitions are per channel
+    # with no aggregation, so one dead CAEN link is 32 of them at once.
+    #
+    # What this does NOT fix is a gateway that hangs for ever: the worker is
+    # then stuck on one message and the queue fills behind it. It turns a
+    # dead engine into undelivered alarms that say so in the log, which is
+    # the better of the two, not a cure. A timeout belongs in `notify.py`
+    # the day the SDK offers one.
+
+    def _dispatch(self, channel: str, text: str, channels: list[str],
+                  rich) -> None:
+        """Hand one message to whoever will send it."""
+        outbox = self._outbox
+        if outbox is None:
+            # No worker to hand it to. The engine was built but never
+            # started, which is how the unit tests drive it - there is no
+            # other thread in that case, so this IS the sending thread.
+            self._send(channel, text, channels, rich)
+            return
+        try:
+            outbox.put_nowait((channel, text, channels, rich))
+        except queue.Full:
+            # Loud, and in the same words as an empty recipient list: both
+            # mean somebody who should have been told was not (§4.4).
+            log.error("ALARM NOT DELIVERED: %d notifications are already "
+                      "waiting for the gateway, so this one was dropped. %s",
+                      NOTIFY_QUEUE_MAX, text)
+
+    def _send(self, channel: str, text: str, channels: list[str],
+              rich) -> None:
         try:
             self.notifier.send(text, channels, rich=rich)
         except Exception:
             # A failing gateway must not stop the engine evaluating.
-            log.exception("notification failed for %s", state.channel)
+            log.exception("notification failed for %s", channel)
+
+    def _notify_pump(self) -> None:
+        """Send what the engine has queued, one at a time.
+
+        Serial on purpose: the gateway is rate-limited and the order alarms
+        went off in is information. `None` is the sentinel that ends it.
+        """
+        while True:
+            item = self._outbox.get()
+            try:
+                if item is None:
+                    return
+                self._send(*item)
+            finally:
+                self._outbox.task_done()
 
     def _email_for(self, state: ChannelState, value):
         """Subject, HTML and text for this alarm, with the plant around it."""
@@ -500,6 +578,14 @@ class AlarmEngine:
     # ------------------------------------------------------------------- run
 
     def start(self) -> None:
+        # The sender FIRST, and before the subscription: a message evaluated
+        # between subscribing and starting the worker would be sent on this
+        # thread, which is the whole thing being fixed.
+        self._outbox = queue.Queue(maxsize=NOTIFY_QUEUE_MAX)
+        self._notify_thread = threading.Thread(
+            target=self._notify_pump, name="alarm-notify", daemon=True)
+        self._notify_thread.start()
+
         def handler(topic: str, payload: str) -> None:
             try:
                 self.on_measurement(Measurement.from_payload(json.loads(payload)))
@@ -549,3 +635,16 @@ class AlarmEngine:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5)
+        if self._notify_thread:
+            # The sentinel goes in front of nothing: whatever is already
+            # queued is sent first, so a shutdown does not swallow the alarm
+            # that prompted it. Bounded, because the worker may be stuck on a
+            # gateway that will never answer and a service that cannot be
+            # stopped is its own fault - it is a daemon thread and the
+            # process exits regardless.
+            with contextlib.suppress(queue.Full):
+                self._outbox.put_nowait(None)
+            self._notify_thread.join(timeout=5)
+            if self._notify_thread.is_alive():
+                log.warning("the notification worker did not finish in 5 s; "
+                            "a gateway is probably still hanging")
