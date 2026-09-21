@@ -21,19 +21,41 @@
    seconds after asking for it.
 
    So the question asked here is "does this page differ from what arrived?",
-   not "is the cursor in it?". defaultValue and defaultSelectedIndex are what
-   the server rendered, so a box filled by hand and a box filled by a button
-   are indistinguishable, which is the point — both are unsent operator
+   not "is the cursor in it?". A box's defaultValue and an option's
+   defaultSelected are what the server rendered, so a box filled by hand and
+   a box filled by a button are indistinguishable, which is the point — both are unsent operator
    intent, and neither may be thrown away without a click. */
 (function () {
   var timer = null;
+  /* What the SERVER sent, for a <select>.
+
+     A select has no "default index" property at all - the DOM puts the
+     default on each OPTION, as `defaultSelected`. The comparison that used
+     to stand here reached for one anyway and so read `0 !== undefined`,
+     which is true every time.
+     `unsent()` therefore always said the page held unsent input, `tick()`
+     rescheduled itself forever and the reload never ran. One <select> in
+     this interface, the heater range, and it is on the page that shows the
+     high voltage: a setpoint written or a supply energised sat there looking
+     unchanged until somebody pressed F5.
+
+     No option marked `selected` means the browser shows the first one, which
+     is index 0 and is what the operator is looking at. A `multiple` select
+     with nothing marked selects nothing, hence -1. */
+  function defaultIndex(sel) {
+    var i;
+    for (i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].defaultSelected) return i;
+    }
+    return sel.multiple ? -1 : 0;
+  }
   function unsent() {
     var els = document.querySelectorAll('input, textarea, select'), i, el;
     for (i = 0; i < els.length; i++) {
       el = els[i];
       if (el.disabled || el.type === 'hidden') continue;
       if (el.tagName === 'SELECT') {
-        if (el.selectedIndex !== el.defaultSelectedIndex) return true;
+        if (el.selectedIndex !== defaultIndex(el)) return true;
       } else if (el.type === 'checkbox' || el.type === 'radio') {
         /* A checkbox's VALUE is "on" whether it is ticked or not, so the
            comparison below cannot see it and the reload would throw the tick
