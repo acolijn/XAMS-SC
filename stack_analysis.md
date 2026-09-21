@@ -145,8 +145,36 @@ That is the scaffolding working.
 | 3.7 | No CI, no lockfile, no type checking | **open**, and downgraded — see below |
 | 3.8 | Security posture thin | **open**, unchanged and accepted |
 | 3.9 | `reader._lock` reached into from outside | **open**, trivial |
+| 3.10 | Services card blind to `sinks`/`alarms`; pyflakes guard inert | **closed** — found mid-work, not by either review |
 
 Three of these deserve more than a row.
+
+### 3.10 — two more, found by doing the work rather than by reading
+
+Neither was visible in the first pass. Both are recorded because the *way* they
+were found is the point.
+
+**The Services card could not show the archive or the notifier as broken.** The
+dot was chosen on `expects_heartbeat` before `state` was ever consulted, and
+`sinks` and `alarms` were exempt because neither is a `BaseService` and neither
+published a heartbeat. A stopped `sinks` rendered as a grey dot beside the word
+"stopped" in dim text — indistinguishable at a glance from healthy. Worse, with
+no heartbeat there was no staleness signal: a process that **hangs** rather than
+exits publishes no will, so the retained `running` would have stayed next to its
+name indefinitely. That is the frozen-plausible-value failure principle 4 names,
+in the two services it would hurt most.
+
+Found by the owner asking why a stopped service did not say so. Closed: both now
+beat every 10 s, `expects_heartbeat` is gone rather than made always-true, and
+with it the "no heartbeat" cell that read as a fault on a healthy system.
+
+**The pyflakes guard had been skipping silently.** `test_no_undefined_names.py`
+is an `importorskip`, pyflakes was not installed in the checkout's virtualenv,
+and the suite reported "488 passed, 1 skipped" — a line nobody reads. Installing
+the `[dev]` extra turned it back on and took the suite to 525. A skipped safety
+check reports the same green as a passing one, which is §3.7's argument in
+miniature and is the second time this session that "it works on this machine"
+turned out to mean "this machine happens to have something installed".
 
 ### 3.4 — the fix was cheaper than the diagnosis
 
@@ -266,7 +294,27 @@ log interval, the log branch fires repeatedly to catch up, emitting a burst of
 heartbeats. Harmless — `_emit_window` clears the window, so only the first
 carries data — but inconsistent with the line above it. A nit.
 
-### 4.6 `ups.py` is 0 % covered and trivially testable
+### 4.6 The database outage path cannot be exercised through the service manager
+
+`install_services.ps1` sets `DependOnService = mosquitto, postgresql-x64-18` for
+`XAMS-sinks`. The reasoning given is sound — starting before the database is up
+is a minute of retry noise. The consequence is not stated anywhere:
+
+  * `Stop-Service postgresql-x64-18 -Force` stops **`XAMS-sinks` with it**, so
+    the service that is supposed to survive a database outage is not running to
+    survive it;
+  * `Start-Service XAMS-sinks` while the database is down is **refused** by
+    Windows.
+
+So the one failure mode the storage layer is explicitly designed for cannot be
+rehearsed using the tools that run it in production. Testing it means running
+`python -m xams_sc.sinks` by hand, which is what was done to observe §4.1 — and
+which nobody would think of without reading the NSSM script.
+
+Worth a paragraph in `docs/operating/`. A dependency that also prevents the
+recovery drill is a reasonable trade, but only if it is a known one.
+
+### 4.7 `ups.py` is 0 % covered and trivially testable
 
 142 statements, no tests, and it is the mains-loss detector. The hardware is
 behind a `UpsReader` the service holds, so `read()` can be tested against a fake
@@ -282,12 +330,13 @@ power" on the first reading — are exactly the logic worth pinning.
 |---|---|---|---|
 | 1 | `--max-pending` on the sinks | hours | Makes §3.2 demonstrable; makes the buffer a decision |
 | 2 | fsync at the day rollover and in `IntegratorState.save` | hours | Two one-line durability gaps in the two files that must survive |
-| 3 | Tests for `ups.py` | half a day | 0 % on mains-loss detection, easy to reach |
+| 3 | Tests for `ups.py` (§4.7) | half a day | 0 % on mains-loss detection, easy to reach |
 | 4 | Pin dependencies; commit a lockfile for the lab PC | hours | A reinstall should reproduce, not resolve |
-| 5 | CI: `pytest` + `pyflakes` on a clean box | hours | Proves the install, which is the part nobody else can check |
+| 5 | CI: `pytest` + `pyflakes` on a clean box | hours | Proves the install, and that the guards are installed to run (§3.10) |
 | 6 | Tests for `alarms/__main__.py` and `daily.py` | 1 day | The last two meaningful 0 % modules |
 | 7 | `reader.transaction()` replacing `reader._lock` | hours | Small, prevents a future break |
 | 8 | `os.stat` check on `secrets.yaml` mode | hours | It holds a billable API key |
+| 9 | Document the sinks/PostgreSQL service dependency (§4.6) | minutes | The recovery drill is otherwise undiscoverable |
 
 Items 1–3 are half a week together and close the last two places where this
 system can lose data quietly.
@@ -307,13 +356,23 @@ untunable constant, a module that nobody has tested, and a set of security
 trade-offs that are recorded and accepted rather than overlooked. None is
 architectural. None would take more than a day.
 
-The one pattern worth naming, because it recurred: **three times this session a
+Two patterns are worth naming, because each recurred.
+
+The first: **three times this session a
 test failed because a double was easier than the object it stood in for** — a
 bus that connected synchronously when the real one does not, acks that omitted a
 field every real ack carries, a fixture that patched `_connect` but not `_conn`.
 Each was fixed in the double rather than worked around in the test. A suite whose
 doubles lag the real objects certifies behaviour nothing has, and that is a
 harder failure to notice than a red test.
+
+The second: **the findings that mattered most came from running the thing, not
+from reading it.** The Services card blind spot surfaced because somebody
+stopped a service and looked at the page. §4.1 surfaced because somebody pulled
+the database out while watching the log. The undeclared `jinja2` surfaced
+because an install was attempted somewhere clean. None of the three was visible
+in a careful read of the source, and the first review pass — which was a careful
+read of the source — missed all of them.
 
 ---
 
