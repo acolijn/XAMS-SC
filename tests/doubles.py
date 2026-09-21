@@ -39,6 +39,12 @@ class RecordingBus:
         # the service at the other end and feed an ack back the way a running
         # one would.
         self.on_publish = None
+        # The CLI checks `connected` before it will send anything, and the
+        # real Bus sets it from the broker's CONNACK. True from the start
+        # here: a test that wants the broker down sets it False.
+        self.connected = True
+        self.connect_called = False
+        self.disconnected = False
 
     # ------------------------------------------------------------- publishing
 
@@ -82,10 +88,15 @@ class RecordingBus:
     # ------------------------------------------------------------- lifecycle
 
     def connect(self) -> None:
-        pass
+        # Deliberately does NOT set `connected`. The real Bus sets it from the
+        # broker's CONNACK, which may never arrive — `connect_async` does not
+        # block and a missing broker is a warning, not a failure. A double
+        # that connected synchronously made "the broker is down" untestable,
+        # because the code under test would see a live connection either way.
+        self.connect_called = True
 
     def disconnect(self) -> None:
-        pass
+        self.disconnected = True
 
     # ------------------------------------------------------------ convenience
 
