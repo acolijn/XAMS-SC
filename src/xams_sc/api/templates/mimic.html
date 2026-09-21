@@ -11,23 +11,43 @@
 .mimic-body [id^="v-"] { cursor:pointer; }
 
 /* The drawing, and beside it the things a pipework diagram has no place for.
-   21rem is chosen so the column fits a channel name, a number and a state
+   24rem is chosen so the column fits a channel name, a number and a state
    without wrapping, and takes no more than that: the drawing is the subject
-   of this page and the column is a margin note.
+   of this page and the column is a margin note. It was 21rem, which clipped
+   the longer HV descriptions into an ellipsis.
 
    It folds underneath on a narrow window rather than squeezing the drawing.
    A mimic narrow enough to need scrolling has stopped being a mimic — the
    same reasoning as the max-height on .mimic-body in base.html. */
 .mimic-layout { display:grid; gap:1.2rem; align-items:start;
-                grid-template-columns:minmax(0,1fr) 21rem; }
-@media (max-width:1100px) {
+                grid-template-columns:minmax(0,1fr) 24rem; }
+@media (max-width:1180px) {
   .mimic-layout { grid-template-columns:minmax(0,1fr); }
 }
 .mimic-side { display:flex; flex-direction:column; gap:1.2rem; min-width:0; }
+
+/* A FIXED-HEIGHT line at the top of the column, so the thing that says
+   whether anything is wrong never moves. The alarm card grows and shrinks as
+   alarms come and go, which is why it now sits at the BOTTOM: a card that
+   changes height must not push the stable ones around. This line is what you
+   glance at; that card is what you read afterwards. */
+.mimic-status { border-radius:5px; padding:.45rem .7rem; font-size:.82rem;
+                border:1px solid var(--line); background:var(--panel);
+                display:flex; align-items:center; gap:.5rem; min-height:1.2rem; }
+.mimic-status.ok   { border-color:rgba(63,185,80,.45); }
+.mimic-status.warn { border-color:rgba(210,153,34,.55); }
+.mimic-status.bad  { border-color:rgba(248,81,73,.6); }
+.mimic-status.stale{ border-color:rgba(248,81,73,.6);
+                     background:rgba(248,81,73,.1); }
+
+/* THE PAGE ITSELF HAS STOPPED UPDATING. Every number on the drawing is now a
+   frozen plausible value, which principle 4 calls worse than a gap, so the
+   drawing is visibly withdrawn rather than left looking live. */
+.mimic-body.stale { filter:grayscale(1); opacity:.45; transition:opacity .3s; }
 .mimic-side table td { padding:.28rem .9rem; font-size:.82rem; }
 .mimic-side .st { font-size:.74rem; letter-spacing:.03em; }
 /* Long channel descriptions must not push the number off the card. */
-.mimic-side .lbl { max-width:8.5rem; overflow:hidden;
+.mimic-side .lbl { max-width:11rem; overflow:hidden;
                    text-overflow:ellipsis; white-space:nowrap; }
 
 .grafana-modal {
@@ -75,26 +95,8 @@
    drives the drawing, so this page still never reloads. #}
 <aside class="mimic-side">
 
-  <div class="card">
-    <h2>Alarms</h2>
-    <div id="s-alarms"><div class="note">&mdash;</div></div>
-  </div>
-
-  <div class="card">
-    <h2>High voltage</h2>
-    <table>
-      {% for c in side.hv %}
-      <tr>
-        <td class="lbl" title="{{ c.label }}">{{ c.label }}</td>
-        <td class="num"><span id="s-{{ c.vmon }}" class="dim">&mdash;</span>
-            <span class="unit">V</span></td>
-        {# The board's STAT word, decoded server-side (§7.2). NEVER inferred
-           from the voltage: a channel can be enabled and sitting at zero. #}
-        <td class="st"><span id="st-{{ c.stat }}" class="dim">&mdash;</span></td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
+  {# The one thing that must never move. See .mimic-status above. #}
+  <div class="mimic-status" id="s-status"><span class="dim">connecting&hellip;</span></div>
 
   <div class="card">
     <h2>Cryostat setpoint</h2>
@@ -123,6 +125,22 @@
   </div>
 
   <div class="card">
+    <h2>High voltage</h2>
+    <table>
+      {% for c in side.hv %}
+      <tr>
+        <td class="lbl" title="{{ c.label }}">{{ c.label }}</td>
+        <td class="num"><span id="s-{{ c.vmon }}" class="dim">&mdash;</span>
+            <span class="unit">V</span></td>
+        {# The board's STAT word, decoded server-side (§7.2). NEVER inferred
+           from the voltage: a channel can be enabled and sitting at zero. #}
+        <td class="st"><span id="st-{{ c.stat }}" class="dim">&mdash;</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
     <h2>Mains</h2>
     <table>
       <tr><td>supply</td>
@@ -134,6 +152,11 @@
           <td class="num"><span id="s-ups_runtime_min" class="dim">&mdash;</span>
               <span class="unit">min</span></td></tr>
     </table>
+  </div>
+
+  <div class="card">
+    <h2>Alarms</h2>
+    <div id="s-alarms"><div class="note">&mdash;</div></div>
   </div>
 
 </aside>
@@ -169,12 +192,29 @@ const ALARM_COLOUR = {ok: "#3fb950", minor: "#d29922", major: "#f85149",
                       critical: "#f85149"};
 const STALE_COLOUR = "#6e7681";
 
+// HOW LONG THE PAGE MAY GO ON SHOWING WHAT IT LAST DREW.
+//
+// One dropped request is a hiccup and keeping the numbers is right; making
+// the whole mimic flicker because a packet went missing would be worse than
+// the packet. Several in a row is not a hiccup, and at that point every
+// number on the drawing is a frozen plausible value — which principle 4
+// calls worse than a gap, and which this page is the most dangerous place in
+// the system to have, because it is the one left open on a screen all day.
+//
+// The per-channel case was always handled: a channel that stops reading goes
+// to a dash. This is the case where the PAGE stops reading, and it used to
+// be a bare `return` with a comment saying to keep what is drawn.
+const STALE_AFTER_MS = 20000;
+let lastOk = 0;
+
 async function refresh() {
   let state;
   try {
     state = await (await fetch("/api/state", {cache: "no-store"})).json();
+    lastOk = Date.now();
   } catch (e) {
-    return;                       // broker or server hiccup; keep what is drawn
+    markStale();                  // a hiccup keeps the values; a pattern does not
+    return;
   }
   for (const c of state.channels) {
     const node = document.getElementById("v-" + c.name);
@@ -311,7 +351,68 @@ function drawSide(state) {
   } else {
     setText("s-ups_on_battery", "line power", "good");
   }
+  markLive(state);
 }
+
+// --- is what you are looking at still live? --------------------------------
+
+function markStale() {
+  // Not on the first failure. `lastOk` is what decides, so a single dropped
+  // request changes nothing and a broker that has genuinely gone away shows
+  // within twenty seconds.
+  if (lastOk && Date.now() - lastOk < STALE_AFTER_MS) return;
+  const age = lastOk ? Math.round((Date.now() - lastOk) / 1000) : null;
+  const line = document.getElementById("s-status");
+  if (line) {
+    line.className = "mimic-status stale";
+    line.innerHTML = '<span class="dot bad"></span><strong>NOT UPDATING</strong>'
+                   + '<span class="dim">' + (age === null
+                       ? "never reached the server"
+                       : "last answer " + age + "s ago") + "</span>";
+  }
+  const body = document.querySelector(".mimic-body");
+  if (body) body.classList.add("stale");
+}
+
+// The steady state: what the drawing is worth looking at, in one line that
+// never changes height. The alarm card below says WHICH; this says whether.
+function markLive(state) {
+  const body = document.querySelector(".mimic-body");
+  if (body) body.classList.remove("stale");
+
+  const line = document.getElementById("s-status");
+  if (!line) return;
+
+  const notify = state.notifications || {};
+  const worst = (state.alarms || []).reduce((w, a) =>
+    (a.state === "critical" || a.state === "major") ? "bad"
+      : (a.state === "minor" && w !== "bad") ? "warn" : w, null);
+
+  if (worst) {
+    const n = state.alarms.length;
+    line.className = "mimic-status " + worst;
+    line.innerHTML = '<span class="dot ' + worst + '"></span><strong>'
+                   + n + (n === 1 ? " alarm" : " alarms") + "</strong>"
+                   + '<span class="dim">see below</span>';
+  } else if (notify.known && notify.enabled === false) {
+    // A quiet page whose alarms reach nobody is worth saying at the top, not
+    // only inside the card (§4.4a).
+    line.className = "mimic-status warn";
+    line.innerHTML = '<span class="dot warn"></span><strong>Alarms disabled</strong>'
+                   + '<span class="dim">nobody is told</span>';
+  } else {
+    line.className = "mimic-status ok";
+    line.innerHTML = '<span class="dot good"></span>live'
+                   + '<span class="dim">updated just now</span>';
+  }
+}
+
+// Independently of the fetch succeeding: a tab the browser has throttled, or
+// a machine asleep, stops calling refresh at all, and the page would sit
+// there looking live with no failure to notice.
+setInterval(() => {
+  if (lastOk && Date.now() - lastOk >= STALE_AFTER_MS) markStale();
+}, 2000);
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, ch => (
