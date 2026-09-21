@@ -59,7 +59,8 @@ list is a list nobody chose. Both are still audited like any other change, and
 both files are tracked by git.
 
 **Every POST is checked for where it came from.** The `Origin` header must be
-this site's own, and the `Host` header one this server answers to; a request
+this site's own, and the `Host` header a name this server answers to — the
+name only, not the port, so an SSH tunnel on any local port works; a request
 that fails either gets a 403 or a 421 and never reaches the handler. Without
 that, a page in any other tab could submit a hidden form to `127.0.0.1:8000`
 and the command would run — the loopback bind keeps the network out, not the

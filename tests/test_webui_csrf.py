@@ -83,7 +83,8 @@ def test_nothing_reaches_the_bus_when_a_post_is_refused(csrf_client, bus):
 
 
 @pytest.mark.parametrize("host", ["evil.example", "attacker.test:8000",
-                                  "127.0.0.1:9999", ""])
+                                  "127.0.0.1.evil.example:8000",
+                                  "localhost.evil.example", ""])
 def test_refuses_an_unknown_host_header(csrf_client, host):
     """DNS rebinding: the attacker's own domain, re-pointed at 127.0.0.1.
 
@@ -97,11 +98,44 @@ def test_refuses_an_unknown_host_header(csrf_client, host):
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1:8000", "localhost:8000",
-                                  "[::1]:8000"])
-def test_accepts_the_hosts_it_is_served_on(csrf_client, host):
-    """localhost and the IP are the same server and both get typed."""
+                                  "[::1]:8000", "127.0.0.1", "localhost",
+                                  "localhost:8080", "127.0.0.1:9999",
+                                  "[::1]:31337"])
+def test_accepts_any_port_on_a_loopback_name(csrf_client, host):
+    """THE SSH TUNNEL. §8 names it as the way in from outside this machine.
+
+    The forwarded port is chosen on the far end and the browser puts THAT
+    port in the Host header, so `ssh -L 8080:127.0.0.1:8000` arrives as
+    `localhost:8080`. A colleague whose own 8000 is already taken has no
+    other option, and refusing it meant a dead page on the one route that
+    exists for an emergency.
+
+    Matching the port bought no protection: rebinding puts the attacker's
+    OWN name in this header, which is what the test above still refuses.
+    """
     assert csrf_client.get("/api/state",
                            headers={"host": host}).status_code == 200
+
+
+def test_a_tunnel_on_another_port_can_still_post(csrf_client):
+    """Reading through the tunnel is no use if nothing can be changed."""
+    r = csrf_client.post("/flow/reset", data={"by": "ap"},
+                         headers={"host": "localhost:8080",
+                                  "origin": "http://localhost:8080"},
+                         follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_a_name_that_merely_contains_a_loopback_name_is_refused(csrf_client):
+    """`127.0.0.1.evil.example` is a domain the attacker owns.
+
+    Split on the port separator, not searched for a substring - the whole
+    name has to be one this server answers to.
+    """
+    for host in ("127.0.0.1.evil.example", "evil.example:8000",
+                 "notlocalhost", "localhosts"):
+        assert csrf_client.get("/api/state",
+                               headers={"host": host}).status_code == 421, host
 
 
 def test_the_ui_still_works_from_its_own_origin(client):
@@ -132,6 +166,7 @@ def test_a_port_other_than_8000_does_not_lock_itself_out(config_dir, bus,
     assert moved.get("/api/state").status_code == 200
     assert moved.post("/flow/reset", data={"by": "ap"},
                       follow_redirects=False).status_code in (303, 200)
+    # Another site is still another site, whatever port it claims.
     assert moved.post("/flow/reset", data={"by": "ap"},
-                      headers={"origin": "http://127.0.0.1:8000"},
+                      headers={"origin": "https://evil.example:8080"},
                       follow_redirects=False).status_code == 403

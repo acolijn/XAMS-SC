@@ -913,7 +913,7 @@ The same gap reads as well as writes. Nothing checked the `Host` header, so a do
 
 **The fix, as of 21 September 2026:** one middleware in `api/app.py`, two checks, against the two attacks:
 
-* the `Host` header, on **every** request, against rebinding
+* the `Host` header, on **every** request, against rebinding — matched on the NAME, never the port, so an SSH tunnel forwarded to any local port still works. Rebinding puts the attacker's own name in that header, so the port never contributed to the protection; refusing it only broke the one route that exists for reaching this machine from outside.
 * the `Origin` — falling back to the `Referer` where a browser sends none — on `POST`, `PUT`, `PATCH` and `DELETE`, against the cross-site form
 
 No token and no session. A per-form CSRF token is the stricter answer, and it was not taken: it means a hidden field in ten templates and a secret to manage, for a UI with no login on a machine one person at a time uses. Two headers a browser sets by itself, checked in one place a student can read, is the §8.1 trade.

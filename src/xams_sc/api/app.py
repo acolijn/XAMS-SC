@@ -97,18 +97,34 @@ def safe_next(target: str) -> str:
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
-def _origin_of(url: str) -> str | None:
-    """`http://127.0.0.1:8000/hv?x=1` -> `http://127.0.0.1:8000`."""
+def _host_name(value: str) -> str:
+    """The name out of a `Host` header or an authority, WITHOUT the port.
+
+    `localhost:8080` -> `localhost`, `[::1]:8000` -> `[::1]`. The brackets
+    stay: they are how an IPv6 address is written in an authority, and
+    stripping them would make two spellings of the same host look different.
+    """
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        end = value.find("]")
+        return value[:end + 1] if end != -1 else value
+    return value.split(":", 1)[0]
+
+
+def _origin_host(url: str) -> str | None:
+    """The host an `Origin` or `Referer` names, or None if it names none."""
     if not url:
         return None
     parts = urlsplit(url)
-    if not parts.scheme or not parts.netloc:
+    # `Origin: null` is what a sandboxed frame sends. It parses to no scheme
+    # and no authority, and it is not this site.
+    if parts.scheme not in ("http", "https") or not parts.netloc:
         return None
-    return f"{parts.scheme}://{parts.netloc}".lower()
+    return _host_name(parts.netloc)
 
 
-def allowed_hosts(host: str, port: int) -> frozenset[str]:
-    """The values of the `Host` header this server answers to.
+def allowed_host_names(host: str) -> frozenset[str]:
+    """The host NAMES this server answers to. The port is not one of them.
 
     Checked because nothing else checks it: without this, a domain the
     attacker controls can be re-pointed at 127.0.0.1 (DNS rebinding) and
@@ -117,14 +133,25 @@ def allowed_hosts(host: str, port: int) -> frozenset[str]:
     to a page on the internet. The Origin check below cannot see that,
     because to the browser it genuinely is same-origin by then.
 
-    The bind address is included as well as loopback: §8 allows another
-    one with a recorded decision, and a UI that refuses every request
-    the moment somebody takes that decision is a trap.
+    **THE PORT IS DELIBERATELY IGNORED**, and it costs nothing. Rebinding
+    works by putting the ATTACKER'S OWN NAME in the Host header, so
+    `evil.example` is refused whatever port follows it; matching the port as
+    well added precision, not protection.
+
+    What it does buy is the SSH tunnel, which §8 names as the way to reach
+    this machine from outside. The forwarded port is chosen on the far end:
+    `ssh -L 8080:127.0.0.1:8000` makes the browser send `localhost:8080`,
+    and a colleague whose own 8000 is already taken by something else has no
+    other option. Refusing that meant a 421 and a dead page on the one route
+    that exists for an emergency - the route you least want to discover is
+    broken at the moment you need it.
+
+    The bind address is included as well as loopback: §8 allows another one
+    with a recorded decision, and a UI that refuses every request the moment
+    somebody takes that decision is a trap.
     """
-    names = {"127.0.0.1", "localhost", "[::1]", "::1", host.lower()}
-    # A default port is not written in the Host header; any other one is.
-    return frozenset({name if port == 80 else f"{name}:{port}"
-                      for name in names})
+    return frozenset({"127.0.0.1", "localhost", "[::1]", "::1",
+                      _host_name(host)})
 
 
 def operator_of(request: Request, submitted: str = "") -> str:
@@ -318,8 +345,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
     drift = DriftWatcher()
     app.state.drift = drift
 
-    hosts = allowed_hosts(http_host, http_port)
-    origins = frozenset("http://" + h for h in hosts)
+    host_names = allowed_host_names(http_host)
 
     @app.middleware("http")
     async def same_origin_only(request: Request, call_next):
@@ -338,7 +364,7 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
         `curl` posting to this port is refused too, and that is intended: the
         CLI talks MQTT, not HTTP, and nothing in the repository posts here.
         """
-        if request.headers.get("host", "").lower() not in hosts:
+        if _host_name(request.headers.get("host", "")) not in host_names:
             # 421, not 403: the request reached the wrong server for that
             # name, which is exactly what this status is for.
             log.warning("refused a request for host %r",
@@ -346,19 +372,23 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
             return PlainTextResponse("wrong host for this server",
                                      status_code=421)
         if request.method in UNSAFE_METHODS:
-            source = (request.headers.get("origin")
-                      or _origin_of(request.headers.get("referer", "")))
-            if source not in origins:
+            # The Referer is consulted ONLY when there is no Origin. An
+            # Origin that is present and wrong is an answer, not a gap to
+            # fall through.
+            origin = request.headers.get("origin")
+            came_from = (_origin_host(origin) if origin
+                         else _origin_host(request.headers.get("referer", "")))
+            if came_from not in host_names:
                 # Logged, and loudly: if a browser ever withholds both
                 # headers on a same-origin form, the operator sees a control
                 # that does nothing and this line is the only explanation
                 # anywhere. It is on the Logs page under `webui`.
                 log.warning("refused a cross-site %s %s (origin %r)",
-                            request.method, request.url.path, source)
+                            request.method, request.url.path, origin)
                 return PlainTextResponse(
                     "cross-site request refused - open this page from "
-                    "http://%s:%d and try again" % (http_host, http_port),
-                    status_code=403)
+                    "http://%s:%d, or through an SSH tunnel to it, and try "
+                    "again" % (http_host, http_port), status_code=403)
         return await call_next(request)
 
     def page(request: Request, name: str, **context):
