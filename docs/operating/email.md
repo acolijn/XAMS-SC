@@ -97,6 +97,21 @@ after it was written by somebody who cannot glance at the instrument to check.
 `tests/test_mail.py` holds these down. They are not tests of how the mail
 looks; they are tests of what would make it misleading.
 
+
+## Times in these emails
+
+Local time, named: `2026-07-15 14:30:45 CEST`. It follows the machine's own
+zone, so the CET/CEST changeover needs no thought and nothing to remember.
+
+**Only the display changed.** The archive, the database and every MQTT
+timestamp remain UTC (§9.3). An email is read by a person deciding whether to
+drive in at three in the morning; an archive is read by software correlating
+it with everything else, and those want different clocks. The zone is printed
+next to the time so a message read on a phone abroad is not ambiguous.
+
+To pin the zone rather than follow the machine — a server in another country,
+say — set `mail.DISPLAY_TZ` to a `ZoneInfo`.
+
 ## When it does not arrive
 
 1. **Check `logs/alarms.log`** for `email to ... failed:`. Delivery failures

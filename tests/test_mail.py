@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from zoneinfo import ZoneInfo
+
 from xams_sc.alarms import mail
 from xams_sc.alarms.engine import _ViewLike
 
@@ -156,3 +158,65 @@ class TestTheMailIsWellFormedEnoughForEmailClients:
 
         head = html[:html.index("<table")]
         assert "2.62" in head or "hihi" in head
+
+
+class TestTheClockTheEmailIsReadIn:
+    """Emails render local time; storage stays UTC. See DESIGN.md §9.3, §11.
+
+    The logs and the HV page already show local time, so a UTC email was the
+    one place in the system that answered "when" in a different clock — and
+    it is the place read at three in the morning by somebody deciding whether
+    to drive in. An hour out, in the dark, on a phone, is a real way to make
+    the wrong call.
+
+    An explicit zone is pinned here rather than the machine's, so the test
+    means the same thing on the lab PC and on a laptop.
+    """
+
+    #: 12:30 UTC on a summer day is 14:30 in Amsterdam (CEST, UTC+2).
+    SUMMER = datetime(2026, 7, 15, 12, 30, 45, tzinfo=timezone.utc)
+    #: 12:30 UTC in January is 13:30 (CET, UTC+1) — the changeover must follow.
+    WINTER = datetime(2026, 1, 15, 12, 30, 45, tzinfo=timezone.utc)
+
+    @pytest.fixture(autouse=True)
+    def amsterdam(self, monkeypatch):
+        monkeypatch.setattr(mail, "DISPLAY_TZ", ZoneInfo("Europe/Amsterdam"))
+
+    def test_an_alarm_is_stamped_in_local_time(self):
+        _, html, text = mail.alarm("tt302", "major", "high", 92.4, "",
+                                   context(), self.SUMMER)
+
+        assert "14:30:45" in html and "12:30:45" not in html
+        assert "14:30:45" in text
+
+    def test_the_zone_is_named_so_the_time_is_not_ambiguous(self):
+        _, html, text = mail.alarm("tt302", "major", "high", 92.4, "",
+                                   context(), self.SUMMER)
+
+        assert "CEST" in html
+        assert "CEST" in text
+
+    def test_winter_is_cet_not_a_fixed_two_hour_offset(self):
+        """A hard-coded +2 would be an hour out for five months of the year."""
+        _, html, _ = mail.alarm("tt302", "major", "high", 92.4, "",
+                                context(), self.WINTER)
+
+        assert "13:30:45" in html
+        assert "CET" in html and "CEST" not in html
+
+    def test_the_daily_report_is_local_too(self, webui):
+        _, app, _ = webui
+        _, html, text = mail.digest(app.state.system, self.SUMMER)
+
+        assert "14:30" in html and "CEST" in html
+        assert "14:30" in text
+
+    def test_a_naive_timestamp_is_taken_as_utc_rather_than_refused(self):
+        """`model.iso` raises on a naive datetime, which is right for storage.
+        Refusing to render an ALARM email over a missing tzinfo is not."""
+        naive = datetime(2026, 7, 15, 12, 30, 45)
+
+        _, html, _ = mail.alarm("tt302", "major", "high", 92.4, "",
+                                context(), naive)
+
+        assert "14:30:45" in html

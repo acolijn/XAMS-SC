@@ -25,7 +25,34 @@ broken in clients that force a light background, and about half of them do.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+# The zone these emails are READ in. `None` means the machine's own, which on
+# the lab PC is Europe/Amsterdam and so follows CET/CEST without anybody
+# having to remember the changeover. Set it to a ZoneInfo to pin it.
+#
+# Storage is untouched and stays UTC: the archive, the database, MQTT and
+# every timestamp inside them (§3, §9.3). This is a rendering decision about
+# one output, not a change of clock. Mixing the two is how an archive ends up
+# with an hour that happens twice a year and no way to tell which is which.
+DISPLAY_TZ = None
+
+
+def _local(when: datetime) -> datetime:
+    """An aware timestamp in the zone the reader lives in.
+
+    The logs and the HV page already show local time, so a UTC email was the
+    one place in the system that answered "when" in a different clock — and
+    it is the place read at three in the morning by somebody deciding whether
+    to drive in.
+
+    A naive datetime is assumed to be UTC rather than rejected. `model.iso`
+    raises on one, which is right for something being stored; refusing to
+    render an ALARM email over a missing tzinfo is not.
+    """
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(DISPLAY_TZ)
 
 # Kept close to the web UI's accents so the two do not feel like different
 # systems, but darkened for legibility on white.
@@ -245,7 +272,8 @@ def digest(state, when: datetime) -> tuple[str, str, str]:
 
     subject = "XAMS daily report - %s" % (
         "ALL OK" if accent == GOOD else word.replace("&", "and"))
-    html = shell("XAMS slow control", when.strftime("Daily report, %A %d %B %Y, %H:%M"),
+    html = shell("XAMS slow control",
+                 _local(when).strftime("Daily report, %A %d %B %Y, %H:%M %Z"),
                  accent, "".join(body),
                  preheader="%s. %s" % (word, detail))
     return subject, html, _digest_text(state, when, word, detail, alarms)
@@ -253,7 +281,7 @@ def digest(state, when: datetime) -> tuple[str, str, str]:
 
 def _digest_text(state, when, word, detail, alarms) -> str:
     lines = ["XAMS SLOW CONTROL - daily report",
-             when.strftime("%A %d %B %Y, %H:%M"), "",
+             _local(when).strftime("%A %d %B %Y, %H:%M %Z"), "",
              "%s - %s" % (word, detail), ""]
     if alarms:
         lines.append("ACTIVE ALARMS")
@@ -312,7 +340,7 @@ def alarm(channel: str, state_name: str, threshold, value, description: str,
              GOOD if not down else BAD)]
     if context.get("config_hash"):
         rows.append(("Configuration", _esc(context["config_hash"])))
-    rows.append(("Raised", when.strftime("%Y-%m-%d %H:%M:%S")))
+    rows.append(("Raised", _local(when).strftime("%Y-%m-%d %H:%M:%S %Z")))
     body.append(table(rows))
 
     body.append(
@@ -323,7 +351,8 @@ def alarm(channel: str, state_name: str, threshold, value, description: str,
 
     subject = "XAMS %s: %s%s" % (str(state_name).upper(), channel,
                                  (" (%s)" % description) if description else "")
-    html = shell("XAMS alarm", when.strftime("%A %d %B %Y, %H:%M:%S"),
+    html = shell("XAMS alarm",
+                 _local(when).strftime("%A %d %B %Y, %H:%M:%S %Z"),
                  colour, "".join(body),
                  preheader="%s %s at %s, reading %s"
                            % (channel, str(state_name).upper(), threshold, shown))
@@ -331,7 +360,7 @@ def alarm(channel: str, state_name: str, threshold, value, description: str,
     text = ["XAMS SLOW CONTROL - ALARM", "",
             "%s: %s" % (str(state_name).upper(), label),
             "threshold %s, reading %s" % (threshold, shown),
-            when.strftime("raised %Y-%m-%d %H:%M:%S"), ""]
+            _local(when).strftime("raised %Y-%m-%d %H:%M:%S %Z"), ""]
     if others:
         text.append("ALSO IN ALARM")
         for a in others:
