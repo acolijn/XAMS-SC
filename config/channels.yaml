@@ -115,6 +115,17 @@ channels:
   # driver publishes quality=error for it rather than a negative weight
   # (CURRENT_VALID_A in devices/cdaq.py).
   #
+  # NOT YET CONFIRMED AGAINST THE SENSOR. The span and the full scale were
+  # given to this software as "2x 4-20 mA strain gauge, 0-20 kg" and nothing
+  # here has seen a datasheet or a reading. What that statement does NOT fix
+  # is the DIRECTION: a reverse-acting transmitter sends 20 mA at zero load
+  # and 4 mA at full scale, puts the same currents on the same wires, and
+  # would make every weight below read as its complement -- 5 kg for 15.
+  #
+  # TO CONFIRM, with the loop powered: an empty cell must read close to
+  # 4 mA (0 kg), and adding a known mass must move it UP. If it moves down,
+  # the transmitter is reverse-acting: set offset 0.020 and multiplier -1250.
+  #
   # THE LOOPS NEED EXTERNAL 24 V. The 9207 measures current but does not
   # source loop power. A channel reading a flat 0 mA with the sensor
   # connected is the supply, not the sensor.

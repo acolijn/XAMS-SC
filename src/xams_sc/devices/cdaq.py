@@ -78,7 +78,19 @@ RTD_VALID_C = (-200.0, 850.0)
 #
 # THE LOOPS NEED EXTERNAL 24 V — the 9207 measures current but does not source
 # loop power. A channel pinned at 0 mA with the sensor plugged in is the supply.
-CURRENT_VALID_A = (0.0035, 0.0210)
+CURRENT_VALID_A = (0.0035, 0.0205)
+
+# What the task asks the module for, in AMPS. Kept BELOW the 9207's own range
+# rather than at it: published specifications for the current inputs give
+# +/-21.5 mA in some revisions and +/-22 mA in others, and DAQmx REFUSES a
+# max_val outside the module's range — which is a startup failure, not a wrong
+# reading, but a startup failure for no reason. 21 mA is inside either figure
+# and still a milliamp above the top of a 4-20 mA loop.
+#
+# It sits above CURRENT_VALID_A's ceiling on purpose: a loop driven over range
+# must be able to READ over range, or it clips to the ceiling and passes the
+# validity check as though it were fine.
+CURRENT_RANGE_A = (0.0, 0.021)
 
 WIRING = {2: "TWO_WIRE", 3: "THREE_WIRE", 4: "FOUR_WIRE"}
 
@@ -222,15 +234,14 @@ class CdaqService(BaseService):
                     elif ch.kind == "voltage":
                         task.ai_channels.add_ai_voltage_chan(ch.phys)
                     elif ch.kind == "current":
-                        # Range given explicitly rather than left to DAQmx: the
-                        # 9207's current inputs are +/-22 mA and asking for the
-                        # loop's own span is what makes an over-range reading
-                        # visible instead of clipped. The shunt is internal to
-                        # the module; there is no external resistor to declare.
+                        # Range given explicitly rather than left to DAQmx.
+                        # See CURRENT_RANGE_A for why it is 21 mA and not the
+                        # module's full span. The shunt is internal to the
+                        # module; there is no external resistor to declare.
                         task.ai_channels.add_ai_current_chan(
                             ch.phys,
-                            min_val=0.0,
-                            max_val=0.022,
+                            min_val=CURRENT_RANGE_A[0],
+                            max_val=CURRENT_RANGE_A[1],
                             units=CurrentUnits.AMPS,
                             shunt_resistor_loc=CurrentShuntResistorLocation.INTERNAL,
                         )

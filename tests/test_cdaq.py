@@ -10,8 +10,8 @@ import pytest
 from doubles import RecordingBus
 
 from xams_sc.config import load
-from xams_sc.devices.cdaq import (CURRENT_VALID_A, EXCITATION_A, RTD_VALID_C,
-                                  CdaqService)
+from xams_sc.devices.cdaq import (CURRENT_RANGE_A, CURRENT_VALID_A, EXCITATION_A,
+                                  RTD_VALID_C, CdaqService)
 from xams_sc.model import Quality
 
 
@@ -166,6 +166,22 @@ class TestBrokenLoopDetection:
     def test_the_valid_span_brackets_the_loop(self):
         lo, hi = CURRENT_VALID_A
         assert lo < 0.004 and hi > 0.020
+
+    def test_the_task_can_read_over_the_top_of_the_loop(self):
+        """The requested range must exceed the validity ceiling.
+
+        If the two were equal, a transmitter driven over range would clip to
+        the ceiling and read as a valid 20.5 mA — the frozen-plausible-value
+        failure, arrived at from the other direction.
+        """
+        assert CURRENT_RANGE_A[1] > CURRENT_VALID_A[1] > 0.020
+
+    def test_the_requested_range_fits_the_module(self):
+        """Published 9207 specifications give ±21.5 mA in some revisions and
+        ±22 mA in others, and DAQmx refuses a max_val outside the module's
+        range. Staying under the smaller figure means the task configures
+        whichever is right."""
+        assert CURRENT_RANGE_A[1] <= 0.0215
 
     @pytest.mark.parametrize("milliamps", [0.0, 1.0, 3.0, 25.0, -5.0])
     def test_a_dead_or_over_range_loop_is_rejected(self, milliamps):
