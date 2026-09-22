@@ -136,7 +136,7 @@ channels:
     offset: 0.004
     multiplier: 1250.0
     unit: kg
-    description: strain gauge load cell 1 - WHAT IT WEIGHS IS UNCONFIRMED
+    description: mass bottle A
 
   - name: sg102
     device: cdaq
@@ -145,7 +145,7 @@ channels:
     offset: 0.004
     multiplier: 1250.0
     unit: kg
-    description: strain gauge load cell 2 - WHAT IT WEIGHS IS UNCONFIRMED
+    description: mass bottle B
 
   # Spare current inputs. Nothing connected; no task line is created for them.
   - {name: spare_9207_ai10, device: cdaq, phys: 9207/ai10, kind: current, unit: A,
