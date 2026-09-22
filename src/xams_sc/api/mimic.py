@@ -48,7 +48,8 @@ def check_mimic_tags(config) -> list[str]:
     # listing them as missing would be noise that trains people to ignore this.
     on_drawing = {c.name for c in config.enabled_channels()
                   if c.on_pid and (c.kind in ("rtd", "temperature")
-                                   or (c.kind == "voltage" and c.device == "cdaq"))}
+                                   or (c.kind in ("voltage", "current")
+                                       and c.device == "cdaq"))}
     for name in sorted(on_drawing - ids):
         problems.append(f"{name!r} is read but has no place on the drawing")
     return problems

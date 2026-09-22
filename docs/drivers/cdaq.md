@@ -21,6 +21,7 @@ most noticeable.
 | Alias | Module | Slot | Reads | Channels |
 |---|---|---|---|---|
 | `9207` | NI 9207 | 1 | ±10 V | `ai0:7` — 4 pressures, detector pressure, flow meter, 2 unconnected |
+| `9207` | NI 9207 | 1 | 4-20 mA | `ai8:9` — strain gauges `sg101`, `sg102`; `ai10:15` unconnected |
 | `9216_1` | NI 9216 | 2 | PT100 | `ai0:6` — water, xenon and heat-exchanger temperatures, ambient |
 | `9216_2` | NI 9216 | 3 | PT100 | **none — entirely unconnected** |
 | `9226` | NI 9226 | 4 | PT1000 | `ai0:6` — bucket and vessel temperatures |
@@ -33,12 +34,37 @@ nothing here. `phys` in [`channels.yaml`](../software/config.md) is
 A module with no enabled channels gets **no task at all**, which is how
 `9216_2` costs nothing beyond a row in `devices.yaml`.
 
-### The 9207's current inputs are not used
+### The 9207's current inputs — two of eight
 
 The module has eight voltage inputs (`ai0:7`) and eight current inputs
-(`ai8:15`). Only the voltage half is wired and only it is read (§7.1).
-Nothing is connected to the current inputs, so a task for them would read
-noise and publish it as a measurement.
+(`ai8:15`). The current half was wired to nothing until 22 September 2026,
+when two 4-20 mA strain gauge load cells were fitted to `ai8` and `ai9` as
+`sg101` and `sg102`. `ai10:15` are still connected to nothing and get no task
+line: an unwired current input reads a dead loop, and a task line for it would
+publish that as a measurement.
+
+Both kinds share the module's **single task**, added in physical order. The
+read returns one list, zipped against that order — so a mixed task must stay
+sorted by channel index or every value lands on the wrong name.
+
+**DAQmx returns amps.** `sg101`/`sg102` scale with offset `0.004` and
+multiplier `1250` (= 20 kg / 0.016 A), giving 0 kg at 4 mA and 20 kg at 20 mA.
+
+**Below 4 mA there is no measurement.** A 4-20 mA transmitter sends 4 mA at
+zero load, so anything under that is an open loop, an unpowered transmitter or
+a missing sensor — `CURRENT_VALID_A` (3.5-21 mA) catches it and the driver
+publishes `quality=error` rather than a negative weight. This is the same
+distinction as `RTD_VALID_C` below, on the other half of the module.
+
+**The loops need external 24 V.** The 9207 measures current; it does not
+source loop power. A channel sitting at a flat 0 mA with the sensor plugged in
+is the supply, not the sensor.
+
+**Both gauges are on the mimic.** The P&ID already carried `SG101` and `SG102`
+as tagged instruments with their own bubbles, so
+`tools/build_mimic.py` placed their value slots the
+moment the channels existed — nothing was drawn by hand. Re-run it after any
+change to the drawing.
 
 ---
 

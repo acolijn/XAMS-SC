@@ -10,7 +10,8 @@ import pytest
 from doubles import RecordingBus
 
 from xams_sc.config import load
-from xams_sc.devices.cdaq import EXCITATION_A, RTD_VALID_C, CdaqService
+from xams_sc.devices.cdaq import (CURRENT_VALID_A, EXCITATION_A, RTD_VALID_C,
+                                  CdaqService)
 from xams_sc.model import Quality
 
 
@@ -76,20 +77,23 @@ class TestTaskBuilding:
             assert idx == sorted(idx), f"{mod.alias} channels out of order"
 
     def test_channel_count_matches_what_is_actually_wired(self, service):
-        """19 live channels: 6 voltage + 13 RTD.
+        """21 live channels: 6 voltage + 2 current + 13 RTD.
 
         Milestone 2 read 20 (6 + 14). tt202 was then found to be a failed
         sensor — it reads open-circuit — and disabled on 17 September 2026,
-        so the 9226 now contributes 6 RTDs rather than 7.
+        so the 9226 now contributes 6 RTDs rather than 7. On 22 September 2026
+        the strain gauges sg101/sg102 were wired to the 9207's current half,
+        which had until then been read by nothing.
 
         This asserts an exact count on purpose. A channel silently appearing
         or disappearing is worth a failing test: it means either the wiring
         or channels.yaml changed, and both deserve a look.
         """
         total = sum(len(m.channels) for m in service._modules)
-        assert total == 19
+        assert total == 21
         kinds = [c.kind for m in service._modules for c in m.channels]
         assert kinds.count("voltage") == 6
+        assert kinds.count("current") == 2
         assert kinds.count("rtd") == 13
 
     def test_failed_sensor_is_not_read(self, config, service):
@@ -98,11 +102,26 @@ class TestTaskBuilding:
         phys = [c.phys for m in service._modules for c in m.channels]
         assert "9226/ai1" not in phys
 
-    def test_current_channels_are_not_read(self, service):
-        """9207/ai8:15 are unused and must not appear in any task (§7.1)."""
-        phys = [c.phys for m in service._modules for c in m.channels]
-        for n in range(8, 16):
-            assert f"9207/ai{n}" not in phys
+    def test_the_strain_gauges_are_read_and_the_spare_loops_are_not(self, service):
+        """ai8/ai9 carry sg101/sg102; ai10:15 are unwired (§7.1).
+
+        The older form of this test asserted that NOTHING on ai8:15 was read,
+        which was true until the gauges were fitted. The half that still
+        matters is the spare loops: an unwired current input reads a dead loop,
+        and a task line for it would publish that as a measurement.
+        """
+        by_phys = {c.phys: c.name for m in service._modules for c in m.channels}
+        assert by_phys.get("9207/ai8") == "sg101"
+        assert by_phys.get("9207/ai9") == "sg102"
+        for n in range(10, 16):
+            assert f"9207/ai{n}" not in by_phys
+
+    def test_the_9207_carries_both_kinds_in_one_task(self, service):
+        """Voltage and current channels share the module's single task, in
+        physical order — the read comes back as one list and is zipped against
+        that order, so a mixed task must stay sorted by index."""
+        mod = next(m for m in service._modules if m.alias == "9207")
+        assert [c.kind for c in mod.channels] == ["voltage"] * 6 + ["current"] * 2
 
 
 class TestOpenCircuitDetection:
@@ -135,6 +154,35 @@ class TestOpenCircuitDetection:
         assert RTD_VALID_C[0] < -90.0
 
 
+class TestBrokenLoopDetection:
+    """A 4-20 mA transmitter cannot read below 4 mA. Zero load is 4 mA.
+
+    Below the loop's floor there is no measurement at all — the loop is open,
+    or its 24 V supply is off — and scaling that gives a confident negative
+    weight. Same argument as the RTD range above, on the other half of the
+    9207.
+    """
+
+    def test_the_valid_span_brackets_the_loop(self):
+        lo, hi = CURRENT_VALID_A
+        assert lo < 0.004 and hi > 0.020
+
+    @pytest.mark.parametrize("milliamps", [0.0, 1.0, 3.0, 25.0, -5.0])
+    def test_a_dead_or_over_range_loop_is_rejected(self, milliamps):
+        lo, hi = CURRENT_VALID_A
+        assert not (lo <= milliamps * 1e-3 <= hi)
+
+    @pytest.mark.parametrize("milliamps", [4.0, 4.1, 12.0, 19.9, 20.0])
+    def test_real_loop_readings_are_accepted(self, milliamps):
+        lo, hi = CURRENT_VALID_A
+        assert lo <= milliamps * 1e-3 <= hi
+
+    def test_an_empty_scale_is_not_a_fault(self):
+        # Zero load sends exactly 4 mA. If the floor were ever raised to 4 mA
+        # or above, an empty load cell would report as a broken loop forever.
+        assert CURRENT_VALID_A[0] < 0.004
+
+
 class TestSimulation:
     def test_simulate_produces_every_enabled_channel(self, service):
         batch = service.read()
@@ -161,6 +209,21 @@ class TestScalingThroughTheDriver:
         """p101 is (raw - 1.0) * 25.0 — the LabVIEW convention (§4.2)."""
         ch = config.channels["p101"]
         assert ch.offset == 1.0 and ch.multiplier == 25.0
+
+    def test_strain_gauges_map_the_loop_onto_the_full_scale(self, config):
+        """4 mA is 0 kg and 20 mA is 20 kg, in AMPS — DAQmx returns amps.
+
+        This is the whole calibration, and it is one line of arithmetic, so it
+        is worth pinning: a multiplier entered for milliamps instead of amps
+        is out by a factor of a thousand and still looks like a number.
+        """
+        from xams_sc.scaling import apply
+        for name in ("sg101", "sg102"):
+            ch = config.channels[name]
+            assert ch.unit == "kg"
+            assert apply(0.004, ch.offset, ch.multiplier) == pytest.approx(0.0)
+            assert apply(0.020, ch.offset, ch.multiplier) == pytest.approx(20.0)
+            assert apply(0.012, ch.offset, ch.multiplier) == pytest.approx(10.0)
 
     def test_rtd_scaling_is_a_no_op(self, config):
         """DAQmx returns degrees C directly; do not hand-roll the conversion."""

@@ -650,7 +650,8 @@ Read-only. The chassis has no output module, so this service has no control path
 | Task | Module alias | Channels | DAQmx call |
 |---|---|---|---|
 | 1 | `9207` | `ai0:7` voltage | `add_ai_voltage_chan` |
-| 1b | `9207` | `ai8:15` current | **not used — task not created** (confirmed, 17 September 2026) |
+| 1b | `9207` | `ai8:9` current | `add_ai_current_chan` — strain gauges, added 22 September 2026 |
+| 1c | `9207` | `ai10:15` current | **not used — no task line created** |
 | 2 | `9216_1` | `ai0:6` | `add_ai_rtd_chan` |
 | 3 | `9216_2` | — | **entirely unconnected; task not created** |
 | 4 | `9226` | `ai0:6` | `add_ai_rtd_chan` |
@@ -668,9 +669,21 @@ Read-only. The chassis has no output module, so this service has no control path
 | `9207/ai6` | `v6` | 0 | 1 | generic name — likely unused |
 | `9207/ai7` | `fm101` | 0 | 6 | **flow meter** |
 
-**Current channels `ai8:15` are not used** — confirmed in the lab, 17 September 2026. Their LabVIEW names `i0`–`i7` with offset 0 and multiplier 1 throughout were the hint; this is now settled. No current task is created. List them in `channels.yaml` with `enabled: false`, as with the unconnected RTD inputs, so the channel map stays complete.
+**NI 9207 current channels.** The current half was unused until 22 September 2026, when two 4-20 mA strain gauge load cells were wired to `ai8` and `ai9`. Their LabVIEW names `i0`–`i7` with offset 0 and multiplier 1 throughout were what settled that the half was idle; it is idle no longer.
 
-That leaves the 9207 carrying **6 connected voltage channels of 16**, and the chassis as a whole 14 RTDs and 6 voltages.
+| Channel | Tag | Offset | Multiplier | Role |
+|---|---|---|---|---|
+| `9207/ai8` | `sg101` | 0.004 | 1250 | **strain gauge, 0-20 kg** |
+| `9207/ai9` | `sg102` | 0.004 | 1250 | **strain gauge, 0-20 kg** |
+| `9207/ai10:15` | — | — | — | not connected; `enabled: false` |
+
+**DAQmx returns amps, not milliamps**, so the offset is `0.004` and the multiplier is `20 kg / 0.016 A = 1250 kg/A`. A multiplier written for milliamps is out by a factor of a thousand and still looks like a plausible number, which is why `tests/test_cdaq.py` pins both endpoints.
+
+**A reading below 4 mA is not a light load.** A 4-20 mA transmitter sends 4 mA at zero, so anything under it means an open loop, an unpowered transmitter, or no sensor. The driver publishes `quality=error` for it rather than a negative weight — the same distinction as `RTD_VALID_C` (`CURRENT_VALID_A`, 3.5-21 mA, deliberately a little wider than the loop so an endpoint reading is not called a fault). **The loops need external 24 V**: the 9207 measures current but does not source loop power, so a channel pinned at 0 mA with the sensor connected is the supply, not the sensor.
+
+The unconnected inputs `ai10:15` are listed in `channels.yaml` with `enabled: false`, as with the unconnected RTD inputs, so the channel map stays complete. No task line is created for them.
+
+That leaves the 9207 carrying **8 connected channels of 16** — 6 voltage and 2 current — and the chassis as a whole 13 RTDs, 6 voltages and 2 currents.
 
 **RTD channel map** (from the lab, September 2026):
 
@@ -1940,7 +1953,8 @@ Everything marked **TBD** above, consolidated:
 | ~~Lake Shore baud rate~~ | — | **Resolved 17 September 2026: 57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is the factory setting and is not a typo — at 8-N-1 the port opens and the instrument returns nothing intelligible, which looks like a dead instrument rather than a wrong setting. |
 | ~~Lake Shore sensor units~~ | — | **Celsius, not Kelvin.** An earlier draft of `channels.yaml` said K; the imported history then showed these channels ranging to −90, and there is no negative Kelvin. Confirmed against the instrument: `CRDG? A` = −89.998 and `KRDG? A` = +183.15 describe the same temperature. The driver reads `CRDG?`. |
 | ~~UPS model and connection~~ | — | **Resolved 17 September 2026.** APC, serial 3S2005X18782, read from its USB HID **alongside PowerChute** (§7.4). WMI reports no battery at all, and `GetSystemPowerStatus` describes the wall socket rather than the UPS — both were tried and rejected. |
-| ~~Are `9207/ai8:15` current channels used?~~ | — | **Resolved 17 September 2026: not used.** No current task is created (§7.1). |
+| ~~Are `9207/ai8:15` current channels used?~~ | — | **Resolved 17 September 2026: not used.** Superseded 22 September 2026: `ai8`/`ai9` now carry the strain gauges `sg101`/`sg102` (§7.1); `ai10:15` remain unused. |
+| What do `sg101` and `sg102` actually weigh? | A.P. Colijn | Specified to the software only as "2x 4-20 mA strain gauge, 0-20 kg". The channel descriptions say so rather than guess, and the names are permanent (§3) — the description is not. No alarm thresholds either, so only staleness applies to them. They ARE on the P&ID: both tags were already drawn, with bubbles (§8.2). |
 | ~~Engineering unit for `pmain`~~ | — | **Resolved 17 September 2026: bar.** Established from the alarm limits supplied by A.P. Colijn, not guessed. |
 | ~~Engineering units for `p101`–`p104`~~ | — | **Resolved 17 September 2026: bar**, supplied by A.P. Colijn along with their locations (gas rack high/low pressure side, pump inlet, pump outlet). No channel now carries `unit: TBD`. |
 | Purpose of `anode_timing.vi` | milestone 8 | read the block diagram |

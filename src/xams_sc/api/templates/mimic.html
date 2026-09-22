@@ -496,7 +496,7 @@ function closePanel() {
 // go with channels.yaml and the SVG is rebuilt independently of this script.
 document.querySelector(".mimic-body").addEventListener("click", (e) => {
   const id = e.target && e.target.id;
-  if (!id || !id.startsWith("v-")) return;   // valves, pipes and SG101 do nothing
+  if (!id || !id.startsWith("v-")) return;   // valves and pipes do nothing
   openPanel(id.slice(2));
 });
 for (const b of document.querySelectorAll(".gm-range")) {

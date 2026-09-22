@@ -10,7 +10,7 @@ The CompactDAQ timing-engine constraint then does not apply.
 
 Tasks actually created:
 
-    9207     ai0:7 voltage   (ai8:15 current are NOT used — §7.1)
+    9207     ai0:7 voltage   and ai8:9 current (4-20 mA strain gauges)
     9226     ai0:6 PT1000    (ai7 not connected)
     9216_1   ai0:6 PT100     (ai7 not connected)
     9216_2   none — module entirely unconnected, no task created
@@ -62,6 +62,23 @@ RTD_TYPES = {"PT3851": "PT_3851", "PT3750": "PT_3750"}
 # to forbid — and it is how an unconnected input looks on this hardware, which
 # is exactly how tt202 was found on 17 September 2026.
 RTD_VALID_C = (-200.0, 850.0)
+
+# Valid span of a 4-20 mA loop, in AMPS — DAQmx returns amps, not milliamps.
+#
+# The same argument as RTD_VALID_C, on the other half of the module. A 4-20 mA
+# transmitter cannot read below 4 mA: at zero load it still sends 4. Below
+# about 3.5 mA the loop is broken, the transmitter is unpowered, or nothing is
+# connected — and scaling that to kilograms produces a confident negative
+# weight, which is the frozen-plausible-value failure principle 4 forbids.
+#
+# The bounds are deliberately a little wider than 4-20 so that a transmitter
+# sitting exactly at its endpoint, or a shunt a percent out, is not reported as
+# a fault. They detect the ABSENCE of a measurement, not an out-of-range load:
+# over-range is a threshold question and belongs in alarms.yaml.
+#
+# THE LOOPS NEED EXTERNAL 24 V — the 9207 measures current but does not source
+# loop power. A channel pinned at 0 mA with the sensor plugged in is the supply.
+CURRENT_VALID_A = (0.0035, 0.0210)
 
 WIRING = {2: "TWO_WIRE", 3: "THREE_WIRE", 4: "FOUR_WIRE"}
 
@@ -177,7 +194,8 @@ class CdaqService(BaseService):
     def _open_tasks(self) -> bool:
         """Create one on-demand task per module. Returns False on a clean failure."""
         import nidaqmx
-        from nidaqmx.constants import (ExcitationSource, ResistanceConfiguration,
+        from nidaqmx.constants import (CurrentShuntResistorLocation, CurrentUnits,
+                                       ExcitationSource, ResistanceConfiguration,
                                        RTDType, TemperatureUnits)
 
         for mod in self._modules:
@@ -203,6 +221,19 @@ class CdaqService(BaseService):
                         )
                     elif ch.kind == "voltage":
                         task.ai_channels.add_ai_voltage_chan(ch.phys)
+                    elif ch.kind == "current":
+                        # Range given explicitly rather than left to DAQmx: the
+                        # 9207's current inputs are +/-22 mA and asking for the
+                        # loop's own span is what makes an over-range reading
+                        # visible instead of clipped. The shunt is internal to
+                        # the module; there is no external resistor to declare.
+                        task.ai_channels.add_ai_current_chan(
+                            ch.phys,
+                            min_val=0.0,
+                            max_val=0.022,
+                            units=CurrentUnits.AMPS,
+                            shunt_resistor_loc=CurrentShuntResistorLocation.INTERNAL,
+                        )
                     else:
                         log.critical("FATAL: channel %s has kind %r, which this "
                                      "service cannot read", ch.name, ch.kind)
@@ -274,6 +305,20 @@ class CdaqService(BaseService):
                         self._reported_open.add(ch.name)
                 elif ch.kind == "rtd":
                     self._reported_open.discard(ch.name)
+                elif ch.kind == "current" and not (
+                        CURRENT_VALID_A[0] <= raw <= CURRENT_VALID_A[1]):
+                    # A dead 4-20 mA loop, not a light load. See CURRENT_VALID_A.
+                    quality = Quality.ERROR
+                    if ch.name not in self._reported_open:
+                        log.error(
+                            "%s (%s) reads %.2f mA, outside the 4-20 mA loop range "
+                            "%.1f..%.1f mA — broken loop, unpowered transmitter, or "
+                            "no sensor. Publishing quality=error, not a weight.",
+                            ch.name, ch.phys, raw * 1e3,
+                            CURRENT_VALID_A[0] * 1e3, CURRENT_VALID_A[1] * 1e3)
+                        self._reported_open.add(ch.name)
+                elif ch.kind == "current":
+                    self._reported_open.discard(ch.name)
 
                 out.append(Measurement(
                     t=now, channel=ch.name,
@@ -293,8 +338,14 @@ class CdaqService(BaseService):
         out = []
         for mod in self._modules:
             for ch in mod.channels:
-                raw = (random.gauss(-60.0, 0.5) if ch.kind == "rtd"
-                       else random.gauss(1.5, 0.01))
+                if ch.kind == "rtd":
+                    raw = random.gauss(-60.0, 0.5)
+                elif ch.kind == "current":
+                    # Mid-loop, about 10 kg — inside CURRENT_VALID_A, so the
+                    # simulated channels are quality=ok like the rest.
+                    raw = random.gauss(0.012, 0.0002)
+                else:
+                    raw = random.gauss(1.5, 0.01)
                 out.append(Measurement(
                     t=now, channel=ch.name,
                     value=apply(raw, ch.offset, ch.multiplier),

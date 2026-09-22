@@ -181,6 +181,11 @@ def tighten_viewbox(path: Path) -> tuple[float, float, float, float] | None:
     doc = pymupdf.open(str(path))
     page = doc[0]
     pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+    # Taken while the document is still open. Reading page.rect after
+    # doc.close() worked on older pymupdf and asserts on newer ones, which is
+    # a crash AFTER the SVG has been written — so the file is left with an
+    # untightened viewBox and the build looks like it only half failed.
+    page_w, page_h = page.rect.width, page.rect.height
     w, h, n, stride = pix.width, pix.height, pix.n, pix.stride
     data, bg = pix.samples, pix.samples[0:pix.n]
 
@@ -195,11 +200,11 @@ def tighten_viewbox(path: Path) -> tuple[float, float, float, float] | None:
     if maxx < 0:
         return None                      # nothing drawn; leave it alone
 
-    sx, sy = page.rect.width / w, page.rect.height / h
+    sx, sy = page_w / w, page_h / h
     x0 = max(0.0, minx * sx - INK_MARGIN_X)
     y0 = max(0.0, miny * sy - INK_MARGIN_Y)
-    x1 = min(page.rect.width, maxx * sx + INK_MARGIN_X)
-    y1 = min(page.rect.height, maxy * sy + INK_MARGIN_Y)
+    x1 = min(page_w, maxx * sx + INK_MARGIN_X)
+    y1 = min(page_h, maxy * sy + INK_MARGIN_Y)
     return (x0, y0, x1 - x0, y1 - y0)
 
 

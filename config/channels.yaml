@@ -13,8 +13,8 @@ channels:
 
   # ------------------------------------------------------------------
   # NI 9207 — voltage inputs ai0:7. Offsets/multipliers recovered from the
-  # LabVIEW front panel. Current inputs ai8:15 are NOT USED (§7.1) and are
-  # not listed: no task is created for them.
+  # LabVIEW front panel. Current inputs ai8:15 carry the strain gauges on
+  # ai8/ai9; ai10:15 are listed disabled so the map stays complete (§7.1).
   # ------------------------------------------------------------------
   - name: p101
     device: cdaq
@@ -96,6 +96,70 @@ channels:
     legacy: FM101
     description: flow meter — mass flow in grams per minute
     log_minmax: true
+
+  # ------------------------------------------------------------------
+  # NI 9207 current inputs ai8:15 — 4-20 mA loops.
+  #
+  # ai8/ai9 carry two strain gauge load cells, SG101 and SG102, added
+  # 22 September 2026. Until then no current input was wired and no current
+  # channel was read at all; DESIGN.md section 7.1 said so, and now does not.
+  #
+  # SCALING. DAQmx returns AMPS, so the raw number is 0.004 to 0.020, not 4
+  # to 20. The transmitter is 4-20 mA over a full scale of 0-20 kg, so with
+  # the standard  value = (raw - offset) * multiplier  convention (section 4.2):
+  #
+  #     offset     = 0.004          A at zero load
+  #     multiplier = 20 kg / 0.016 A = 1250 kg/A
+  #
+  # A reading below 4 mA is not a light load: it is a broken loop, and the
+  # driver publishes quality=error for it rather than a negative weight
+  # (CURRENT_VALID_A in devices/cdaq.py).
+  #
+  # THE LOOPS NEED EXTERNAL 24 V. The 9207 measures current but does not
+  # source loop power. A channel reading a flat 0 mA with the sensor
+  # connected is the supply, not the sensor.
+  #
+  # ON THE MIMIC. The P&ID already carries SG101 and SG102 as tagged
+  # instruments, each with its own bubble, so they take a value slot like any
+  # other point in the plant (section 8.2) - on_pid stays at its default of
+  # true. The slots appeared as soon as these channels existed: the drawing is
+  # the authoritative list of tags and tools/build_mimic.py sweeps it.
+  #
+  # `description` is what the gauges are: REVIEW IT. They were specified to
+  # this software only as "2x 4-20 mA strain gauge, 0-20 kg" and what each
+  # one is actually under was not stated (section 16).
+  # ------------------------------------------------------------------
+  - name: sg101
+    device: cdaq
+    phys: 9207/ai8
+    kind: current
+    offset: 0.004
+    multiplier: 1250.0
+    unit: kg
+    description: strain gauge load cell 1 - WHAT IT WEIGHS IS UNCONFIRMED
+
+  - name: sg102
+    device: cdaq
+    phys: 9207/ai9
+    kind: current
+    offset: 0.004
+    multiplier: 1250.0
+    unit: kg
+    description: strain gauge load cell 2 - WHAT IT WEIGHS IS UNCONFIRMED
+
+  # Spare current inputs. Nothing connected; no task line is created for them.
+  - {name: spare_9207_ai10, device: cdaq, phys: 9207/ai10, kind: current, unit: A,
+     enabled: false, description: "not connected"}
+  - {name: spare_9207_ai11, device: cdaq, phys: 9207/ai11, kind: current, unit: A,
+     enabled: false, description: "not connected"}
+  - {name: spare_9207_ai12, device: cdaq, phys: 9207/ai12, kind: current, unit: A,
+     enabled: false, description: "not connected"}
+  - {name: spare_9207_ai13, device: cdaq, phys: 9207/ai13, kind: current, unit: A,
+     enabled: false, description: "not connected"}
+  - {name: spare_9207_ai14, device: cdaq, phys: 9207/ai14, kind: current, unit: A,
+     enabled: false, description: "not connected"}
+  - {name: spare_9207_ai15, device: cdaq, phys: 9207/ai15, kind: current, unit: A,
+     enabled: false, description: "not connected"}
 
   # ------------------------------------------------------------------
   # NI 9226 — PT1000, three-wire. tt201..tt207 on ai0:6; ai7 not connected.

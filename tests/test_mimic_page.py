@@ -66,6 +66,49 @@ class TestTheDrawingIsNotRepeated:
         assert repeated == [], f"already on the drawing: {repeated}"
 
 
+class TestTheStrainGaugesAreOnTheDrawing:
+    """SG101 and SG102 are tagged instruments on the P&ID, so they get a value
+    slot like any other point in the plant.
+
+    They were briefly given `on_pid: false` on the assumption that a load cell
+    is not a piping point. It is one here: the drawing carries both tags, each
+    with its own bubble, and the generator found them the moment the channels
+    existed. The drift check must therefore keep asking for them — that is the
+    half of §8.2 that catches a reading quietly vanishing from the mimic.
+    """
+
+    @pytest.fixture
+    def svg(self):
+        return pathlib.Path(
+            "src/xams_sc/api/static/xams_pid.svg").read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("name", ["sg101", "sg102"])
+    def test_the_drawing_has_a_slot_for_it(self, svg, name):
+        assert f'id="v-{name}"' in svg
+
+    @pytest.mark.parametrize("name", ["sg101", "sg102"])
+    def test_it_is_not_excused_from_the_drawing(self, config, name):
+        assert config.channels[name].on_pid is True
+
+    def test_the_drift_check_covers_current_channels(self, config):
+        """The check listed rtd, temperature and cdaq VOLTAGE channels. A cdaq
+        current channel is as much a point in the plant as the voltage one
+        beside it, and without this it could drop off the mimic in silence."""
+        from xams_sc.api.mimic import check_mimic_tags
+
+        assert check_mimic_tags(config) == []
+
+        stripped = config.channels["sg101"].__class__(
+            **{**config.channels["sg101"].__dict__, "name": "sg999"})
+        config.channels["sg999"] = stripped
+        try:
+            problems = check_mimic_tags(config)
+            assert any("sg999" in p for p in problems), (
+                "a cdaq current channel with no slot must be reported")
+        finally:
+            del config.channels["sg999"]
+
+
 class TestLiveness:
     def test_the_page_can_say_it_has_stopped_updating(self, page):
         assert "markStale" in page
