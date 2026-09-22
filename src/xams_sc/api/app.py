@@ -54,8 +54,8 @@ from ..config import (ConfigError, load, read_hv_defaults,
                       read_recipients, recipient_warnings, recipients_path,
                       validate_recipients, write_hv_defaults,
                       write_recipients)
-from ..hv_status import (describe_status, is_disabled, is_energised,
-                         status_faults)
+from ..hv_status import (ARMED_ABOVE_V, describe_status, is_disabled,
+                         is_energised, status_faults)
 from ..grafana import DriftWatcher, base_url as grafana_base_url
 from .logview import (ROTATIONS, colourise, log_files, newest_first,
                       rotated)
@@ -809,7 +809,8 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
                 armed = None
                 if (vset_view is not None and vset_view.healthy
                         and vset_view.value is not None and word is not None):
-                    armed = is_disabled(word) and abs(vset_view.value) > 1.0
+                    armed = (is_disabled(word)
+                             and abs(vset_view.value) > ARMED_ABOVE_V)
 
                 # FOUR STATES, and the distinction between the middle two
                 # is the whole of section 10a:

@@ -31,6 +31,16 @@ STAT_BITS = {
 BIT_ON = 0
 BIT_DISABLED = 10
 
+# How far a setpoint must sit from zero before a DISABLED channel counts as
+# ARMED - far enough that flipping the enable by hand would put real volts on
+# an electrode, and comfortably above the board's own rounding on a value that
+# was written as zero.
+#
+# Shared by the page that warns about it and the driver that zeroes it, so the
+# two cannot drift apart. A page calling a channel armed that the driver will
+# not act on - or the reverse - is worse than either behaviour alone.
+ARMED_ABOVE_V = 1.0
+
 # Bits meaning something is WRONG, as against describing what the channel is
 # doing. ON, RAMP_UP, RAMP_DOWN and DISABLED are ordinary states and must not
 # be dressed up as faults, or the display cries wolf at a supply behaving

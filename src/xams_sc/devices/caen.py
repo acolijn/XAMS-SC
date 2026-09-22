@@ -26,6 +26,13 @@ a non-zero setpoint on a channel that is not enabled (§10a), **read back from
 the board before it is called successful**, acknowledged on the bus and
 recorded in the audit trail.
 
+The same invariant is also ENFORCED, once per read cycle: a channel whose
+enable switch is off and whose `VSET` is not zero has it written to zero. That
+state is not reachable through this driver - it arrives when somebody flips a
+switch on a channel that was de-energised with its setpoint still loaded - and
+until it is cleared, the next flip of that switch is an unannounced ramp. See
+`_enforce_disabled_zero`.
+
 Both units answer at **board address 0**: they are two independent USB
 connections, not a daisy chain. They are told apart by which port their
 `BDSNUM` came back on, never by address and never by COM number (§6.2).
@@ -72,13 +79,25 @@ __all__ = [
 # and the web UI needs them, and this module imports `serial`. Re-exported
 # here because this is where anyone would look for them.
 from ..hv_status import (  # noqa: F401
-    BIT_DISABLED, BIT_ON, FAULT_BITS, STAT_BITS, describe_status, is_disabled,
-    is_energised, status_faults)
+    ARMED_ABOVE_V, BIT_DISABLED, BIT_ON, FAULT_BITS, STAT_BITS,
+    describe_status, is_disabled, is_energised, status_faults)
 
 # A setpoint that reads back further than this from what was asked means the
 # write did not take. 0.5 V is far below anything that matters on a kilovolt
 # electrode and well above the board's own rounding.
 VSET_TOLERANCE_V = 0.5
+
+# How long to leave a disabled channel alone after a failed attempt to zero
+# its setpoint. The attempt fails for reasons a person has to fix - a board in
+# LOCAL mode refuses every remote write until somebody walks to the front
+# panel - and retrying three serial exchanges a second against a supply that
+# is going to say no crowds out the readings that still work.
+ZERO_RETRY_S = 30.0
+
+# The actor recorded for a setpoint zeroed by the rule below. Not a person,
+# and deliberately not shaped like one: this is the one VSET write in the
+# system with nobody behind it, and the audit trail has to say so.
+AUTOMATIC = "automatic (section 10a)"
 
 
 def _decode(response: str) -> str | None:
@@ -381,6 +400,9 @@ class CaenService(BaseService):
         # lose its USB while the other keeps answering perfectly.
         self._link_down: dict[str, int] = {}
         self._next_relink = 0.0
+        # When a channel whose setpoint could not be zeroed may be tried
+        # again, by hv_vset channel name. See `_enforce_disabled_zero`.
+        self._zero_retry_at: dict[str, float] = {}
 
     def owned_channels(self):
         """Both supplies' channels, by device id rather than service name.
@@ -494,6 +516,13 @@ class CaenService(BaseService):
         # False, and its channels report error rather than going quietly
         # stale.
         alive = {c.device: False for c in self._channels}
+        # What the switch and the setpoint read this cycle, by (device, phys),
+        # so the invariant below can pair them up. Collected here rather than
+        # read again afterwards: the pair has to come from one sweep, or the
+        # rule acts on a switch position and a setpoint that were never true
+        # at the same moment.
+        words: dict[tuple[str, int], int] = {}
+        setpoints: dict[tuple[str, int], tuple] = {}
 
         for ch in self._channels:
             reader = self._readers.get(ch.device)
@@ -513,6 +542,7 @@ class CaenService(BaseService):
                                            unit=ch.unit, quality=Quality.ERROR))
                     continue
                 alive[ch.device] = True
+                words[(ch.device, index)] = word
                 out.append(Measurement(t=now, channel=ch.name,
                                        value=float(word), unit=ch.unit,
                                        raw=float(word), quality=Quality.OK))
@@ -540,6 +570,11 @@ class CaenService(BaseService):
                      if ch.kind in ("hv_vmon", "hv_vset") else magnitude)
             out.append(Measurement(t=now, channel=ch.name, value=value,
                                    unit=ch.unit, raw=magnitude, quality=Quality.OK))
+            if ch.kind == "hv_vset":
+                # The position, so a setpoint this cycle zeroes can be
+                # replaced with what the board now holds rather than published
+                # as the value it held a moment ago.
+                setpoints[(ch.device, index)] = (ch, value, len(out) - 1)
 
         if out and not any(alive.values()):
             # Nothing anywhere answered: the link is gone, not the readings.
@@ -565,6 +600,8 @@ class CaenService(BaseService):
 
         if any(n >= 2 for n in self._link_down.values()):
             self._relink()
+
+        self._enforce_disabled_zero(now, out, words, setpoints)
         return out
 
     def _read_simulated(self) -> list[Measurement]:
@@ -840,6 +877,135 @@ class CaenService(BaseService):
         self.bus.publish_measurement(
             Measurement(t=utcnow(), channel=channel.name, value=value,
                         unit=channel.unit, raw=magnitude, quality=Quality.OK))
+
+    # ------------------------------------------- the invariant, enforced
+    #
+    # Section 10a states that a channel which is not enabled has VSET 0. The
+    # write path refuses to BREAK it (see `_handle_vset`), which is not the
+    # same as keeping it: the enable switch is a hand operation nothing here
+    # can see coming, so the state arrives from outside the software.
+    #
+    # It arrives by the ordinary route. A channel is energised at its working
+    # voltage, de-energised - which ramps down but leaves VSET where it was -
+    # and then disabled at the front panel hours later by somebody who has
+    # every reason to think the channel is off, because it is. The board now
+    # holds a disabled channel with 2250 V in its setpoint, and the next
+    # flip of that switch is an unannounced ramp.
+    #
+    # Refusal alone also left no way out: with the switch off the web UI
+    # disables the setpoint box, so the one value that WOULD be accepted -
+    # zero - could not be sent from the page that was warning about it.
+    #
+    # So the rule is enforced on every poll rather than only at the moment of
+    # a command. It keys on bit 10, THE SWITCH, and nothing else.
+
+    def _enforce_disabled_zero(self, now, out: list[Measurement],
+                               words: dict, setpoints: dict) -> None:
+        """Zero the setpoint of every channel whose enable switch is off.
+
+        Runs once per read cycle over what that cycle already read, so a
+        channel in the ordinary state - disabled and at zero, or enabled -
+        costs nothing at all: no extra serial traffic, no extra commands.
+
+        **On bit 10 and never bit 0.** A channel that is switched on but not
+        energised is exactly where an operator stands between flipping the
+        enable and pressing turn-on, and it is when they load a setpoint.
+        Zeroing there would erase what they typed a second after they typed
+        it, every second, and the fifth bug of that shape would be this one.
+        """
+        for key, (channel, value, position) in setpoints.items():
+            word = words.get(key)
+            if word is None or not is_disabled(word):
+                continue
+            if abs(value) <= ARMED_ABOVE_V:
+                continue
+            if time.monotonic() < self._zero_retry_at.get(channel.name, 0.0):
+                continue
+            fresh = self._zero_setpoint(channel, value)
+            if fresh is None:
+                self._zero_retry_at[channel.name] = (time.monotonic()
+                                                     + ZERO_RETRY_S)
+                continue
+            self._zero_retry_at.pop(channel.name, None)
+            # What the board holds NOW, in place of what it held before the
+            # write. Without this the old value goes into the ten-second
+            # window after the fact and is published as an average of a
+            # setpoint that no longer exists and the one that replaced it.
+            after, magnitude = fresh
+            out[position] = Measurement(
+                t=now, channel=channel.name, value=after, unit=channel.unit,
+                raw=magnitude, quality=Quality.OK)
+
+    def _zero_setpoint(self, channel, before: float):
+        """Write VSET 0 to a disabled channel. (volts, magnitude), or None.
+
+        Audited like any other write, with `AUTOMATIC` as the actor: this is
+        the only setpoint in the system with nobody behind it, and an entry in
+        the trail that cannot be accounted for afterwards is worse than the
+        state it was fixing.
+
+        **It publishes no acknowledgement**, unlike every other path here. The
+        ack topics are matched by channel name (`state.command`), so an ack
+        from a write nobody asked for can be handed to an operator's command
+        as the answer to the question they actually asked.
+        The audit record and the log carry it instead.
+        """
+        reader = self._readers.get(channel.device)
+        if reader is None:
+            return None
+        index = int(channel.phys)
+
+        with reader.transaction():
+            # Read the switch again INSIDE the transaction. Up to a second has
+            # passed since the poll read it, and the thing being guarded
+            # against is somebody at the front panel: if they have flipped it
+            # back on in that second the channel may legitimately hold a
+            # setpoint, and zeroing it would be this rule causing the surprise
+            # it exists to prevent.
+            word = reader.status(index)
+            if word is None or not is_disabled(word):
+                return None
+            sent, why = reader.set_voltage(index, 0.0)
+            after_mag = reader.monitor(index, "VSET") if sent else None
+
+        if not sent:
+            log.warning(
+                "%s: disabled with VSET %+.1f V, and it could not be zeroed: "
+                "%s. Until it is, flipping this channel's enable switch ramps "
+                "straight to that voltage (section 10a). Retrying in %.0f s.",
+                channel.name, before, why, ZERO_RETRY_S)
+            self._audit(channel.name, before, 0.0, "rejected", why, AUTOMATIC)
+            return None
+
+        if after_mag is None or abs(after_mag) > VSET_TOLERANCE_V:
+            detail = ("read back %s after writing 0"
+                      % ("nothing" if after_mag is None
+                         else "%+.1f V" % apply_sign(after_mag, channel.sign)))
+            log.warning(
+                "%s: disabled with VSET %+.1f V, and the zeroing did not "
+                "take - %s. Flipping this channel's enable switch ramps "
+                "straight to that voltage (section 10a). Retrying in %.0f s.",
+                channel.name, before, detail, ZERO_RETRY_S)
+            self._audit(channel.name, before, 0.0, "rejected", detail,
+                        AUTOMATIC)
+            return None
+
+        after = apply_sign(after_mag, channel.sign)
+        # WARNING, not INFO. Nobody asked for this write, and the setpoint an
+        # operator left behind is gone - they will come back to a channel that
+        # no longer remembers where it was running. `load defaults` on /hv
+        # offers it again from channels.yaml or hv_defaults.yaml, which is
+        # where the operating point is meant to be recorded anyway.
+        log.warning(
+            "%s: the enable switch is off and VSET was %+.1f V, so it has "
+            "been zeroed (section 10a). The enable is now safe to flip; "
+            "`load defaults` on /hv offers the working voltage again.",
+            channel.name, before)
+        self._publish_vset_now(channel, after, after_mag)
+        self._audit(channel.name, before, after, "ok",
+                    "the channel is disabled at the supply, so its setpoint "
+                    "must be zero (section 10a)", AUTOMATIC)
+        return (after, after_mag)
 
     def _handle_output(self, topic: str, payload: str) -> None:
         """Energise or de-energise a channel - the "turn ON HV" of section 10a.
