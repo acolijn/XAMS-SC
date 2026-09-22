@@ -1465,6 +1465,41 @@ The enable switch stays a hand operation and the software never gets a command
 to change it. That is not an omission — a hardware gate that software cannot
 reach is the last thing standing between a bug and an electrode.
 
+**Refusing to break it is not the same as keeping it.** Added 22 September
+2026, after the invariant was found broken by an entirely ordinary sequence:
+
+1. a channel is energised at its working voltage;
+2. it is switched off from `/hv` — it ramps down, and `VSET` stays where it
+   was, because nothing asked for it to change;
+3. hours later somebody disables that channel at the front panel. They have
+   every reason to think it is off, because it is.
+
+The board now holds a disabled channel with kilovolts in its setpoint, and the
+next flip of that switch is the unannounced ramp this whole section exists to
+prevent. The write path could not have stopped it: the state was created at the
+front panel, which the software cannot see coming. Worse, the page that warned
+about it also disabled the setpoint box for a switched-off channel, so the one
+value that *would* have been accepted — zero — could not be sent from the page
+complaining about it.
+
+So the invariant is **enforced on every read cycle**, not only at the moment of
+a command: a channel whose enable is off and whose `VSET` is not zero has it
+written to zero, audited with no person as the actor, and logged. It keys on
+bit 10, the switch, and never on bit 0, the output — a channel that is switched
+on but not energised is where an operator stands between flipping the enable
+and pressing turn-on, and is exactly when they load a setpoint.
+
+The stored setpoint is lost when this fires. That is the right trade: the
+operating point belongs in `channels.yaml` or `hv_defaults.yaml` (§4.6), where
+*load defaults* offers it again, and not in a board that nobody can read from
+the lab. A channel disabled at the front panel is one whose setpoint nobody
+should be relying on the hardware to remember.
+
+Enforcement can fail — a board in `LOCAL` refuses every remote write until
+somebody walks to the front panel. It is then retried on a backoff rather than
+every second, and the warning on `/hv` remains the last line: if it is showing,
+the enable switch is genuinely not safe to touch.
+
 ### States
 
 Per channel, derived from `STAT` and the monitors (§7.2):

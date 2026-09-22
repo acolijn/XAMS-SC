@@ -485,3 +485,207 @@ class TestASetpointSaysSoAtOnce:
         service._readers["hv_2"].obey = False
         assert send(service, value=-1000.0)["ok"] is False
         assert service.bus.measured("hv_cathode_vset") is None
+
+
+# --------------------------------------------------------------------------
+# The invariant is not only REFUSED against, it is ENFORCED. See
+# `CaenService._enforce_disabled_zero`.
+#
+# The state these tests are about cannot be created through the driver. It
+# arrives from the front panel: a channel is energised at its working voltage,
+# de-energised - which ramps down and leaves VSET alone - and then disabled by
+# hand, by somebody with every reason to believe it is off, because it is. The
+# board is now holding a disabled channel with kilovolts in its setpoint, and
+# the next flip of that switch ramps straight to them.
+
+
+def audits(service):
+    return [json.loads(p) for t, p in service.bus.published if t == TOPIC_AUDIT]
+
+
+class TestTheInvariantIsEnforcedOnEveryRead:
+
+    def test_a_disabled_channel_with_a_setpoint_is_zeroed(self, service):
+        """The case that prompted all of this: off, disabled, VSET -2250."""
+        service._readers["hv_2"].stat = DISABLED
+        service._readers["hv_2"].vset = 2250.0
+
+        service.read()
+
+        assert service._readers["hv_2"].vset == 0.0
+        assert set(service._readers["hv_2"].written) == {0.0}
+
+    def test_a_channel_whose_SWITCH_IS_ON_keeps_its_setpoint(self, service):
+        """Bit 10, never bit 0. Switch on and not energised is where an
+        operator stands between flipping the enable and pressing turn-on, and
+        it is exactly when they load a setpoint. Zeroing here would erase what
+        they typed a second after they typed it, once a second, forever."""
+        service._readers["hv_1"].stat = 0          # switch on, not energised
+        service._readers["hv_1"].vset = 700.0
+
+        service.read()
+
+        assert service._readers["hv_1"].written == []
+        assert service._readers["hv_1"].vset == 700.0
+
+    def test_an_energised_channel_is_left_alone(self, service):
+        service._readers["hv_1"].stat = ENABLED
+        service._readers["hv_1"].vset = 700.0
+
+        service.read()
+
+        assert service._readers["hv_1"].written == []
+
+    def test_a_disabled_channel_already_at_zero_is_not_written_to(self, service):
+        """The ordinary resting state of seven channels out of eight. It must
+        cost nothing: no write, and no serial traffic beyond the poll."""
+        service._readers["hv_2"].stat = DISABLED
+        service._readers["hv_2"].vset = 0.0
+
+        service.read()
+
+        assert service._readers["hv_2"].written == []
+
+    def test_one_supply_being_disabled_does_not_touch_the_other(self, service):
+        service._readers["hv_1"].stat = ENABLED
+        service._readers["hv_1"].vset = 700.0
+        service._readers["hv_2"].stat = DISABLED
+        service._readers["hv_2"].vset = 2250.0
+
+        service.read()
+
+        assert service._readers["hv_1"].written == []
+        assert set(service._readers["hv_2"].written) == {0.0}
+
+    def test_an_unreadable_status_word_changes_nothing(self, service):
+        """The same rule as everywhere else in this driver: not knowing
+        whether the switch is off is not permission to act as though it is."""
+        service._readers["hv_2"].stat = DISABLED
+        service._readers["hv_2"].vset = 2250.0
+        service._readers["hv_2"].answers = False
+
+        service.read()
+
+        assert service._readers["hv_2"].written == []
+
+
+class TestWhatTheZeroingPublishes:
+
+    @pytest.fixture
+    def service(self, tmp_path):
+        svc = CaenService(load(), RecordingBus(), simulate=False,
+                          lock_dir=tmp_path)
+        svc._readers = {"hv_1": FakeReader(),
+                        "hv_2": FakeReader(stat=DISABLED, vset=2250.0)}
+        return svc
+
+    def test_the_reading_is_the_new_setpoint_and_not_the_old(self, service):
+        """The cycle read -2250 V before the write. Publishing that is
+        publishing a setpoint the board no longer holds - and it is the
+        reading that goes into the ten-second window, so it would come out as
+        an average of a voltage that exists and one that does not."""
+        out = service.read()
+
+        cathode = next(m for m in out if m.channel == "hv_cathode_vset")
+        assert cathode.value == pytest.approx(0.0)
+        assert cathode.quality is Quality.OK
+
+    def test_it_is_published_at_once_rather_than_at_the_next_window(self, service):
+        service.read()
+
+        published = [m for m in service.bus.measurements
+                     if m.channel == "hv_cathode_vset"]
+        assert published and published[-1].value == pytest.approx(0.0)
+
+    def test_it_is_audited_with_nobody_as_the_actor(self, service):
+        """The one VSET write in the system with no person behind it. An
+        audit entry that cannot be accounted for afterwards is worse than the
+        state it was correcting."""
+        service.read()
+
+        entry = next(a for a in audits(service)
+                     if a["target"] == "hv_cathode_vset")
+        assert entry["result"] == "ok"
+        assert entry["action"] == "caen_vset"
+        assert entry["actor"] == "automatic (section 10a)"
+        assert entry["old"].startswith("-2250")
+        assert float(entry["new"]) == pytest.approx(0.0)
+
+    def test_no_acknowledgement_is_published(self, service):
+        """Acks are matched by channel name, so an ack from a write nobody
+        asked for can be handed to an operator's command as the answer to the
+        question they actually asked."""
+        service.read()
+
+        assert not [t for t, _ in service.bus.published if t == ACK_HV_VSET]
+
+
+class TestWhenTheZeroingCannotBeDone:
+
+    @pytest.fixture
+    def service(self, tmp_path):
+        svc = CaenService(load(), RecordingBus(), simulate=False,
+                          lock_dir=tmp_path)
+        svc._readers = {"hv_1": FakeReader(),
+                        "hv_2": FakeReader(stat=DISABLED, vset=2250.0)}
+        return svc
+
+    def test_a_board_in_local_mode_is_audited_as_rejected(self, service):
+        service._readers["hv_2"].accepts = False
+        service._readers["hv_2"].refusal = "LOC:ERR"
+
+        service.read()
+
+        entry = next(a for a in audits(service)
+                     if a["target"] == "hv_cathode_vset")
+        assert entry["result"] == "rejected"
+        assert "LOC:ERR" in entry["detail"]
+
+    def test_it_is_not_retried_on_every_single_poll(self, service):
+        """A supply in LOCAL refuses until somebody walks to the front panel.
+        Three serial exchanges a second against a board that is going to say
+        no crowds out the readings that still work."""
+        service._readers["hv_2"].accepts = False
+
+        service.read()
+        attempts = len(service._readers["hv_2"].written)
+        service.read()
+        service.read()
+
+        assert len(service._readers["hv_2"].written) == attempts
+
+    def test_a_write_that_did_not_take_is_not_called_success(self, service):
+        """The board acknowledged and kept the old value."""
+        service._readers["hv_2"].obey = False
+
+        out = service.read()
+
+        entry = next(a for a in audits(service)
+                     if a["target"] == "hv_cathode_vset")
+        assert entry["result"] == "rejected"
+        cathode = next(m for m in out if m.channel == "hv_cathode_vset")
+        assert cathode.value == pytest.approx(-2250.0), (
+            "a setpoint that is still on the board was published as zero")
+
+    def test_the_switch_flipped_back_ON_between_the_poll_and_the_write(self, service):
+        """A second passes between the poll reading the switch and the write
+        going out, and the hand at the front panel is the whole reason this
+        rule exists. If the channel has been enabled in that second it may
+        legitimately hold a setpoint, and zeroing it would be this rule
+        causing exactly the surprise it exists to prevent."""
+        reader = service._readers["hv_2"]
+        reads = {"n": 0}
+        original = reader.status
+
+        def status(channel):
+            reads["n"] += 1
+            # The poll's reads come first; the write's re-read finds the
+            # switch back on.
+            return DISABLED if reads["n"] <= 4 else ENABLED
+
+        reader.status = status
+
+        service.read()
+
+        assert reader.written == []
+        assert reader.vset == 2250.0
