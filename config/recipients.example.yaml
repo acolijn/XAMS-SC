@@ -4,16 +4,26 @@
 # the alarm engine reads this file at send time. Editing it by hand works
 # equally well and has the same effect.
 #
-# Everyone with `enabled: true` receives the notification. No shift roster,
-# no escalation chain: the list is the list.
+# TWO LISTS IN ONE FILE, because they interrupt people differently:
+#
+#   alarms: true   the alarm email and SMS, at whatever hour it fires
+#   daily:  true   the daily report email, once a morning
+#
+# Neither implies the other, and either alone is a sensible thing to be. No
+# shift roster, no escalation chain: the list is the list.
+#
+# `enabled:` is what the pair used to be, when there was one list. A row
+# carrying only `enabled:` is read as BOTH, and the web UI writes it
+# alongside the two so that an alarm engine which has not been restarted
+# since the split keeps notifying exactly who it did before.
 #
 # An empty phone is not a mistake - it means "do not SMS this person", and
 # they are notified by email alone. Somebody with NEITHER an email nor a
 # phone is saved with a warning, not refused: they are on the list and hear
 # nothing, which is worth being told once, not worth blocking the save.
 #
-# An empty list is a warning - if every recipient is disabled, alarms reach
-# nobody, and the engine raises a low-severity alarm saying so.
+# An empty alarm list is a warning - if nobody has `alarms: true`, alarms
+# reach nobody, and the engine raises a low-severity alarm saying so.
 #
 # THIS IS THE TEMPLATE. Copy it to config/recipients.yaml and put the real
 # people in that copy, which is gitignored: it holds names, e-mail addresses
@@ -23,26 +33,34 @@ recipients:
   - name: Alice Example
     email: alice.example@example.org
     phone: "+31600000001"
-    enabled: true
+    alarms: true
+    daily: true
 
   - name: Bob Example
     email: bob.example@example.org
     phone: "+31600000002"
-    enabled: true
+    alarms: true
+    daily: true
 
+  # Alarms, but no morning report: told when something is wrong and left
+  # alone otherwise.
   - name: Carol Example
     email: carol.example@example.org
     phone: "+31600000003"
-    enabled: true
+    alarms: true
+    daily: false
 
   # No phone: e-mail only. Not a mistake - see the note above.
   - name: Dan Example
     email: dan.example@example.org
     phone: ""
-    enabled: true
+    alarms: true
+    daily: true
 
-  # Temporarily off, without losing the number.
+  # Off the alarm list without losing the number - a holiday - and still
+  # reading the morning report.
   - name: Erin Example
     email: erin.example@example.org
     phone: "+31600000005"
-    enabled: false
+    alarms: false
+    daily: true

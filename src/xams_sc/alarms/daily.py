@@ -26,7 +26,7 @@ import yaml
 
 from ..api.state import SystemState
 from ..bus import Bus
-from ..config import CONFIG_DIR, load
+from ..config import CONFIG_DIR, load, wants_daily
 from ..model import utcnow
 from . import mail
 from .notify import Notifier
@@ -100,15 +100,19 @@ def main(argv=None) -> int:
         return 1
 
     if args.to:
-        people = [{"name": args.to, "email": args.to, "enabled": True}]
+        people = [{"name": args.to, "email": args.to, "daily": True}]
     else:
+        # `daily`, not `alarms`: this report is the quiet list. Somebody who
+        # wants to be woken by an alarm need not want an email every morning,
+        # and the other way round (§4.4).
         people = [r for r in (_read_yaml("recipients.yaml").get("recipients") or [])
-                  if r.get("enabled") and r.get("email")]
+                  if wants_daily(r) and r.get("email")]
 
     if not people:
         # Not a silent no-op: a report nobody receives is the same as no
         # report, and the reason is a one-line fix in recipients.yaml.
-        log.error("no enabled recipients with an email address; nothing sent")
+        log.error("nobody is on the daily report with an email address; "
+                  "nothing sent")
         return 1
 
     notifier = Notifier(secrets, lambda: people)

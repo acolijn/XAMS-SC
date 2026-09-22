@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from ..bus import ACK_NOTIFY, TOPIC_NOTIFY, Bus
-from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
+from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load, wants_alarms
 from ..model import ServiceState
 from ..service import SingleInstance, setup_logging
 from .engine import AlarmEngine
@@ -92,12 +92,12 @@ def main(argv=None) -> int:
                     "NOT delivered to anyone")
     else:
         notifier = Notifier(read_secrets(), recipients_provider)
-        enabled = [r for r in recipients_provider() if r.get("enabled")]
-        if not enabled:
-            log.error("NO ENABLED RECIPIENTS — alarms would reach nobody. "
-                      "Add one in recipients.yaml (§4.4).")
+        wanted = [r for r in recipients_provider() if wants_alarms(r)]
+        if not wanted:
+            log.error("NOBODY WANTS ALARMS — they would reach nobody. "
+                      "Tick Alarms for somebody in recipients.yaml (§4.4).")
         else:
-            log.info("%d recipient(s) enabled", len(enabled))
+            log.info("%d recipient(s) on the alarm list", len(wanted))
 
     recorder = FlightRecorder(bus, directory=Path("data/events"))
     recorder.start()

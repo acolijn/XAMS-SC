@@ -388,23 +388,27 @@ recipients:
   - name: Alice Example
     phone: "+31..."
     email: alice.example@example.org
-    enabled: true
+    alarms: true          # the alarm email and SMS, at whatever hour
+    daily: true           # the daily report email, once a morning
   - name: ...
     phone: "+31..."
-    enabled: false        # temporarily off, without losing the number
+    alarms: false         # off the alarm list, without losing the number
+    daily: true           # still reading the morning report
 ```
 
 The real file is **gitignored**: it holds colleagues' names, addresses and
 mobile numbers. `config/recipients.example.yaml` is the template to copy, and
 the test suite uses that template rather than the real list.
 
-Everyone with `enabled: true` receives the notification. No shift roster, no escalation chain: the list is the list.
+**Two lists in one file, split 22 September 2026.** `alarms` is the alarm email and SMS; `daily` is the daily report email (§11). Neither implies the other, because they interrupt people differently: wanting the morning summary is not wanting to be woken at 3am, and the one flag that used to mean both made the quiet one unavailable without the loud one. No shift roster, no escalation chain: each list is the list.
+
+`enabled:` is what the pair used to be. A row carrying only `enabled:` is read as **both** — that is what it meant when it was written, and reading it as neither would take somebody off a list silently, which is the failure this subsystem exists to avoid. The web UI keeps writing it alongside the two, so that an alarm service which has not been restarted since the split goes on notifying exactly who it did before.
 
 **Applied without restarting anything**: the alarm engine re-reads the file at
 send time, not at startup, so a change takes effect on the next notification.
 
-**Edited from `/alarms`** — add, remove, or toggle *Notify* — and saved as one
-action. Editing the file by hand works equally well and has the same effect.
+**Edited from `/alarms`** — add, remove, or tick *Alarms* and *Notify* — and
+saved as one action. Editing the file by hand works equally well and has the same effect.
 Built 20 September 2026; it lives on the alarms page rather than a page of its
 own, for the reason given in §8.1.
 
@@ -419,9 +423,10 @@ Four rules the page follows, each of which is a way the list can fail quietly:
 - **An empty phone is not a mistake.** It means *do not SMS this person*; they
   are notified by email alone. Three of the four entries are like this, and a
   page that treated a blank as an omission would nag about a deliberate choice.
-- **Nobody enabled is a warning, not a refusal.** It may be exactly what
-  somebody means during an intervention. It is said loudly, on the page and by
-  the engine, and allowed.
+- **Nobody on the alarm list is a warning, not a refusal.** It may be exactly
+  what somebody means during an intervention. It is said loudly, on the page
+  and by the engine, and allowed. An empty *daily* list is a quiet morning
+  rather than an unwatched system, and is said once, in grey.
 - **Removal is a checkbox applied on save, not a button that deletes on
   click.** The page sits open beside a UI that reloads itself, and a one-click
   irreversible delete next to that is the wrong affordance.
@@ -434,7 +439,7 @@ This is deliberately unlike the alarm thresholds (§4.3), which stay in git and 
 
 Every change is appended to the same audit log as control actions (§10), so it remains recoverable who was on the list when a given alarm fired.
 
-**An empty list is a warning.** If every recipient is disabled, alarms reach nobody. The alarm engine raises a low-severity alarm on startup and on reload when no recipient is enabled, so this is found on a quiet afternoon rather than during an incident.
+**An empty alarm list is a warning.** If nobody has `alarms: true`, alarms reach nobody. The alarm engine raises a low-severity alarm on startup and on reload when that is the case, so this is found on a quiet afternoon rather than during an incident.
 
 ### 4.5 Config hash
 

@@ -11,12 +11,20 @@ the rest of the list hostage.
 
 from __future__ import annotations
 
+from ..config import wants_alarms, wants_daily
+
+
 def people_from_form(form: dict) -> tuple[list[dict], list[dict]]:
     """Rebuild the recipient list from the posted rows.
 
-    Rows arrive as `name-0`, `email-0`, `phone-0`, `enabled-0`, `remove-0`.
-    The index ties the fields of one person together and is otherwise
-    meaningless - the saved order is the order of the rows on the page.
+    Rows arrive as `name-0`, `email-0`, `phone-0`, `alarms-0`, `daily-0`,
+    `remove-0`. The index ties the fields of one person together and is
+    otherwise meaningless - the saved order is the order of the rows on the
+    page.
+
+    `alarms` and `daily` are separate boxes because they interrupt people
+    differently: the first is an SMS at 3am, the second an email over
+    breakfast, and wanting one is not wanting the other (§4.4).
 
     An entirely blank row is dropped rather than refused: the page offers a
     spare row at the bottom for adding somebody, and submitting without using
@@ -34,7 +42,8 @@ def people_from_form(form: dict) -> tuple[list[dict], list[dict]]:
             # this person" - they are notified by email alone. It is not a
             # number somebody forgot to fill in.
             "phone": (form.get(f"phone-{i}") or "").strip(),
-            "enabled": bool(form.get(f"enabled-{i}")),
+            "alarms": bool(form.get(f"alarms-{i}")),
+            "daily": bool(form.get(f"daily-{i}")),
         }
         if not any((person["name"], person["email"], person["phone"])):
             continue
@@ -58,9 +67,13 @@ def recipient_changes(before: list[dict], after: list[dict],
     was REMOVED, since the file no longer mentions them at all.
     """
     def summarise(person):
+        # Both lists by name, not one word for the pair: "disabled" no longer
+        # says which of the two somebody dropped off, and it is the whole
+        # point of the change that those are different things.
         bits = [person.get("email") or "no email",
                 person.get("phone") or "no phone",
-                "enabled" if person.get("enabled") else "disabled"]
+                "alarms" if wants_alarms(person) else "no alarms",
+                "daily" if wants_daily(person) else "no daily report"]
         return ", ".join(bits)
 
     old_by_name = {(p.get("name") or "").casefold(): p for p in before}

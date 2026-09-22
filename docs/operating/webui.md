@@ -505,14 +505,9 @@ ignore.
 
 ## Alarms
 
-The alarm chain on one page, in the order it runs: what has fired, what
-*would* fire, and who is told.
-
-### Active alarms
-
-The same list as the overview, with a link to Grafana for history — alarm state
-is stored like any other record, so the plots have it and this page does not
-have to query a database.
+The alarm chain on one page: the thresholds in force, who is told, and — at the
+bottom, where it is read rather than scrolled past on the way to the settings
+above it — what has actually fired.
 
 ### Thresholds in force
 
@@ -530,15 +525,21 @@ here.
 
 ### Who is notified
 
-Add, remove, or turn **Notify** on and off, then **Save recipients**. It
+Add, remove, or tick **Alarms** and **Notify**, then **Save recipients**. It
 applies to the next alarm — no restart, no reload.
+
+**Two lists in one table.** *Alarms* is the alarm email and SMS, at whatever
+hour it fires; *Notify* is the daily report email, once a morning. Neither
+implies the other: somebody can read the morning report without being woken by
+an SMS, and somebody who wants to be woken need not want an email every day.
 
 | Column | |
 |---|---|
 | **Name** | what the person is called. Two rows with the same name are refused |
-| **Email** | where the alarm mail goes |
+| **Email** | where the alarm mail and the daily report go |
 | **Phone** | where the SMS goes. **Blank means do not SMS them** — they get email alone, which is normal and not an omission. A number that *is* filled in needs its country code, `+31…` |
-| **Notify** | off keeps somebody on the list without notifying them — a holiday, without losing the number |
+| **Alarms** | the alarm email and SMS. Off keeps somebody on the list without alarming them — a holiday, without losing the number |
+| **Notify** | the daily report email. It is email only, so a row ticked here with no address is warned about |
 | **Remove** | takes effect **on save**, not on click |
 
 To add somebody, type into the blank row at the bottom. To remove somebody,
@@ -563,17 +564,26 @@ worth being told — but refusing over it meant a name typed while you go and
 look up a number took the whole list hostage, and the change nobody could make
 was the one to the list of people who get told things go wrong.
 
-**Turning everyone off is allowed, with a warning**, because it may be exactly
-what you mean during an intervention. The page says so in red and the alarm
-engine raises its own low-severity alarm, so it is not a state you can drift
-into unnoticed.
+**Emptying the alarm column is allowed, with a warning**, because it may be
+exactly what you mean during an intervention. The page says so in red and the
+alarm engine raises its own low-severity alarm, so it is not a state you can
+drift into unnoticed. An empty *Notify* column is a quiet morning rather than
+an unwatched system, so it is said in grey and nothing else happens.
 
-Every change is audited — added, removed, enabled, disabled, and the address or
-number as it was. Removals especially: once somebody is out of the file, the
-audit trail is the only record that they were ever in it.
+Every change is audited — added, removed, which of the two lists they joined
+or left, and the address or number as it was. Removals especially: once
+somebody is out of the file, the audit trail is the only record that they were
+ever in it.
 
-`config/recipients.yaml` is tracked by git, so commit it along with everything
-else.
+`config/recipients.yaml` holds colleagues' addresses and mobile numbers and is
+**gitignored**; `config/recipients.example.yaml` is the template that ships
+with the repository.
+
+### Active alarms
+
+At the **bottom of the page**, and the same list as the overview, with a link
+to Grafana for history — alarm state is stored like any other record, so the
+plots have it and this page does not have to query a database.
 
 ---
 

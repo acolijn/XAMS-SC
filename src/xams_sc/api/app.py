@@ -890,7 +890,8 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
                     active=state.active_alarms(),
                     limits=_limits_view(state),
                     people=people,
-                    enabled_count=sum(1 for p in people if p.get("enabled")),
+                    alarm_count=sum(1 for p in people if p.get("alarms")),
+                    daily_count=sum(1 for p in people if p.get("daily")),
                     saved=request.query_params.get("saved"),
                     error=request.query_params.get("error"))
 
@@ -930,18 +931,21 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
             log.warning("recipients: %s %s -> %s by %s", line["target"],
                         line["old"], line["new"], who)
 
-        enabled = sum(1 for p in people if p.get("enabled"))
+        on_alarms = sum(1 for p in people if p.get("alarms"))
         note = f"saved {len(people)} recipient{'' if len(people) == 1 else 's'}"
         # Said after the save, not instead of it: a blank contact field is
         # somebody mid-edit far more often than it is a mistake, and taking
         # the whole list hostage over one is the wrong trade (§4.4).
         for warning in recipient_warnings(people):
             note += f" - WARNING: {warning}"
-        if not enabled:
+        if not on_alarms:
             # A warning, not a refusal: turning everyone off may be exactly
             # what somebody means to do during an intervention. The engine
-            # raises its own alarm about it too (§4.4).
-            note += " - WARNING: nobody is enabled, so alarms reach nobody"
+            # raises its own alarm about it too (§4.4). Said about the alarm
+            # column alone: an empty daily report list is a quiet morning,
+            # not a system nobody is watching.
+            note += (" - WARNING: nobody is on the alarm list, "
+                     "so alarms reach nobody")
         return RedirectResponse("/alarms?saved=" + quote(note),
                                 status_code=303)
 

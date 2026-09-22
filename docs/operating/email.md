@@ -118,9 +118,12 @@ say — set `mail.DISPLAY_TZ` to a `ZoneInfo`.
    are logged and never raised — a gateway being down must not stop the engine
    evaluating the next reading.
 2. **Check the recipient list** on the [Alarms page](webui.md#who-is-notified),
-   or `recipients.yaml` directly — only entries with **Notify** on *and* an
-   email address are used. An empty list logs
-   `ALARM NOT DELIVERED: no enabled recipients`, and the page says so in red.
+   or `recipients.yaml` directly. The two columns are two lists: an alarm goes
+   to the entries with **Alarms** ticked, the daily report to those with
+   **Notify** ticked, and both need an email address. An empty alarm list logs
+   `ALARM NOT DELIVERED: no recipients want alarms`, and the page says so in
+   red; a missing daily report logs `nobody is on the daily report with an
+   email address`.
 3. **Test the relay** without sending anything:
 
     ```powershell

@@ -62,33 +62,6 @@
 </div>
 
 <div class="card" style="margin-top:1.2rem">
-  <h2>Active alarms</h2>
-  {% if active %}
-  <table>
-    <tr><th>Channel</th><th>State</th><th>Threshold</th>
-        <th class="num">Value</th><th></th></tr>
-    {% for a in active %}
-    <tr>
-      <td><span class="dot {{ 'bad' if a.state != 'minor' else 'warn' }}"></span>{{ a.channel }}
-          {% if a.description %}<span class="dim"> — {{ a.description }}</span>{% endif %}</td>
-      <td class="{{ 'bad' if a.state != 'minor' else 'warn' }}">{{ a.state }}</td>
-      <td class="dim">{{ a.threshold or '—' }}</td>
-      <td class="num">{% if a.value is not none %}{{ '%.3f'|format(a.value) }}{% else %}—{% endif %}</td>
-      <td class="dim">{{ 'acknowledged' if a.acknowledged else '' }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% else %}
-  <div class="body dim">Nothing is alarming.</div>
-  {% endif %}
-  <div class="note">
-    History is in <a href="{{ grafana_url }}" target="_blank">Grafana</a>:
-    alarm state is stored like any other record, so the plots have it without
-    this page querying a database (§11).
-  </div>
-</div>
-
-<div class="card" style="margin-top:1.2rem">
   <h2>Thresholds in force</h2>
   {% if not limits.known %}
   <div class="body">
@@ -139,11 +112,17 @@
 <div class="card" style="margin-top:1.2rem">
   <h2>Who is notified</h2>
   <div class="body">
-    {% if not enabled_count %}
+    {% if not alarm_count %}
     <div class="flash bad" style="margin:0 0 .9rem 0">
-      <strong>Nobody is enabled — alarms reach nobody.</strong>
+      <strong>Nobody is on the alarm list — alarms reach nobody.</strong>
       The alarm engine raises its own low-severity alarm about this, so it is
       found on a quiet afternoon rather than during an incident (§4.4).
+    </div>
+    {% elif not daily_count %}
+    {# Not red, and not the same sentence: an empty daily list is a quiet
+       morning, not a system nobody would be told about. #}
+    <div class="dim" style="font-size:.8rem;margin:0 0 .9rem 0">
+      Nobody receives the daily report. Alarms are unaffected.
     </div>
     {% endif %}
 
@@ -152,29 +131,42 @@
     <table class="channels">
       <colgroup>
         <col><col><col style="width:11rem">
-        <col style="width:5rem"><col style="width:5rem">
+        <col style="width:6rem"><col style="width:6rem">
+        <col style="width:5rem">
       </colgroup>
+      {# Two ticks, not one. They are different interruptions: Alarms is an
+         SMS at 3am, Notify is an email over breakfast, and somebody may
+         reasonably want either without the other (§4.4). #}
       <tr>
         <th>Name</th><th>Email</th><th>Phone</th>
-        <th>Notify</th><th>Remove</th>
+        <th>Alarms<br><span class="dim" style="font-weight:400">email + SMS</span></th>
+        <th>Notify<br><span class="dim" style="font-weight:400">daily report</span></th>
+        <th>Remove</th>
       </tr>
       {% for p in people %}
       {# No email and no phone: on the list, notified by nothing. Marked, and
          saved anyway - the refusal it used to be blocked the whole list. #}
       {% set silent = not (p.email or p.phone) %}
+      {# On the daily report with no address: the report is email only, so
+         that row is another way of hearing nothing. Marked where the blank
+         is, like the one above. #}
+      {% set no_report = p.daily and not p.email %}
       <tr>
         <td><input type="text" name="name-{{ loop.index0 }}" class="recip-box"
                    value="{{ p.name or '' }}" autocomplete="off"></td>
         <td><input type="text" name="email-{{ loop.index0 }}"
-                   class="recip-box{{ ' hears-nothing' if silent }}"
+                   class="recip-box{{ ' hears-nothing' if silent or no_report }}"
                    value="{{ p.email or '' }}" autocomplete="off"></td>
         <td><input type="text" name="phone-{{ loop.index0 }}"
                    class="recip-box{{ ' hears-nothing' if silent }}"
                    value="{{ p.phone or '' }}" placeholder="no SMS"
                    autocomplete="off"></td>
+        <td><input type="checkbox" class="recip-alarms"
+                   name="alarms-{{ loop.index0 }}"
+                   {{ 'checked' if p.alarms }}></td>
         <td><input type="checkbox" class="recip-notify"
-                   name="enabled-{{ loop.index0 }}"
-                   {{ 'checked' if p.enabled }}></td>
+                   name="daily-{{ loop.index0 }}"
+                   {{ 'checked' if p.daily }}></td>
         <td><input type="checkbox" class="recip-remove"
                    name="remove-{{ loop.index0 }}"></td>
       </tr>
@@ -188,8 +180,10 @@
                    placeholder="name@nikhef.nl" autocomplete="off"></td>
         <td><input type="text" name="phone-{{ people|length }}" class="recip-box"
                    placeholder="+31… or leave empty" autocomplete="off"></td>
+        <td><input type="checkbox" class="recip-alarms"
+                   name="alarms-{{ people|length }}" checked></td>
         <td><input type="checkbox" class="recip-notify"
-                   name="enabled-{{ people|length }}" checked></td>
+                   name="daily-{{ people|length }}" checked></td>
         <td></td>
       </tr>
     </table>
@@ -209,14 +203,45 @@
       once rather than blocking the whole list over. A phone number that is
       filled in needs its country code, <code>+31…</code>.
       <br>
-      <strong>Notify</strong> off keeps somebody on the list without
-      notifying them — for a holiday, without losing the number.
+      <strong>Alarms</strong> is the alarm email and SMS, at whatever hour it
+      fires. <strong>Notify</strong> is the daily report email, once a
+      morning. Neither implies the other: somebody can take the morning
+      report without being woken by an SMS, and the other way round. Both off
+      keeps them on the list and hears from nothing — for a holiday, without
+      losing the number.
       <strong>Remove</strong> takes effect on save, not on click. Either way
       the change is
       <a href="/manual/software/storage/" target="_blank">audited</a>, so it
       stays recoverable who would have been told when a given alarm fired.
     </div>
     </form>
+  </div>
+</div>
+
+<div class="card" style="margin-top:1.2rem">
+  <h2>Active alarms</h2>
+  {% if active %}
+  <table>
+    <tr><th>Channel</th><th>State</th><th>Threshold</th>
+        <th class="num">Value</th><th></th></tr>
+    {% for a in active %}
+    <tr>
+      <td><span class="dot {{ 'bad' if a.state != 'minor' else 'warn' }}"></span>{{ a.channel }}
+          {% if a.description %}<span class="dim"> — {{ a.description }}</span>{% endif %}</td>
+      <td class="{{ 'bad' if a.state != 'minor' else 'warn' }}">{{ a.state }}</td>
+      <td class="dim">{{ a.threshold or '—' }}</td>
+      <td class="num">{% if a.value is not none %}{{ '%.3f'|format(a.value) }}{% else %}—{% endif %}</td>
+      <td class="dim">{{ 'acknowledged' if a.acknowledged else '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="body dim">Nothing is alarming.</div>
+  {% endif %}
+  <div class="note">
+    History is in <a href="{{ grafana_url }}" target="_blank">Grafana</a>:
+    alarm state is stored like any other record, so the plots have it without
+    this page querying a database (§11).
   </div>
 </div>
 

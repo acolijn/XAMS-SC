@@ -32,11 +32,13 @@ import logging
 import smtplib
 from email.message import EmailMessage
 
+from ..config import wants_alarms
+
 log = logging.getLogger(__name__)
 
 
 class Notifier:
-    """Routes an alarm message to the enabled recipients.
+    """Routes an alarm message to the recipients who asked for alarms.
 
     Every send is best-effort and failures are logged rather than raised: a
     gateway being down must not stop the engine evaluating the next reading.
@@ -133,10 +135,14 @@ class Notifier:
         Returns a count of successful deliveries per channel, so a caller can
         tell "nobody was told" from "everybody was told".
         """
-        people = [r for r in (self._recipients() or []) if r.get("enabled")]
+        # `alarms`, not `daily`: the daily report is a separate list in the
+        # same file, and somebody who wants only the morning summary must not
+        # be woken by this (§4.4).
+        people = [r for r in (self._recipients() or []) if wants_alarms(r)]
         if not people:
             # An empty list is a warning: alarms reach nobody (§4.4).
-            log.error("ALARM NOT DELIVERED: no enabled recipients. %s", text)
+            log.error("ALARM NOT DELIVERED: no recipients want alarms. %s",
+                      text)
             return {}
 
         sent = {"sms": 0, "email": 0, "sound": 0}

@@ -454,16 +454,30 @@ _RECIPIENTS_HEADER = """\
 # the alarm engine reads this file at send time. Editing it by hand works
 # equally well and has the same effect.
 #
-# Everyone with `enabled: true` receives the notification. No shift roster,
-# no escalation chain: the list is the list.
+# TWO LISTS IN ONE FILE, because they interrupt people differently and
+# somebody who wants the quiet one should not have to take the loud one with
+# it:
+#
+#   alarms: true   the alarm email and SMS, at whatever hour it fires
+#   daily:  true   the daily report email, once a morning
+#
+# Neither implies the other, and either alone is a sensible thing to be. No
+# shift roster, no escalation chain: the list is the list.
+#
+# `enabled:` is what the pair used to be, when there was one list. A row
+# carrying only `enabled:` is read as BOTH - the list it described was the
+# alarm list and the report list at once, and reading it as neither would
+# turn somebody off silently. It is still written alongside the two, so that
+# an alarm engine which has not been restarted since this change keeps
+# notifying exactly who it did before.
 #
 # An empty phone is not a mistake - it means "do not SMS this person", and
 # they are notified by email alone. Somebody with NEITHER an email nor a
 # phone is saved with a warning, not refused: they are on the list and hear
 # nothing, which is worth being told once, not worth blocking the save.
 #
-# An empty list is a warning - if every recipient is disabled, alarms reach
-# nobody, and the engine raises a low-severity alarm saying so.
+# An empty alarm list is a warning - if nobody has `alarms: true`, alarms
+# reach nobody, and the engine raises a low-severity alarm saying so.
 
 """
 
@@ -472,18 +486,59 @@ def recipients_path(config_dir: Path | str | None = None) -> Path:
     return (Path(config_dir) if config_dir else CONFIG_DIR) / RECIPIENTS_FILE
 
 
+def wants_alarms(person: dict) -> bool:
+    """Does this person get the alarm email and SMS? (§4.4)
+
+    `alarms:` if the row has one, and `enabled:` if it does not. The second
+    half is what makes a file written before the two lists were split keep
+    notifying the people it always did: `enabled: true` meant "tell me when
+    something is wrong", and that is this list.
+    """
+    if "alarms" in person:
+        return bool(person.get("alarms"))
+    return bool(person.get("enabled"))
+
+
+def wants_daily(person: dict) -> bool:
+    """Does this person get the daily report email? (§4.4)
+
+    Same fallback, for the same reason: the one list used to feed both, so a
+    row that only says `enabled: true` is on both until somebody says
+    otherwise. Read it as neither and a morning report would go quiet with
+    nothing on any page saying why.
+    """
+    if "daily" in person:
+        return bool(person.get("daily"))
+    return bool(person.get("enabled"))
+
+
 def read_recipients(config_dir: Path | str | None = None) -> list[dict]:
     """The recipient list, or empty if there is no file.
 
     Never raises on an absent file: alarms with nobody to notify is a
     condition the engine warns about (§4.4), not a reason to refuse to start.
+
+    Every row comes back with an explicit `alarms` and `daily`, resolved from
+    a legacy `enabled` where that is all the file has. Nothing downstream -
+    the page, the audit line, the save - then has to remember the fallback,
+    which is the kind of thing that gets remembered in three places and
+    forgotten in the fourth.
     """
     path = recipients_path(config_dir)
     if not path.exists():
         return []
     data = _read(path)
     people = (data or {}).get("recipients") or []
-    return [dict(person) for person in people if isinstance(person, dict)]
+    rows = []
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        row = dict(person)
+        row["alarms"] = wants_alarms(person)
+        row["daily"] = wants_daily(person)
+        row.pop("enabled", None)
+        rows.append(row)
+    return rows
 
 
 def validate_recipients(people: list[dict]) -> list[str]:
@@ -533,6 +588,10 @@ def recipient_warnings(people: list[dict]) -> list[str]:
     recipient list hostage to a detail. It is now saved and said loudly,
     like "nobody is enabled" already was: the same warning, the same place,
     and the operator decides.
+
+    The daily report is the same trap one column further along: it is email
+    only, so somebody ticked for it with a phone and no address is on a list
+    that cannot reach them.
     """
     notes = []
     for i, person in enumerate(people, start=1):
@@ -544,6 +603,13 @@ def recipient_warnings(people: list[dict]) -> list[str]:
             notes.append(
                 f"{where} has no email and no phone, so they are on the "
                 f"list and hear nothing")
+        elif wants_daily(person) and not email:
+            # Only when they have a phone - with neither, the line above has
+            # already said it, and saying it twice about one row reads like
+            # two problems.
+            notes.append(
+                f"{where} is on the daily report and has no email, so the "
+                f"report does not reach them")
     return notes
 
 
@@ -562,7 +628,13 @@ def write_recipients(people: list[dict], by: str,
             "name": (person.get("name") or "").strip(),
             "email": (person.get("email") or "").strip(),
             "phone": (person.get("phone") or "").strip(),
-            "enabled": bool(person.get("enabled")),
+            "alarms": wants_alarms(person),
+            "daily": wants_daily(person),
+            # The one key both used to be. Written as a mirror of `alarms`
+            # so that an alarm engine still running the older code - the
+            # services are not restarted by a save - goes on telling the
+            # same people it was told to tell.
+            "enabled": wants_alarms(person),
         })
     text = _RECIPIENTS_HEADER + yaml.safe_dump(
         {"recipients": rows}, sort_keys=False, default_flow_style=False,

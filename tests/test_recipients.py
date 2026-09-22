@@ -6,9 +6,13 @@ consequential, and this page is where it becomes visible: what has fired, what
 
 Two things here are worth more than the rest:
 
-**Nobody enabled is a WARNING, not a refusal.** Turning everyone off may be
-exactly what somebody means during an intervention. It is said loudly and
-allowed.
+**Nobody on the alarm list is a WARNING, not a refusal.** Turning everyone off
+may be exactly what somebody means during an intervention. It is said loudly
+and allowed.
+
+**Alarms and the daily report are two lists.** A tick in one is not a tick in
+the other, and a file written before the split - `enabled:` alone - is read as
+both, because that is what it meant when it was written.
 
 **A recipient with neither an email nor a phone is WARNED ABOUT, not refused.**
 They would sit on the list looking notified and hear nothing, which is the
@@ -25,7 +29,8 @@ import yaml
 from xams_sc import config as config_module
 from xams_sc.model import iso, utcnow
 from xams_sc.config import (read_recipients, recipient_warnings,
-                            validate_recipients, write_recipients)
+                            validate_recipients, wants_alarms, wants_daily,
+                            write_recipients)
 
 REPO_CONFIG = config_module.ROOT / "config"
 
@@ -37,8 +42,12 @@ def rows(people, **extra):
         data[f"name-{i}"] = p.get("name", "")
         data[f"email-{i}"] = p.get("email", "")
         data[f"phone-{i}"] = p.get("phone", "")
-        if p.get("enabled"):
-            data[f"enabled-{i}"] = "on"
+        # An unticked checkbox posts NOTHING, which is how both columns say
+        # "not on this list" - there is no value to send for "off".
+        if p.get("alarms"):
+            data[f"alarms-{i}"] = "on"
+        if p.get("daily"):
+            data[f"daily-{i}"] = "on"
     data[f"name-{len(people)}"] = ""
     data[f"email-{len(people)}"] = ""
     data[f"phone-{len(people)}"] = ""
@@ -51,12 +60,12 @@ def rows(people, **extra):
 def test_blank_phone_is_allowed():
     """An empty phone MEANS "do not SMS"; it is not a missing number."""
     assert validate_recipients(
-        [{"name": "A", "email": "a@nikhef.nl", "phone": "", "enabled": True}]
+        [{"name": "A", "email": "a@nikhef.nl", "phone": "", "alarms": True}]
     ) == []
 
 
 def test_neither_email_nor_phone_is_allowed_but_warned_about():
-    person = [{"name": "A", "email": "", "phone": "", "enabled": True}]
+    person = [{"name": "A", "email": "", "phone": "", "alarms": True}]
     assert validate_recipients(person) == []
     warnings = recipient_warnings(person)
     assert len(warnings) == 1
@@ -105,12 +114,13 @@ def test_the_real_list_is_valid():
 
 def test_round_trip_keeps_the_header(config_dir):
     write_recipients([{"name": "Ada", "email": "a@x.nl", "phone": "",
-                       "enabled": True}], "apc", config_dir)
+                       "alarms": True, "daily": False}], "apc", config_dir)
     text = (config_dir / "recipients.yaml").read_text()
     assert text.startswith("# Who receives alarm notifications")
     assert "do not SMS this person" in text
     assert read_recipients(config_dir) == [
-        {"name": "Ada", "email": "a@x.nl", "phone": "", "enabled": True}]
+        {"name": "Ada", "email": "a@x.nl", "phone": "",
+         "alarms": True, "daily": False}]
 
 
 def test_missing_file_is_not_an_error(tmp_path):
@@ -155,26 +165,28 @@ def test_adding_somebody(webui, config_dir):
     data = rows(people)
     data[f"name-{len(people)}"] = "Ada Lovelace"
     data[f"email-{len(people)}"] = "ada@nikhef.nl"
-    data[f"enabled-{len(people)}"] = "on"
+    data[f"alarms-{len(people)}"] = "on"
+    data[f"daily-{len(people)}"] = "on"
     response = http.post("/alarms/recipients", data=dict(data, by="apc"),
                          follow_redirects=False)
     assert response.status_code == 303
     assert "saved" in response.headers["location"]
     saved = read_recipients(config_dir)
-    assert any(p["name"] == "Ada Lovelace" and p["enabled"] for p in saved)
+    assert any(p["name"] == "Ada Lovelace" and p["alarms"] and p["daily"]
+               for p in saved)
 
 
 def test_disabling_keeps_the_number(webui, config_dir):
-    """Notify off is not removal: the number survives a holiday (§4.4)."""
+    """Off both lists is not removal: the number survives a holiday (§4.4)."""
     http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
         if p["name"] == "Bob Example":
-            p["enabled"] = False
+            p["alarms"] = p["daily"] = False
     http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
               follow_redirects=False)
     saved = {p["name"]: p for p in read_recipients(config_dir)}
-    assert saved["Bob Example"]["enabled"] is False
+    assert saved["Bob Example"]["alarms"] is False
     assert saved["Bob Example"]["phone"] == "+31600000002"
 
 
@@ -212,7 +224,7 @@ def test_a_bad_row_refuses_the_whole_save(webui, config_dir):
     data = rows(people)
     data[f"name-{len(people)}"] = "Nobody"
     data[f"email-{len(people)}"] = "not-an-address"
-    data[f"enabled-{len(people)}"] = "on"
+    data[f"alarms-{len(people)}"] = "on"
     response = http.post("/alarms/recipients", data=dict(data, by="apc"),
                          follow_redirects=False)
     assert "error" in response.headers["location"]
@@ -229,7 +241,7 @@ def test_a_contactless_row_saves_with_a_warning(webui, config_dir):
     people = read_recipients(config_dir)
     data = rows(people)
     data[f"name-{len(people)}"] = "Nobody"      # no email, no phone
-    data[f"enabled-{len(people)}"] = "on"
+    data[f"alarms-{len(people)}"] = "on"
     response = http.post("/alarms/recipients", data=dict(data, by="apc"),
                          follow_redirects=False)
     where = response.headers["location"]
@@ -243,7 +255,7 @@ def test_the_page_marks_who_hears_nothing(webui, config_dir):
     http, _, _ = webui
     people = read_recipients(config_dir)
     people.append({"name": "Nobody", "email": "", "phone": "",
-                   "enabled": True})
+                   "alarms": True, "daily": False})
     write_recipients(people, "apc", config_dir)
     assert "hears-nothing" in http.get("/alarms").text
 
@@ -274,20 +286,20 @@ def test_disabling_everyone_warns_but_is_allowed(webui, config_dir):
     http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
-        p["enabled"] = False
+        p["alarms"] = False
     response = http.post("/alarms/recipients",
                          data=dict(rows(people), by="apc"),
                          follow_redirects=False)
     assert "saved" in response.headers["location"]
     assert "WARNING" in response.headers["location"]
-    assert all(not p["enabled"] for p in read_recipients(config_dir))
+    assert all(not p["alarms"] for p in read_recipients(config_dir))
 
 
-def test_the_page_says_so_when_nobody_is_enabled(webui, config_dir):
+def test_the_page_says_so_when_nobody_is_on_the_alarm_list(webui, config_dir):
     http, _, _ = webui
     people = read_recipients(config_dir)
     for p in people:
-        p["enabled"] = False
+        p["alarms"] = False
     write_recipients(people, "apc", config_dir)
     assert "alarms reach nobody" in http.get("/alarms").text
 
@@ -297,12 +309,14 @@ def test_changes_are_audited(webui, config_dir):
     people = read_recipients(config_dir)
     for p in people:
         if p["name"] == "Bob Example":
-            p["enabled"] = False
+            p["alarms"] = False
     http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
               follow_redirects=False)
     audits = [p for topic, p in bus.published if topic == "xams/audit"]
+    # "no alarms", not "disabled": which of the two lists somebody left is
+    # what the trail has to say now that there are two of them.
     assert any('"action":"recipients"' in a and "Bob Example" in a
-               and "disabled" in a and '"actor":"apc"' in a for a in audits)
+               and "no alarms" in a and '"actor":"apc"' in a for a in audits)
 
 
 def test_removal_is_audited_with_what_was_lost(webui, config_dir):
@@ -343,6 +357,84 @@ def test_the_reload_notices_a_ticked_checkbox(webui):
     http, _, _ = webui
     script = http.get("/alarms").text
     assert "defaultChecked" in script
+
+
+# ------------------------------------------------ the two lists (§4.4)
+#
+# `alarms` is an SMS at 3am, `daily` is an email over breakfast, and somebody
+# may reasonably want either without the other. What is tested here is that
+# each column reaches its own list and nothing else - the failure worth
+# catching is a tick in the quiet column putting somebody back on the loud
+# one.
+
+def test_the_two_ticks_are_independent(webui, config_dir):
+    http, _, _ = webui
+    people = read_recipients(config_dir)
+    for p in people:
+        p["alarms"], p["daily"] = (p["name"] == "Alice Example",
+                                   p["name"] == "Bob Example")
+    http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
+              follow_redirects=False)
+
+    saved = {p["name"]: p for p in read_recipients(config_dir)}
+    alice, bob = saved["Alice Example"], saved["Bob Example"]
+    assert alice["alarms"] and not alice["daily"]
+    assert bob["daily"] and not bob["alarms"]
+
+
+def test_only_the_alarm_list_is_notified_of_an_alarm():
+    """The whole point: the morning-report list is not woken up (§4.4)."""
+    from xams_sc.alarms.notify import Notifier
+    people = [{"name": "Loud", "email": "loud@x.nl", "alarms": True,
+               "daily": False},
+              {"name": "Quiet", "email": "quiet@x.nl", "alarms": False,
+               "daily": True}]
+    sent = []
+    notifier = Notifier({}, lambda: people)
+    notifier.send_email = (
+        lambda address, *a, **kw: sent.append(address) or True)
+
+    notifier.send("test", ["email"])
+    assert sent == ["loud@x.nl"]
+
+
+def test_a_file_from_before_the_split_is_read_as_both(config_dir):
+    """`enabled: true` meant both, and must not silently become neither."""
+    (config_dir / "recipients.yaml").write_text(
+        "recipients:\n"
+        "  - name: Ada\n"
+        "    email: a@x.nl\n"
+        "    enabled: true\n",
+        encoding="utf-8")
+    person = read_recipients(config_dir)[0]
+    assert person["alarms"] and person["daily"]
+    assert wants_alarms({"enabled": True}) and wants_daily({"enabled": True})
+    # And the new keys win where a row carries both.
+    assert not wants_daily({"enabled": True, "daily": False})
+
+
+def test_the_legacy_key_is_written_for_an_engine_not_yet_restarted(config_dir):
+    """A save must not silence an alarm service still running the old code."""
+    write_recipients([{"name": "Ada", "email": "a@x.nl", "alarms": True,
+                       "daily": False}], "apc", config_dir)
+    row = yaml.safe_load(
+        (config_dir / "recipients.yaml").read_text())["recipients"][0]
+    assert row["enabled"] is True
+
+
+def test_the_page_offers_both_columns(webui):
+    http, _, _ = webui
+    text = http.get("/alarms").text
+    assert "alarms-0" in text and "daily-0" in text
+    assert "daily report" in text
+
+
+def test_the_daily_list_needs_an_email_and_says_so():
+    """The report is email only: a phone alone is another way to hear
+    nothing, and it is marked where the blank is."""
+    notes = recipient_warnings(
+        [{"name": "A", "email": "", "phone": "+31612345678", "daily": True}])
+    assert len(notes) == 1 and "daily report" in notes[0]
 
 
 # ------------------------------------------------- the master switch (§4.4a)
@@ -551,7 +643,7 @@ def test_a_disabled_recipient_is_still_offered(webui, config_dir):
     people = read_recipients(config_dir)
     for p in people:
         if p["name"] == "Bob Example":
-            p["enabled"] = False
+            p["alarms"] = p["daily"] = False
     http.post("/alarms/recipients", data=dict(rows(people), by="apc"),
               follow_redirects=False)
 
@@ -586,7 +678,7 @@ def test_the_names_follow_an_edit_without_a_restart(webui, config_dir):
     data = rows(people)
     data[f"name-{len(people)}"] = "Ada Lovelace"
     data[f"email-{len(people)}"] = "ada@nikhef.nl"
-    data[f"enabled-{len(people)}"] = "on"
+    data[f"alarms-{len(people)}"] = "on"
     http.post("/alarms/recipients", data=dict(data, by="apc"),
               follow_redirects=False)
 

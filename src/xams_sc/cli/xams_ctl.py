@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
+from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load, wants_alarms
 
 # Started in this order; stopped in reverse, so sinks outlive the producers
 # and the last measurements are archived rather than dropped.
@@ -762,11 +762,12 @@ def cmd_check(args) -> int:
         print(f"\n  {len(tbd)} enabled channels have unit TBD (§16): "
               f"{', '.join(tbd)}")
 
-    enabled_recipients = [
-        r for r in (config.recipients.get("recipients") or []) if r.get("enabled")
+    alarm_recipients = [
+        r for r in (config.recipients.get("recipients") or []) if wants_alarms(r)
     ]
-    if not enabled_recipients:
-        print("\n  WARNING: no enabled recipients — alarms would reach nobody (§4.4)")
+    if not alarm_recipients:
+        print("\n  WARNING: nobody is on the alarm list — "
+              "alarms would reach nobody (§4.4)")
     return 0
 
 
