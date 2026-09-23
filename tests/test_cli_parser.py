@@ -66,4 +66,5 @@ class TestEveryCommandStillRuns:
 
 def _placeholder_args(name: str) -> list[str]:
     """The required positionals, for verbs that have any."""
-    return ["hv_cathode_vset", "-2250"] if name == "hv-set" else []
+    return {"hv-set": ["hv_cathode_vset", "-2250"],
+            "hv-clear-trip": ["hv_cathode_vset"]}.get(name, [])

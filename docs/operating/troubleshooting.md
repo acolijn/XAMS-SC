@@ -423,6 +423,22 @@ own rate*. **Do not re-send the command**; watch `VMON` fall.
 Turning on is verified immediately, because the bit is set as soon as the board
 accepts it — even though the channel then spends a minute ramping up.
 
+### A channel tripped and will not come back
+
+The status shows `TRIP` (often with `UNDER_VOLTAGE`) and the channel is off.
+A trip latches: **turn ON** and the enable switch do not clear it, which is why
+it used to take a power cycle.
+
+1. Find out why it tripped — look at `IMON` before the trip in Grafana.
+2. Press **clear trip** on `/hv` (or `xams-ctl hv-clear-trip hv_<name>_vset`).
+   It sets the setpoint to 0 V on every tripped channel on that supply first,
+   then clears the board alarm. The channel stays off.
+3. **Turn ON** — it energises at 0 V — then load and apply the working voltage.
+
+If the acknowledgement says *STAT still has TRIP*, step 3 usually clears it.
+If clearing is refused with *LOCAL mode*, switch the board to REMOTE at its
+front panel. Only if none of this works is a power cycle needed.
+
 ### Lake Shore serial settings
 
 **57600 baud, 7 data bits, ODD parity, 1 stop bit.** 7-O-1 is the 335's factory

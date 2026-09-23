@@ -321,7 +321,17 @@
       {# Energising is its own form, submitted on its own: it is a different
          decision from moving a setpoint and must not ride along with one. #}
       <td>
-        {% if c.energised is not none and not c.switched_off %}
+        {# A trip LATCHES: the channel is off and stays flagged until the
+           board alarm is cleared, and neither ON nor the enable switch does
+           that. Offered on any fault on a channel that is not energised -
+           the service checks the board's own TRIP bit and BDALARM, and says
+           so if there is nothing latched to clear. #}
+        {% if c.faults and c.energised == false %}
+          <button type="submit" form="clr-{{ c.vset_channel }}"
+                  class="hv-btn off"
+                  title="zero the setpoint, then clear the board's latched alarm. The channel stays off at 0 V."
+          >clear trip</button>
+        {% elif c.energised is not none and not c.switched_off %}
           <button type="submit" form="out-{{ c.vset_channel }}"
                   class="hv-btn {{ 'off' if c.energised else 'on' }}"
                   title="{{ 'de-energise this channel' if c.energised else 'energise; it will ramp to its setpoint' }}"
@@ -390,6 +400,17 @@
          else ("Energise " ~ c.label ~ "?\n\nIt will ramp to its loaded setpoint.")) | tojson }});'>
   <input type="hidden" name="channel" value="{{ c.vset_channel }}">
   <input type="hidden" name="on" value="{{ '0' if c.energised else '1' }}">
+</form>
+{# Clearing a trip zeroes the setpoint FIRST - of every latched channel on
+   that supply, because BDCLR is board-wide - so the channel comes back at
+   0 V and never ramps into whatever tripped it (§10a). #}
+<form method="post" action="/hv/clear" id="clr-{{ c.vset_channel }}"
+      onsubmit='return confirm({{ ("Clear the trip on " ~ c.label ~ "?\n\n"
+         ~ "Its setpoint is set to 0 V first (and that of any other tripped "
+         ~ "channel on this supply), then the board alarm is cleared. "
+         ~ "The channel stays OFF. Find out why it tripped before turning it "
+         ~ "back on.") | tojson }});'>
+  <input type="hidden" name="channel" value="{{ c.vset_channel }}">
 </form>
 {% endfor %}{% endfor %}
 

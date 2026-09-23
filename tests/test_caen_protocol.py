@@ -125,10 +125,15 @@ class TestOnlyVsetIsEverWritten:
     — it was **which** writes, and the answer is still almost none.
     """
 
-    # Exactly three parameters may be written, and the list is short on
+    # Exactly four parameters may be written, and the list is short on
     # purpose. Widening it is a decision, and this test is where that decision
     # has to be made explicitly rather than arrived at.
-    WRITABLE = ("PAR:VSET", "PAR:{par}")   # {par} is the ON/OFF formatter
+    #
+    # BDCLR was added on 23 September 2026: a trip latches, and without it
+    # the only recovery was a power cycle. It clears the alarm and changes no
+    # limit, so it stays outside the protection path (§10 rule 2).
+    WRITABLE = ("PAR:VSET", "PAR:{par}",   # {par} is the ON/OFF formatter
+                "PAR:BDCLR")
 
     def test_only_the_allowed_parameters_are_written(self):
         import inspect

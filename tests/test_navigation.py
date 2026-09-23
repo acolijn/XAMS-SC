@@ -26,6 +26,7 @@ import pytest
 #: `/operator` is deliberately absent: it sets a cookie saying who is at the
 #: keyboard, which is how the audit trail gets a name, and it touches nothing.
 INSTRUMENT_WRITES = ('action="/hv/apply"', 'action="/hv/output"',
+                     'action="/hv/clear"',
                      'action="/lakeshore/setpoint"', 'action="/lakeshore/range"',
                      'action="/flow/reset"')
 

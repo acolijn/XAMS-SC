@@ -46,9 +46,9 @@ from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
-                   ACK_LS_SETPOINT, ACK_NOTIFY, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
-                   TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
+from ..bus import (ACK_HV_CLEAR, ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE,
+                   ACK_LS_SETPOINT, ACK_NOTIFY, TOPIC_AUDIT, TOPIC_HV_CLEAR,
+                   TOPIC_HV_OUTPUT, TOPIC_HV_VSET, TOPIC_LS_RANGE, TOPIC_LS_SETPOINT,
                    TOPIC_NOTIFY, TOPIC_RELOAD, Bus)
 from ..config import (ConfigError, load, read_hv_defaults,
                       read_recipients, recipient_warnings, recipients_path,
@@ -689,6 +689,24 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
             log.warning("HV output %s -> %s by %s", channel,
                         "on" if wanted else "off", who)
             return _redirect_hv(None, f"{_short(channel)}: {detail}")
+        return _redirect_hv(f"{_short(channel)}: {answer.get('reason')}")
+
+    @app.post("/hv/clear")
+    def hv_clear(request: Request, channel: str = Form(""),
+                 by: str = Form("")):
+        """Clear a tripped channel (§10a *Recovering from a trip*).
+
+        The service zeroes the setpoint of every latched channel on that
+        supply, then clears the board alarm. The channel is left OFF at 0 V;
+        turning it back on and restoring its voltage are separate steps.
+        """
+        who = operator_of(request, by)
+        answer = state.command(TOPIC_HV_CLEAR, ACK_HV_CLEAR,
+                               {"channel": channel.strip(), "by": who},
+                               match=("channel",))
+        if answer.get("ok"):
+            log.warning("HV trip cleared on %s by %s", channel, who)
+            return _redirect_hv(None, f"{_short(channel)}: {answer.get('detail')}")
         return _redirect_hv(f"{_short(channel)}: {answer.get('reason')}")
 
     @app.post("/lakeshore/setpoint")

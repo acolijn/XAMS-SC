@@ -1589,6 +1589,23 @@ actually needs to judge:
   nor where it is going
 - whether the new value crosses an alarm threshold
 
+### Recovering from a trip
+
+Added 23 September 2026, after a channel tripped and could only be recovered by
+power-cycling the supply. A trip **latches**: the board switches the channel
+off, sets `STAT` bit 7 and raises its board alarm, and neither `ON` nor the
+enable switch clears it.
+
+The recovery is `BDCLR`, the fourth and last parameter this driver writes. It
+is board-wide, and it is sent only after **the setpoint of every latched
+channel on that supply has been written to zero and read back**. If any of those
+fails, the alarm is not cleared. The channel comes out of a clear exactly as
+safe as a freshly enabled one: off, at 0 V, one deliberate step from its
+working voltage. The same trade as the invariant above — the setpoint is lost,
+and belongs in `hv_defaults.yaml` anyway.
+
+`BDCLR` touches no limit, so it stays outside rule 2 below.
+
 ### What the software must never do
 
 1. **Never flip a channel's front-panel enable.** No such command exists, in

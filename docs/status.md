@@ -62,7 +62,8 @@ what was typed. It matters when two people operate the supplies; it has not yet,
 and rebuilding it is the remaining work on this milestone.
 
 **The write path (stage 2) is built and verified against the real supplies.**
-It writes exactly three things — `VSET`, `ON` and `OFF` — and nothing else: no
+It writes exactly four things — `VSET`, `ON`, `OFF` and, since 23 September,
+`BDCLR` to clear a latched trip — and nothing else: no
 command exists that can change `MAXV`, `RUP`, `RDW`, `TRIP` or `ISET`, that can
 enable or disable a channel, or that can take a board out of `LOCAL`. Every
 write is read back from the board before it is called successful. Each of these

@@ -29,6 +29,7 @@ STAT_BITS = {
 }
 
 BIT_ON = 0
+BIT_TRIP = 7
 BIT_DISABLED = 10
 
 # How far a setpoint must sit from zero before a DISABLED channel counts as
@@ -92,3 +93,14 @@ def is_disabled(word: int) -> bool:
     the two questions are reported separately by the board.
     """
     return bool(word & (1 << BIT_DISABLED))
+
+
+def is_tripped(word: int) -> bool:
+    """Did the board trip this channel? Bit 7.
+
+    **It latches.** The channel is switched OFF and the bit stays set until
+    the board alarm is cleared (`BDCLR`); neither ON nor the enable switch
+    clears it. That is what made a trip need a power cycle before
+    23 September 2026 (§10a *Recovering from a trip*).
+    """
+    return bool(word & (1 << BIT_TRIP))

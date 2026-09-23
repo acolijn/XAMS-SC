@@ -282,3 +282,32 @@ class TestOnlyUsableBoxesAreOffered:
 
         assert 'placeholder="no status"' in html
         assert 'name="hv_cathode_vset"' not in html
+
+
+class TestATrippedChannel:
+    """A trip latches, and before 23 September 2026 the only way back was a
+    power cycle. The page offers the clear where turning on would be."""
+
+    TRIPPED = (1 << 7) | (1 << 5)        # TRIP and UNDER_VOLTAGE, output off
+
+    def test_it_offers_clear_trip(self, page_html):
+        html = page_html(stat_word=self.TRIPPED, vmon=0.0, vset=-2250.0)
+
+        assert 'form="clr-hv_cathode_vset"' in html
+
+    def test_it_does_not_offer_turn_on_instead(self, page_html):
+        """ON is what does not work on a latched channel, and with the old
+        setpoint still loaded it is the wrong thing to try."""
+        html = page_html(stat_word=self.TRIPPED, vmon=0.0, vset=-2250.0)
+
+        assert 'form="out-hv_cathode_vset"' not in html
+
+    def test_a_healthy_channel_is_not_offered_it(self, page_html):
+        html = page_html(stat_word=0, vmon=0.0, vset=0.0)
+
+        assert 'form="clr-' not in html
+
+    def test_the_confirmation_says_the_setpoint_goes_to_zero(self, page_html):
+        html = page_html(stat_word=self.TRIPPED, vmon=0.0, vset=-2250.0)
+
+        assert "Its setpoint is set to 0 V first" in html

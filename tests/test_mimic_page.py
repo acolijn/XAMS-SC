@@ -149,7 +149,7 @@ class TestWhereControlLives:
         naming who is at the keyboard, which is how the audit trail gets a
         name, and it touches no hardware."""
         for action in ('action="/hv/apply"', 'action="/hv/output"',
-                       'action="/lakeshore/setpoint"',
+                       'action="/hv/clear"', 'action="/lakeshore/setpoint"',
                        'action="/lakeshore/range"', 'action="/flow/reset"'):
             assert action not in page, f"{action} appeared on the P&ID"
 

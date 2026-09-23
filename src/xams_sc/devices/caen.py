@@ -3,10 +3,11 @@
 Two units, both on USB, ASCII protocol over the virtual COM port. No vendor
 library.
 
-**This driver writes exactly three things: `VSET`, `ON` and `OFF`** (§10a).
-Everything else is read. There is deliberately no code here that can change
-`MAXV`, `RUP`, `RDW`, `TRIP` or `ISET` - protection stays configured on the
-instrument (§10 rule 2).
+**This driver writes exactly four things: `VSET`, `ON`, `OFF` and `BDCLR`**
+(§10a). Everything else is read. `BDCLR` clears a latched trip, and only after
+the tripped channels' setpoints are zeroed - see `_handle_clear`. There is
+deliberately no code here that can change `MAXV`, `RUP`, `RDW`, `TRIP` or
+`ISET` - protection stays configured on the instrument (§10 rule 2).
 
 **`ON` is not the enable switch, and the difference matters.** Three separate
 things decide whether there are volts on an electrode:
@@ -54,8 +55,8 @@ import time
 
 import serial
 
-from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, TOPIC_AUDIT, TOPIC_HV_OUTPUT,
-                   TOPIC_HV_VSET)
+from ..bus import (ACK_HV_CLEAR, ACK_HV_OUTPUT, ACK_HV_VSET, TOPIC_AUDIT,
+                   TOPIC_HV_CLEAR, TOPIC_HV_OUTPUT, TOPIC_HV_VSET)
 from ..config import Config
 from ..model import Measurement, Quality, iso, utcnow
 from ..scaling import apply_sign, magnitude_for
@@ -71,7 +72,7 @@ log = logging.getLogger(__name__)
 # next person to tidy up would delete them and break test_caen_protocol.
 __all__ = [
     "CaenChannelReader", "CaenService",
-    "BIT_DISABLED", "BIT_ON", "FAULT_BITS", "STAT_BITS",
+    "BIT_DISABLED", "BIT_ON", "BIT_TRIP", "FAULT_BITS", "STAT_BITS",
     "describe_status", "status_faults",
 ]
 
@@ -79,8 +80,8 @@ __all__ = [
 # and the web UI needs them, and this module imports `serial`. Re-exported
 # here because this is where anyone would look for them.
 from ..hv_status import (  # noqa: F401
-    ARMED_ABOVE_V, BIT_DISABLED, BIT_ON, FAULT_BITS, STAT_BITS,
-    describe_status, is_disabled, is_energised, status_faults)
+    ARMED_ABOVE_V, BIT_DISABLED, BIT_ON, BIT_TRIP, FAULT_BITS, STAT_BITS,
+    describe_status, is_disabled, is_energised, is_tripped, status_faults)
 
 # A setpoint that reads back further than this from what was asked means the
 # write did not take. 0.5 V is far below anything that matters on a kilovolt
@@ -360,6 +361,45 @@ class CaenChannelReader:
                            "commands. Switch the board to REMOTE at its front "
                            "panel; nothing here can do it, by design")
         return False, "the supply refused it: %s" % reply
+
+    def clear_alarm(self) -> tuple[bool, str]:
+        """Clear the board's latched alarm: `BDCLR`, the recovery from a trip.
+
+        A trip switches the channel OFF and LATCHES - `STAT` bit 7 and the
+        board alarm stay set, and neither ON nor the enable switch clears
+        them. Before this existed the only way back was a power cycle
+        (23 September 2026).
+
+        **Board-wide.** There is no per-channel form of `BDCLR`, so it clears
+        the alarm on every channel of this supply at once. The caller zeroes
+        the setpoint of every latched channel first (§10a *Recovering from a
+        trip*); this method only sends the command.
+
+        It changes no limit. `MAXV`, `ISET`, `TRIP`, `RUP`, `RDW` stay what
+        the front panel set (§10 rule 2).
+        """
+        raw = self._talk(f"$BD:{self.address},CMD:SET,PAR:BDCLR")
+        if raw is None:
+            return False, "the supply did not answer"
+        reply = raw.strip()
+        if reply.startswith("#BD:") and "CMD:OK" in reply:
+            return True, ""
+        log.warning("%s: the board refused BDCLR: %r", self.device_id, reply)
+        if "LOC:ERR" in reply:
+            return False, ("the supply is in LOCAL mode, so it refuses remote "
+                           "commands. Switch the board to REMOTE at its front "
+                           "panel; nothing here can do it, by design")
+        return False, "the supply refused it: %s" % reply
+
+    def alarm_word(self) -> int | None:
+        """`BDALARM`: one bit per channel in alarm, bit n for channel n."""
+        value = self._command("BDALARM")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
 
     def control_mode(self) -> str:
         """LOCAL or REMOTE, from the board's own BDCTR.
@@ -788,23 +828,23 @@ class CaenService(BaseService):
              "by": actor}, separators=(",", ":")))
         self._audit(name, before, after, "ok", "", actor)
 
-    def _resolve(self, name, ack_topic, actor):
+    def _resolve(self, name, ack_topic, actor, action="caen_output"):
         """(channel, reader, index) for an hv_vset name, or None after refusing."""
         channel = self.config.channels.get(name)
         if channel is None or channel.kind != "hv_vset" or not channel.enabled:
             self._refuse(name or None,
                          "%r is not an enabled hv_vset channel" % name, actor,
-                         ack_topic=ack_topic, action="caen_output")
+                         ack_topic=ack_topic, action=action)
             return None
         if self.simulate:
             self._refuse(name, "this service is simulating and holds no "
                                "instrument to write to", actor,
-                         ack_topic=ack_topic, action="caen_output")
+                         ack_topic=ack_topic, action=action)
             return None
         reader = self._readers.get(channel.device)
         if reader is None:
             self._refuse(name, "not connected to %s" % channel.device, actor,
-                         ack_topic=ack_topic, action="caen_output")
+                         ack_topic=ack_topic, action=action)
             return None
         return channel, reader, int(channel.phys)
 
@@ -1065,6 +1105,10 @@ class CaenService(BaseService):
                 if vset_mag is not None else None)
 
         if not sent:
+            if wanted_on and is_tripped(word):
+                why += (". The channel has TRIPPED, which latches until it is "
+                        "cleared: use 'clear trip' on /hv or xams-ctl "
+                        "hv-clear-trip, which zeroes the setpoint and clears it")
             self._refuse(name, why, actor, old="on" if was_on else "off",
                          new="on" if wanted_on else "off",
                          ack_topic=ACK_HV_OUTPUT, action="caen_output")
@@ -1114,9 +1158,149 @@ class CaenService(BaseService):
                     "on" if wanted_on else "off", "ok", detail, actor,
                     action="caen_output")
 
+    # --------------------------------------------------- recovering from a trip
+
+    def _handle_clear(self, topic: str, payload: str) -> None:
+        """Clear a TRIP, zeroing the setpoint first (§10a).
+
+        A trip latches: the board switches the channel off, keeps bit 7 set
+        and raises its board alarm, and neither ON nor the enable switch
+        clears that. On 23 September 2026 the only way back was a power
+        cycle. `BDCLR` is the way back, and this is the only place it is sent.
+
+        **VSET goes to zero before the alarm is cleared.** The setpoint the
+        channel tripped at is still loaded, and a recovery that turns it back
+        on ramps straight into whatever made it trip. Zeroing first means a
+        cleared channel is exactly as safe as a freshly enabled one: turning
+        it on energises at 0 V, and the working voltage is one deliberate step
+        away - `load defaults` on /hv offers it again.
+
+        **Every latched channel on the supply, not just the one asked about.**
+        `BDCLR` is board-wide; clearing one channel's trip clears them all. A
+        second tripped channel whose setpoint was left alone would come out of
+        this holding the voltage it tripped at, which is the case this exists
+        to prevent. If ANY of those zeroings fails, nothing is cleared.
+        """
+        try:
+            command = json.loads(payload) or {}
+        except ValueError:
+            self._refuse(None, "unparseable command", "",
+                         ack_topic=ACK_HV_CLEAR, action="caen_clear")
+            return
+
+        actor = str(command.get("by") or "").strip() or "unknown"
+        name = str(command.get("channel") or "").strip()
+        resolved = self._resolve(name, ACK_HV_CLEAR, actor, action="caen_clear")
+        if resolved is None:
+            return
+        channel, reader, index = resolved
+
+        siblings = [c for c in self._channels
+                    if c.kind == "hv_vset" and c.device == channel.device]
+        zeroed = []                       # (channel, before, after, magnitude)
+
+        with reader.transaction():
+            alarm = reader.alarm_word()
+            words = {int(c.phys): reader.status(int(c.phys)) for c in siblings}
+            word = words.get(index)
+            if word is None:
+                self._refuse(name, "could not read the channel's status word",
+                             actor, ack_topic=ACK_HV_CLEAR, action="caen_clear")
+                return
+
+            def latched(i):
+                w = words.get(i)
+                return ((w is not None and is_tripped(w))
+                        or (alarm is not None and bool(alarm & (1 << i))))
+
+            if not latched(index):
+                flags = describe_status(word)
+                self._refuse(
+                    name, "there is no trip to clear: the board reports %s. "
+                          "Flags other than TRIP are live conditions and go "
+                          "when their cause does" % flags, actor,
+                    ack_topic=ACK_HV_CLEAR, action="caen_clear")
+                return
+
+            for sib in siblings:
+                i = int(sib.phys)
+                if not latched(i):
+                    continue
+                before_mag = reader.monitor(i, "VSET")
+                if before_mag is not None and abs(before_mag) <= VSET_TOLERANCE_V:
+                    continue
+                sent, why = reader.set_voltage(i, 0.0)
+                after_mag = reader.monitor(i, "VSET") if sent else None
+                before = (apply_sign(before_mag, sib.sign)
+                          if before_mag is not None else None)
+                if not sent or after_mag is None or abs(after_mag) > VSET_TOLERANCE_V:
+                    why = why or ("read back %s after writing 0" % (
+                        "nothing" if after_mag is None else "%.1f V" % after_mag))
+                    self._refuse(
+                        name, "the setpoint of %s could not be zeroed (%s), so "
+                              "the trip was NOT cleared - clearing it would "
+                              "leave that channel holding the voltage it "
+                              "tripped at" % (sib.name, why), actor,
+                        old=before, new=0.0, ack_topic=ACK_HV_CLEAR,
+                        action="caen_clear")
+                    return
+                zeroed.append((sib, before, apply_sign(after_mag, sib.sign),
+                               after_mag))
+
+            sent, why = reader.clear_alarm()
+            after_word = reader.status(index) if sent else None
+            after_alarm = reader.alarm_word() if sent else None
+
+        # The zeroings happened whether or not the clear then did: publish
+        # and audit them either way, so the page and the trail match the board.
+        for sib, before, after, magnitude in zeroed:
+            self._publish_vset_now(sib, after, magnitude)
+            self._audit(sib.name, before, after, "ok",
+                        "zeroed before clearing a trip (section 10a)", actor)
+
+        if not sent:
+            self._refuse(name, why, actor, ack_topic=ACK_HV_CLEAR,
+                         action="caen_clear")
+            return
+
+        if after_word is not None:
+            self._publish_status_now(channel, after_word)
+
+        parts = []
+        if zeroed:
+            parts.append("setpoint%s zeroed: %s" % (
+                "s" if len(zeroed) > 1 else "",
+                ", ".join("%s (was %s)" % (
+                    s.name, "%+.0f V" % b if b is not None else "unknown")
+                    for s, b, _, _ in zeroed)))
+        still = []
+        if after_word is not None and is_tripped(after_word):
+            still.append("STAT still has TRIP")
+        if after_alarm is not None and after_alarm & (1 << index):
+            still.append("BDALARM still set")
+        if still:
+            # Not called a failure: whether the board drops bit 7 on BDCLR or
+            # only on the next ON is not documented, and the setpoint is zero
+            # either way, so turning it on is now safe to try.
+            parts.append("the board accepted the clear but %s; turning the "
+                         "channel on now energises at 0 V and may clear it"
+                         % " and ".join(still))
+        else:
+            parts.append("trip cleared; the channel is off at 0 V")
+        detail = "; ".join(parts)
+
+        log.warning("trip clear %s: %s, by %s", name, detail, actor)
+        self.bus.publish_raw(ACK_HV_CLEAR, json.dumps(
+            {"ok": True, "channel": name, "detail": detail, "by": actor},
+            separators=(",", ":")))
+        self._audit(name, describe_status(word),
+                    describe_status(after_word) if after_word is not None
+                    else None, "ok", detail, actor, action="caen_clear")
+
     def run(self) -> int:
         self.bus.subscribe(TOPIC_HV_VSET, self._handle_vset)
         self.bus.subscribe(TOPIC_HV_OUTPUT, self._handle_output)
+        self.bus.subscribe(TOPIC_HV_CLEAR, self._handle_clear)
         return super().run()
 
     def _relink(self, force: bool = False) -> bool:

@@ -682,6 +682,36 @@ def cmd_hv_off(args) -> int:
     return _hv_output(args, False)
 
 
+def cmd_hv_clear_trip(args) -> int:
+    """Clear a tripped HV channel (10a, *Recovering from a trip*).
+
+    A trip latches until the board alarm is cleared; before this, the only
+    way back was a power cycle. The service zeroes the setpoint of every
+    latched channel on that supply FIRST - the clear is board-wide - and only
+    then clears the alarm. The channel is left off at 0 V.
+    """
+    from ..bus import ACK_HV_CLEAR, TOPIC_HV_CLEAR, BrokerUnreachable
+
+    who = args.by or os.environ.get("USERNAME") or "unknown"
+    try:
+        with _session("xams-ctl-hv-clear", ACK_HV_CLEAR, args) as session:
+            ack = session.send(TOPIC_HV_CLEAR, ACK_HV_CLEAR,
+                               {"channel": args.channel, "by": who},
+                               match=("channel",))
+    except BrokerUnreachable:
+        print("broker not reachable; nothing was sent")
+        return 1
+
+    if ack is None:
+        print(f"  {args.channel:22s} NO ANSWER - is the caen service running?")
+        return 1
+    if not ack.get("ok"):
+        print(f"  {args.channel:22s} REFUSED: {ack.get('reason')}")
+        return 1
+    print(f"  {args.channel:22s} {ack.get('detail')}")
+    return 0
+
+
 def _set_notifications(args, enabled: bool) -> int:
     """Throw the master alarm switch from a terminal (§4.4a).
 
@@ -839,6 +869,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="one channel; default is every hv_vset channel")
     hv_off.add_argument("--by", help="who is doing this (recorded in audit)")
     hv_off.set_defaults(func=cmd_hv_off)
+
+    hv_clear = sub.add_parser(
+        "hv-clear-trip",
+        help="clear a tripped HV channel: zero its setpoint, then clear the "
+             "board alarm (the channel stays off)")
+    hv_clear.add_argument("channel", help="the hv_vset channel that tripped")
+    hv_clear.add_argument("--by", help="who is doing this (recorded in audit)")
+    hv_clear.set_defaults(func=cmd_hv_clear_trip)
 
     alarms_off = sub.add_parser(
         "alarms-off",

@@ -75,6 +75,14 @@ ACK_HV_VSET = "xams/ack/caen/vset"
 TOPIC_HV_OUTPUT = "xams/cmd/caen/output"
 ACK_HV_OUTPUT = "xams/ack/caen/output"
 
+# Recover a channel the board has TRIPPED. A trip latches - the channel is
+# switched off and stays flagged until the board alarm is cleared (BDCLR) - and
+# before this existed the only way back was a power cycle. Clearing zeroes the
+# setpoint of every latched channel on that supply first, so recovery always
+# comes back at 0 V and never ramps into whatever caused the trip (§10a).
+TOPIC_HV_CLEAR = "xams/cmd/caen/clear"
+ACK_HV_CLEAR = "xams/ack/caen/clear"
+
 # THE MASTER NOTIFICATION SWITCH (§4.4a). Turns alarm DELIVERY off and on for
 # the whole system - the engine keeps evaluating, publishing and recording,
 # and simply stops waking people up. It exists because the slow control runs

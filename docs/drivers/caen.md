@@ -3,8 +3,9 @@
 Two units, four HV channels each. Neither carries a USB serial number, so
 identity rests entirely on the `BDSNUM` query.
 
-The driver **writes exactly three things: `VSET`, `ON` and `OFF`** (§10a), each
-range-checked against `channels.yaml`, read back from the board and audited.
+The driver **writes exactly four things: `VSET`, `ON`, `OFF` and `BDCLR`**
+(§10a), each checked, read back from the board and audited. `BDCLR` clears a
+latched trip — see [Recovering from a trip](#recovering-from-a-trip).
 How to drive it is in [The web interface](../operating/webui.md#high-voltage).
 
 It **reads** the protection settings at startup and alarms on a mismatch, and
@@ -215,6 +216,37 @@ works and retries the rest, because startup's job is to refuse to run while a
 running service's job is to recover.
 
 ---
+
+## Recovering from a trip
+
+A trip **latches**. When over-current lasts past the channel's `TRIP` time the
+board ramps it down, switches it **off**, sets `STAT` bit 7 and raises its
+board alarm (`BDALARM`, one bit per channel) — and none of that clears on its
+own. Neither `ON` nor the front-panel enable switch clears it. Until 23
+September 2026 the only way back was a power cycle.
+
+`UNDER_VOLTAGE` usually shows alongside: while the board limits the current,
+`VMON` sags below `VSET`. That flag is a live condition, not a latch.
+
+The way back is **clear trip** on `/hv`, or `xams-ctl hv-clear-trip <channel>`.
+It does two things, in this order, inside one serial transaction:
+
+1. **Sets `VSET` to 0 on every latched channel on that supply.** Every one,
+   not just the one clicked: `BDCLR` has no per-channel form, and a second
+   tripped channel left holding its setpoint would come out of the clear
+   armed. If any zeroing fails, nothing is cleared.
+2. **Sends `BDCLR`**, then reads `STAT` and `BDALARM` back.
+
+The channel is left **off at 0 V**. Turning it on energises at zero; the
+working voltage is one deliberate step away (*Load defaults*). Find out why it
+tripped before putting it back.
+
+Whether `BDCLR` drops `STAT` bit 7 itself, or only the next `ON` does, is not
+in the manual. If the bit is still set afterwards the acknowledgement says so
+and suggests turning on — safe, because the setpoint is already zero.
+
+`BDCLR` changes no limit: `MAXV`, `ISET`, `TRIP`, `RUP` and `RDW` stay what the
+front panel set (§10 rule 2).
 
 ## What this driver cannot do
 

@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from ..bus import (ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE, ACK_LS_SETPOINT,
+from ..bus import (ACK_HV_CLEAR, ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE, ACK_LS_SETPOINT,
                    ACK_NOTIFY, TOPIC_ALARM, TOPIC_BACKUP, TOPIC_FLOW_RESET,
                    TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, AckInbox,
                    Bus)
@@ -321,6 +321,7 @@ class SystemState:
         self.bus.subscribe(ACK_LS_RANGE, self._on_ack)
         self.bus.subscribe(ACK_HV_VSET, self._on_ack)
         self.bus.subscribe(ACK_HV_OUTPUT, self._on_ack)
+        self.bus.subscribe(ACK_HV_CLEAR, self._on_ack)
         self.bus.subscribe(ACK_NOTIFY, self._on_ack)
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)

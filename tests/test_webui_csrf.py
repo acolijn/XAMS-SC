@@ -28,6 +28,7 @@ import pytest
 # the UI without a line here shows up as a gap rather than as silence.
 WRITES = [
     ("/hv/output", {"channel": "hv_cathode_vset", "on": "0"}),
+    ("/hv/clear", {"channel": "hv_cathode_vset"}),
     ("/hv/apply", {"hv_cathode_vset": "-1000"}),
     ("/hv/defaults", {"hv_cathode_vset": "-1000"}),
     ("/lakeshore/setpoint", {"value": "-100"}),
