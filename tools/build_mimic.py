@@ -149,6 +149,32 @@ def recolour_for_dark(root) -> None:
     print(f"  recoloured {changed} attribute(s) and {labels} unstyled label(s)")
 
 
+def relabel_aliased_tags(root) -> None:
+    """Write the SC channel name on the drawing where the P&ID tag differs.
+
+    An operator reading "PT201" on the mimic and "pmain" everywhere else —
+    alarms, Grafana, the channel table — has to know the alias to connect the
+    two. The drawing is relabelled instead, so the mimic uses the names the
+    rest of the system uses. Upper case, like every other tag on the drawing.
+
+    Each label is re-centred on where the old one was, so it stays over its
+    bubble; the widths are measured with Helvetica, metrically equal to the
+    drawing's Arial.
+    """
+    for text in root.iter(f"{{{SVG_NS}}}text"):
+        el = text.find(f"{{{SVG_NS}}}tspan")
+        tag = (el.text or "").strip() if el is not None else ""
+        if tag not in TAG_ALIASES:
+            continue
+        new = TAG_ALIASES[tag].upper()
+        size = float(text.get("font-size") or 8.04)
+        old_w = pymupdf.get_text_length(tag, fontname="helv", fontsize=size)
+        new_w = pymupdf.get_text_length(new, fontname="helv", fontsize=size)
+        # Drop the per-glyph x list: it spaces the OLD letters.
+        el.set("x", f"{(old_w - new_w) / 2:.2f}")
+        el.text = new
+
+
 def channel_for(tag: str, channels: set[str]) -> str | None:
     if tag in TAG_ALIASES:
         return TAG_ALIASES[tag] if TAG_ALIASES[tag] in channels else None
@@ -238,6 +264,7 @@ def main() -> int:
     # generated from and where anyone asking "whose drawing is this?" should
     # look (§8.2 keeps the PDF as the source).
     recolour_for_dark(root)
+    relabel_aliased_tags(root)
 
     # ROTATE THE DRAWING 90 DEGREES COUNTER-CLOCKWISE.
     #
