@@ -1,4 +1,4 @@
-"""Pull dashboards out of Grafana and into git. See DESIGN.md §12.
+r"""Pull dashboards out of Grafana and into git. See DESIGN.md §12.
 
     .venv\Scripts\python.exe tools/save_dashboard.py --save    # Grafana -> git
     .venv\Scripts\python.exe tools/save_dashboard.py --check   # report drift only

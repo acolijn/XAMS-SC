@@ -314,8 +314,9 @@ server {
 }
 
 server {
-    # `http2` on the listen line: Ubuntu 24.04 ships nginx 1.24, which
-    # predates the separate `http2 on;` directive.
+    # http2 on the listen line: Ubuntu 24.04 ships nginx 1.24, which
+    # predates the separate "http2 on;" directive. (No backticks in here:
+    # this heredoc is unquoted, so they would run as commands.)
     listen 443 ssl http2 default_server;
     listen [::]:443 ssl http2 default_server;
     server_name $SERVER_NAME;
