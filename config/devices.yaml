@@ -56,7 +56,7 @@ caen:
     # cathode / gate / anode / NaI — anode and NaI positive.
     # Read and alarmed on mismatch, never written (§8.3).
     expect:
-      0: {pol: "-", maxv: 2500, rup: 25, rdw: 50,  trip: 10.0, iset: 310}
+      0: {pol: "-", maxv: 3500, rup: 25, rdw: 50,  trip: 10.0, iset: 310}
       1: {pol: "-", maxv: 3750, rup: 50, rdw: 100, trip: 10.0, iset: 10}
       2: {pol: "+", maxv: 4500, rup: 50, rdw: 50,  trip: 10.0, iset: 10}
       3: {pol: "+", maxv: 1000, rup: 50, rdw: 50,  trip: 10.0, iset: 150}

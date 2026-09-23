@@ -281,7 +281,7 @@ channels:
   # CAEN hv_2 — serial 79. Cathode and gate negative; anode and NaI positive.
   # ------------------------------------------------------------------
   - {name: hv_cathode_vmon, device: hv_2, phys: 0, kind: hv_vmon, unit: V, sign: -1,
-     legacy: "Cathode", limits: {min: -2500.0, max: 0.0}, description: "TPC cathode"}
+     legacy: "Cathode", limits: {min: -3500.0, max: 0.0}, description: "TPC cathode"}
   - {name: hv_cathode_imon, device: hv_2, phys: 0, kind: hv_imon, unit: uA,
      description: "TPC cathode current"}
   - {name: hv_gate_vmon, device: hv_2, phys: 1, kind: hv_vmon, unit: V, sign: -1,
@@ -372,7 +372,7 @@ channels:
   - {name: hv_bs_vset, device: hv_1, phys: 3, kind: hv_vset, unit: V, sign: -1,
      limits: {min: -2000.0, max: 0.0}, default_setpoint: -600.0, description: "bottom screen setpoint"}
   - {name: hv_cathode_vset, device: hv_2, phys: 0, kind: hv_vset, unit: V, sign: -1,
-     limits: {min: -2500.0, max: 0.0}, default_setpoint: -2250.0, description: "TPC cathode setpoint"}
+     limits: {min: -3500.0, max: 0.0}, default_setpoint: -2250.0, description: "TPC cathode setpoint"}
   - {name: hv_gate_vset, device: hv_2, phys: 1, kind: hv_vset, unit: V, sign: -1,
      limits: {min: -3750.0, max: 0.0}, default_setpoint: -1750.0, description: "TPC gate setpoint"}
   - {name: hv_anode_vset, device: hv_2, phys: 2, kind: hv_vset, unit: V, sign: 1,

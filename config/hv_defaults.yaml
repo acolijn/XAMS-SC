@@ -12,14 +12,14 @@
 # Nothing here reaches an instrument. Changing a number changes what
 # a box on /hv is filled with; a person still presses Apply.
 
-updated: '2026-09-22T16:01:04+00:00'
+updated: '2026-09-23T13:09:13+00:00'
 by: AP
 defaults:
   hv_pmt_bot_vset: -750.0
-  hv_pmt_top_vset: 0.0
-  hv_ts_vset: -500.0
-  hv_bs_vset: -600.0
-  hv_cathode_vset: -2250.0
-  hv_gate_vset: -1750.0
-  hv_anode_vset: 4200.0
+  hv_pmt_top_vset: -900.0
+  hv_ts_vset: -100.0
+  hv_bs_vset: -1000.0
+  hv_cathode_vset: -2450.0
+  hv_gate_vset: -2000.0
+  hv_anode_vset: 2250.0
   hv_nai_vset: 70.0
