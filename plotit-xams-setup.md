@@ -169,14 +169,16 @@ psql "host=127.0.0.1 dbname=xams user=xams_admin" <<'SQL'
 -- writer: INSERT only, on the two tables the VM receives
 GRANT USAGE ON SCHEMA public TO xams_writer, xams_reader;
 GRANT INSERT ON meas, alarm_events TO xams_writer;
+GRANT SELECT (t, channel, src) ON meas TO xams_writer;  -- for ON CONFLICT
 -- reader: SELECT only
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO xams_reader;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO xams_reader;
 SQL
 ```
 
-`ON CONFLICT DO NOTHING` needs only INSERT rights, so the writer does not need
-UPDATE. `flow_periods` (which uses UPDATE) and `audit` (who did what, when)
+`ON CONFLICT (t, channel, src) DO NOTHING` needs INSERT plus SELECT on those
+three key columns, so it can find an existing row. It does not need UPDATE,
+and it cannot read any values. `flow_periods` (which uses UPDATE) and `audit` (who did what, when)
 **stay local only**. The VM has no use for them.
 
 **Disk.** Steady load is about five rows a second (channels are logged as

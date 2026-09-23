@@ -219,6 +219,11 @@ GRANT USAGE ON SCHEMA public TO xams_writer, xams_reader;
 -- DELETE: a compromised lab PC credential cannot rewrite history here.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM xams_writer;
 GRANT INSERT ON meas, alarm_events TO xams_writer;
+-- ON CONFLICT (t, channel, src) must look for the existing row, so it needs
+-- SELECT on exactly those columns. Without it every write is "permission
+-- denied for table meas" (found on the first connection, 23 September 2026).
+-- The key columns only: the writer still cannot read a single value.
+GRANT SELECT (t, channel, src) ON meas TO xams_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO xams_reader;
 ALTER DEFAULT PRIVILEGES FOR ROLE xams_admin IN SCHEMA public
     GRANT SELECT ON TABLES TO xams_reader;
