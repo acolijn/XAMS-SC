@@ -11,12 +11,11 @@ in; the SVG itself is a static file.
 and a mimic quietly out of date with the plant is a liability (§8.2). The tag
 check below is what makes that visible rather than silent.
 
-TAG NAMES. The drawing is the authoritative list (§3), and mostly the tags are
-our channel names in lower case. The pressures are the exception: the P&ID
-calls them **PT101–PT104** while `channels.yaml` calls them **p101–p104**,
-following what the LabVIEW system logged. Both refer to the same transmitters.
-The mapping is declared in TAG_ALIASES rather than inferred, so that the
-divergence is stated rather than hidden inside a regular expression.
+TAG NAMES. The drawing is the authoritative list (§3), and the tags are our
+channel names in upper case. That includes the pressures: the P&ID once said
+PT101-PT104 and PT201 where `channels.yaml` says p101-p104 and pmain, and the
+PDF itself was relabelled (23 September 2026) so the printed sheet in the lab,
+the mimic and the software all use one name per instrument.
 """
 
 from __future__ import annotations
@@ -39,16 +38,8 @@ OUT = ROOT / "src" / "xams_sc" / "api" / "static" / "xams_pid.svg"
 SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
 
-# A P&ID tag that is not simply the channel name lower-cased.
-TAG_ALIASES = {
-    "PT101": "p101", "PT102": "p102", "PT103": "p103", "PT104": "p104",
-    # PT201 on the drawing is what channels.yaml calls pmain, the detector
-    # pressure. Confirmed by A.P. Colijn, 17 September 2026. Without this the
-    # most important channel in the system has no place on the mimic.
-    "PT201": "pmain",
-}
-
-TAG_PATTERN = re.compile(r"[A-Z]{1,3}\d{2,3}")
+# PMAIN is the one channel whose name is not letters-then-digits.
+TAG_PATTERN = re.compile(r"[A-Z]{1,3}\d{2,3}|PMAIN")
 
 # Channels that have no instrument tag of their own, anchored to a label that
 # IS on the drawing.
@@ -149,56 +140,7 @@ def recolour_for_dark(root) -> None:
     print(f"  recoloured {changed} attribute(s) and {labels} unstyled label(s)")
 
 
-def relabel_aliased_tags(root) -> None:
-    """Write the SC channel name on the drawing where the P&ID tag differs.
-
-    An operator reading "PT201" on the mimic and "pmain" everywhere else —
-    alarms, Grafana, the channel table — has to know the alias to connect the
-    two. The drawing is relabelled instead, so the mimic uses the names the
-    rest of the system uses. Upper case, like every other tag on the drawing.
-
-    Each label is re-centred on where the old one was, so it stays over its
-    bubble; the widths are measured with Helvetica, metrically equal to the
-    drawing's Arial.
-
-    Illustrator packs several labels into ONE <tspan> ("PT102PT103TT103..."),
-    placing every glyph with its own entry in the `x` list. So a tag is found
-    by position within the run, and the replacement gets x positions of its
-    own; the other labels in the run keep theirs untouched.
-    """
-    pattern = re.compile("|".join(map(re.escape, TAG_ALIASES)))
-    for text in root.iter(f"{{{SVG_NS}}}text"):
-        size = float(text.get("font-size") or 8.04)
-        for el in text.iter(f"{{{SVG_NS}}}tspan"):
-            run = el.text or ""
-            xs = (el.get("x") or "").split()
-            if not pattern.search(run) or len(xs) != len(run):
-                continue
-            xs = [float(v) for v in xs]
-            out_text, out_x, pos = "", [], 0
-            for m in pattern.finditer(run):
-                i, j = m.span()
-                out_text += run[pos:i]
-                out_x += xs[pos:i]
-                new = TAG_ALIASES[m.group()].upper()
-                old_w = xs[j - 1] - xs[i] + pymupdf.get_text_length(
-                    run[j - 1], fontname="helv", fontsize=size)
-                new_w = pymupdf.get_text_length(new, fontname="helv", fontsize=size)
-                x = xs[i] + (old_w - new_w) / 2
-                for ch in new:
-                    out_x.append(x)
-                    x += pymupdf.get_text_length(ch, fontname="helv", fontsize=size)
-                out_text += new
-                pos = j
-            out_text += run[pos:]
-            out_x += xs[pos:]
-            el.text = out_text
-            el.set("x", " ".join(f"{v:.2f}" for v in out_x))
-
-
 def channel_for(tag: str, channels: set[str]) -> str | None:
-    if tag in TAG_ALIASES:
-        return TAG_ALIASES[tag] if TAG_ALIASES[tag] in channels else None
     return tag.lower() if tag.lower() in channels else None
 
 
@@ -292,7 +234,6 @@ def main() -> int:
     # generated from and where anyone asking "whose drawing is this?" should
     # look (§8.2 keeps the PDF as the source).
     recolour_for_dark(root)
-    relabel_aliased_tags(root)
 
     # ROTATE THE DRAWING 90 DEGREES COUNTER-CLOCKWISE.
     #
