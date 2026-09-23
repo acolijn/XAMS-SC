@@ -33,6 +33,10 @@
 #   SMTP_FROM       sender address                (default: xams-watchdog@<SERVER_NAME>)
 #   WATCHDOG_EMAIL  who is told when the lab PC goes quiet (default: none = no rule)
 #   USE_UFW         yes/no, manage the host firewall (default: yes)
+#   LETSENCRYPT     yes = get a browser-trusted certificate from Let's Encrypt,
+#                   renewed automatically; needs port 80 reachable from the
+#                   internet (default: no = self-signed, or your own in /etc/xams-vm/web)
+#   LE_EMAIL        contact address for Let's Encrypt (default: none)
 
 set -euo pipefail
 
@@ -76,7 +80,7 @@ fi
 install -d -m 755 "$CONF_DIR"
 # Command-line environment wins over the remembered file.
 declare -A GIVEN=()
-for k in LABPC_IP SERVER_NAME ANON_VIEW SMTP_HOST SMTP_FROM WATCHDOG_EMAIL USE_UFW; do
+for k in LABPC_IP SERVER_NAME ANON_VIEW SMTP_HOST SMTP_FROM WATCHDOG_EMAIL USE_UFW LETSENCRYPT LE_EMAIL; do
     if [[ -n ${!k+x} ]]; then GIVEN[$k]=${!k}; fi
 done
 if [[ -f $ENV_FILE ]]; then . "$ENV_FILE"; fi
@@ -89,6 +93,8 @@ SMTP_HOST=${SMTP_HOST:-}
 SMTP_FROM=${SMTP_FROM:-xams-watchdog@$SERVER_NAME}
 WATCHDOG_EMAIL=${WATCHDOG_EMAIL:-}
 USE_UFW=${USE_UFW:-yes}
+LETSENCRYPT=${LETSENCRYPT:-no}
+LE_EMAIL=${LE_EMAIL:-}
 
 if [[ -n $LABPC_IP && ! $LABPC_IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
     die "LABPC_IP must be one IPv4 address, got '$LABPC_IP'"
@@ -103,6 +109,8 @@ SMTP_HOST='$SMTP_HOST'
 SMTP_FROM='$SMTP_FROM'
 WATCHDOG_EMAIL='$WATCHDOG_EMAIL'
 USE_UFW='$USE_UFW'
+LETSENCRYPT='$LETSENCRYPT'
+LE_EMAIL='$LE_EMAIL'
 EOF
 chmod 644 "$ENV_FILE"
 
@@ -292,16 +300,18 @@ fi
 
 # ------------------------------------------------------------------ nginx
 say "nginx"
-install -d -m 755 "$WEB_TLS"
+install -d -m 755 "$WEB_TLS" /var/www/acme
 if [[ ! -f $WEB_TLS/fullchain.crt ]]; then
-    # A placeholder until a real certificate is put here under the same names.
+    # The fallback: a real certificate from Nikhef CT goes here under the same
+    # names, or LETSENCRYPT=yes replaces it with one that browsers trust.
     openssl req -new -x509 -days 825 -nodes -subj "/CN=$SERVER_NAME" \
         -addext "subjectAltName=DNS:$SERVER_NAME" \
         -keyout "$WEB_TLS/privkey.key" -out "$WEB_TLS/fullchain.crt" 2>/dev/null
-    warn "self-signed web certificate; browsers will complain until a real one is in $WEB_TLS"
 fi
 chmod 600 "$WEB_TLS/privkey.key"
 
+# write_nginx <certificate> <key>
+write_nginx() {
 cat > /etc/nginx/sites-available/xams-grafana <<EOF
 # Managed by $REPO_DIR/tools/vm/install_vm.sh — edits are overwritten.
 map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
@@ -310,7 +320,15 @@ server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name $SERVER_NAME;
-    return 301 https://$SERVER_NAME\$request_uri;
+
+    # Let's Encrypt proves control of the name by fetching a file from here,
+    # over plain http. Everything else goes to https.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+    location / {
+        return 301 https://$SERVER_NAME\$request_uri;
+    }
 }
 
 server {
@@ -321,8 +339,8 @@ server {
     listen [::]:443 ssl http2 default_server;
     server_name $SERVER_NAME;
 
-    ssl_certificate     $WEB_TLS/fullchain.crt;
-    ssl_certificate_key $WEB_TLS/privkey.key;
+    ssl_certificate     $1;
+    ssl_certificate_key $2;
     ssl_protocols       TLSv1.2 TLSv1.3;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
@@ -344,6 +362,37 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t -q
 systemctl enable -q nginx
 systemctl reload nginx || systemctl restart nginx
+}
+
+LE_LIVE=/etc/letsencrypt/live/$SERVER_NAME
+if [[ $LETSENCRYPT == yes && -f $LE_LIVE/fullchain.pem ]]; then
+    write_nginx "$LE_LIVE/fullchain.pem" "$LE_LIVE/privkey.pem"
+    note "Let's Encrypt certificate; certbot.timer renews it"
+elif [[ $LETSENCRYPT == yes ]]; then
+    # nginx must already be serving port 80 for the challenge, so start on
+    # the fallback certificate and switch once the real one exists.
+    write_nginx "$WEB_TLS/fullchain.crt" "$WEB_TLS/privkey.key"
+    apt-get install -yq certbot >/dev/null
+    if [[ -n $LE_EMAIL ]]; then le_contact=(--email "$LE_EMAIL"); else le_contact=(--register-unsafely-without-email); fi
+    if certbot certonly -q --non-interactive --agree-tos "${le_contact[@]}" \
+            --webroot -w /var/www/acme -d "$SERVER_NAME"; then
+        write_nginx "$LE_LIVE/fullchain.pem" "$LE_LIVE/privkey.pem"
+        note "Let's Encrypt certificate obtained; certbot.timer renews it"
+    else
+        warn "Let's Encrypt failed (is port 80 reachable from the internet?); keeping the self-signed certificate"
+    fi
+else
+    write_nginx "$WEB_TLS/fullchain.crt" "$WEB_TLS/privkey.key"
+    if openssl x509 -in "$WEB_TLS/fullchain.crt" -noout -issuer | grep -q "CN *= *$SERVER_NAME\$"; then
+        warn "self-signed web certificate; browsers will warn. Rerun with LETSENCRYPT=yes, or put a real one in $WEB_TLS"
+    fi
+fi
+
+# Renewal reloads nginx, or it would go on serving the expired certificate.
+if [[ -d /etc/letsencrypt/renewal-hooks/deploy ]]; then
+    printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+    chmod 755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+fi
 
 # ------------------------------------------------------------------ firewall
 if [[ $USE_UFW == yes ]]; then
