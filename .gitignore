@@ -16,6 +16,10 @@ src/xams_sc/api/site/
 # Credentials — never committed (§11). See config/secrets.example.yaml.
 config/secrets.yaml
 
+# The Nikhef VM's PostgreSQL certificate, pinned by postgres_remote.sslrootcert.
+# Public, but host-specific: each lab PC install fetches its own (§12).
+config/*.crt
+
 # Personal data — names, e-mail addresses and mobile numbers of the people
 # alarms are sent to. Never committed. See config/recipients.example.yaml.
 config/recipients.yaml

@@ -20,7 +20,7 @@ from pathlib import Path
 import yaml
 
 from ..bus import Bus
-from ..config import CONFIG_DIR, LOG_DIR, ConfigError, load
+from ..config import CONFIG_DIR, LOG_DIR, ROOT, ConfigError, load
 from ..model import ServiceState, utcnow
 from ..service import SingleInstance, setup_logging
 from .alarm_writer import AlarmWriter
@@ -156,13 +156,68 @@ class SinkHealth:
 
 
 
-def dsn_from_secrets() -> str | None:
-    """Build a PostgreSQL DSN from config/secrets.yaml, if it exists.
+class RemoteHealth:
+    """Watches the writer to the Nikhef VM, and says so in the log only.
 
-    Credentials never enter the repository (§11). Absent secrets is a normal
-    state, not an error: the archive runs without a database.
+    The VM is a copy for the group, not a store (§12), so nothing it suffers
+    is data loss: a row the remote writer discards is still in the JSONL
+    archive, and `tools/replay_jsonl.py` puts it back. It is therefore a
+    WARNING, never an ERROR, and it never touches the `sinks` service state.
+    A VM rebooting for updates must not turn the lab PC's status page amber —
+    the rule is that the lab PC does not depend on the VM, and that includes
+    its opinion of itself.
+
+    What it must do is say *what to replay*. The date of the first discarded
+    row is the `--since` for the replay, and it is in the message so nobody
+    has to work it out.
     """
-    path = CONFIG_DIR / "secrets.yaml"
+
+    def __init__(self, pg, label: str = "nikhef-vm", backlog_warn: int = 10_000):
+        self.pg = pg
+        self.label = label
+        self.backlog_warn = backlog_warn
+        self._seen_dropped = 0
+        self._first_drop: str | None = None
+        self._warned_backlog = False
+
+    def check(self) -> None:
+        stats = self.pg.stats
+        dropped = stats.get("dropped", 0)
+        if dropped > self._seen_dropped:
+            if self._first_drop is None:
+                self._first_drop = f"{utcnow():%Y-%m-%d}"
+            log.warning(
+                "[%s] %d row(s) not sent (%d since start): backlog full. They "
+                "are in the archive; once the VM is back, fill the gap with "
+                "`python tools/replay_jsonl.py --since %s`",
+                self.label, dropped - self._seen_dropped, dropped,
+                self._first_drop)
+            self._seen_dropped = dropped
+
+        pending = stats.get("pending", 0)
+        if pending > self.backlog_warn and not self._warned_backlog:
+            log.warning("[%s] %d rows waiting for the VM", self.label, pending)
+            self._warned_backlog = True
+        elif pending <= self.backlog_warn and self._warned_backlog:
+            log.info("[%s] backlog drained", self.label)
+            self._warned_backlog = False
+
+
+def dsn_from_secrets(key: str = "postgres",
+                     path: Path | None = None) -> str | None:
+    """Build a PostgreSQL DSN from a block of config/secrets.yaml, if present.
+
+    `key` is `postgres` for the local database and `postgres_remote` for the
+    Nikhef VM (§12). Credentials never enter the repository (§11). An absent
+    file or block is a normal state, not an error: the archive runs without a
+    database, and the lab PC runs without the VM.
+
+    `sslmode` and `sslrootcert` are passed through for the VM, whose
+    connection crosses the network. A relative `sslrootcert` is taken from the
+    repository root, so the same secrets.yaml works whatever directory the
+    service happens to start in.
+    """
+    path = path or CONFIG_DIR / "secrets.yaml"
     if not path.exists():
         return None
     try:
@@ -172,7 +227,7 @@ def dsn_from_secrets() -> str | None:
         log.warning("could not read secrets.yaml: %s", exc)
         return None
 
-    pg = secrets.get("postgres") or {}
+    pg = secrets.get(key) or {}
     if not pg.get("database"):
         return None
     parts = [
@@ -183,6 +238,14 @@ def dsn_from_secrets() -> str | None:
     ]
     if pg.get("password"):
         parts.append(f"password={pg['password']}")
+    if pg.get("sslmode"):
+        parts.append(f"sslmode={pg['sslmode']}")
+    if pg.get("sslrootcert"):
+        cert = Path(pg["sslrootcert"])
+        if not cert.is_absolute():
+            cert = ROOT / cert
+        # Quoted: the lab PC's repository lives under "XAMS SC", with a space.
+        parts.append("sslrootcert='%s'" % str(cert).replace("'", r"\'"))
     return " ".join(parts)
 
 
@@ -195,6 +258,8 @@ def main(argv=None) -> int:
                    help="PostgreSQL DSN; defaults to config/secrets.yaml")
     p.add_argument("--no-postgres", action="store_true",
                    help="archive to JSONL only")
+    p.add_argument("--no-remote", action="store_true",
+                   help="do not write to the Nikhef VM, even if configured")
     p.add_argument("--log-level", default="INFO")
     args = p.parse_args(argv)
 
@@ -265,6 +330,28 @@ def main(argv=None) -> int:
             "archiving to JSONL only"
         )
 
+    # The Nikhef VM (§12): the same two sinks again, with a different address.
+    # Measurements and alarm transitions only — flow periods need UPDATE and
+    # the audit trail stays on the lab PC, so the VM's role can be INSERT-only
+    # on two tables. Unreachable is normal here; the writer buffers and
+    # catches up, and nothing local notices.
+    remote = None
+    remote_alarms = None
+    remote_health = None
+    remote_dsn = None if (args.no_postgres or args.no_remote) \
+        else dsn_from_secrets("postgres_remote")
+    if remote_dsn:
+        # A deeper backlog than the local writer's: at about five rows a
+        # second, 300 000 is some sixteen hours, so a VM rebooted overnight
+        # costs nothing. Beyond that the archive and replay_jsonl.py cover it.
+        remote = PgWriter(bus, remote_dsn, label="nikhef-vm",
+                          max_pending=300_000)
+        remote.start()
+        remote_alarms = AlarmWriter(bus, remote_dsn, label="nikhef-vm-alarms")
+        remote_alarms.start()
+        remote_health = RemoteHealth(remote)
+        log.info("Nikhef VM writer started")
+
     bus.connect()
     # Say we are running. The bus registers a retained last-will of "stopped",
     # so without this the status page shows a healthy service as stopped for
@@ -284,6 +371,8 @@ def main(argv=None) -> int:
             stop.wait(5)
             jsonl.flush()
             health.check()
+            if remote_health:
+                remote_health.check()
             # A heartbeat, like every other service. Without one the only
             # evidence this process is alive is a RETAINED `running` that
             # outlives it: a sinks that HANGS rather than exits publishes no
@@ -308,6 +397,11 @@ def main(argv=None) -> int:
             alarm_writer.close()
         if flow_writer:
             flow_writer.close()
+        if remote:
+            remote.close()
+            log.info("[nikhef-vm] %s", remote.stats)
+        if remote_alarms:
+            remote_alarms.close()
         bus.publish_state("sinks", ServiceState.STOPPED)
         bus.disconnect()
         lock.release()
