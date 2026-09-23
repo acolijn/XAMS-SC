@@ -426,10 +426,12 @@ say "Done"
 cat <<EOF
    Dashboards:  https://$SERVER_NAME/   (admin password: sudo cat $CRED_FILE)
 
-   On the lab PC:
-   1. fetch the database certificate:
-        scp plotit-xams:$CONF_DIR/plotit-xams-ca.crt config/plotit-xams-ca.crt
-   2. add to config/secrets.yaml (the password: sudo grep WRITER $CRED_FILE):
+   On the lab PC (it has no ssh to this VM, only port 5432, so carry
+   these two over by hand, from a machine that does):
+   1. the database certificate, public -> config/plotit-xams-ca.crt:
+        ssh plotit-xams cat $CONF_DIR/plotit-xams-ca.crt
+   2. add to config/secrets.yaml, with the password from
+        ssh plotit-xams sudo grep WRITER $CRED_FILE
         postgres_remote:
           host: "$SERVER_NAME"
           port: 5432

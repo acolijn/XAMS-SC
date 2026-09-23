@@ -59,7 +59,18 @@ class TestSecrets:
         lab PC's path has a space in it."""
         dsn = dsn_from_secrets("postgres_remote", path=secrets)
         cert = ROOT / "config" / "plotit-xams-ca.crt"
-        assert f"sslrootcert='{cert}'" in dsn
+        assert f"sslrootcert='{cert.as_posix()}'" in dsn
+
+    def test_no_backslash_reaches_libpq(self, secrets):
+        """Inside a quoted DSN value libpq treats a backslash as an escape,
+        so a Windows path C:\\Users\\... reached it as C:Users... and the
+        certificate "did not exist" — which is what happened on the lab PC."""
+        from pathlib import PureWindowsPath
+
+        cert = PureWindowsPath(r"C:\Users\localadmin\XAMS SC\config\ca.crt")
+        assert "\\" not in cert.as_posix()
+        dsn = dsn_from_secrets("postgres_remote", path=secrets)
+        assert "\\" not in dsn
 
     def test_no_remote_block_means_no_remote_writer(self, tmp_path):
         """The normal state until the VM exists."""

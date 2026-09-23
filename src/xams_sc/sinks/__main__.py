@@ -244,8 +244,11 @@ def dsn_from_secrets(key: str = "postgres",
         cert = Path(pg["sslrootcert"])
         if not cert.is_absolute():
             cert = ROOT / cert
-        # Quoted: the lab PC's repository lives under "XAMS SC", with a space.
-        parts.append("sslrootcert='%s'" % str(cert).replace("'", r"\'"))
+        # Quoted, for a path with a space in it. Forward slashes, because
+        # inside quotes libpq reads a backslash as an escape: the lab PC's
+        # C:\Users\... arrived as C:Users... and the file "did not exist".
+        # Windows libpq accepts forward slashes.
+        parts.append("sslrootcert='%s'" % cert.as_posix().replace("'", r"\'"))
     return " ".join(parts)
 
 
