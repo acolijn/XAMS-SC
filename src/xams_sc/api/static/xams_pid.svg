@@ -727,21 +727,9 @@
     <text class="st5" transform="translate(412.44 209.09)"><tspan x="0" y="0">V</tspan></text>
     <text class="st5" transform="translate(417.8 209.09)"><tspan x="0" y="0">1</tspan></text>
     <text class="st5" transform="translate(422.27 209.09)"><tspan x="0" y="0">7</tspan></text>
-    <text class="st5" transform="translate(355.44 112.36)"><tspan x="0" y="0">P</tspan></text>
-    <text class="st5" transform="translate(360.44 112.36)"><tspan x="0" y="0">T</tspan></text>
-    <text class="st5" transform="translate(364.99 112.36)"><tspan x="0" y="0">1</tspan></text>
-    <text class="st5" transform="translate(369.1 112.36)"><tspan x="0" y="0">0</tspan></text>
-    <text class="st5" transform="translate(373.21 112.36)"><tspan x="0" y="0">1</tspan></text>
-    <text class="st5" transform="translate(355.44 200.08)"><tspan x="0" y="0">P</tspan></text>
-    <text class="st5" transform="translate(360.44 200.08)"><tspan x="0" y="0">T</tspan></text>
-    <text class="st5" transform="translate(364.99 200.08)"><tspan x="0" y="0">1</tspan></text>
-    <text class="st5" transform="translate(369.1 200.08)"><tspan x="0" y="0">0</tspan></text>
-    <text class="st5" transform="translate(373.21 200.08)"><tspan x="0" y="0">2</tspan></text>
-    <text class="st5" transform="translate(282.84 200.09)"><tspan x="0" y="0">P</tspan></text>
-    <text class="st5" transform="translate(287.84 200.09)"><tspan x="0" y="0">T</tspan></text>
-    <text class="st5" transform="translate(292.39 200.09)"><tspan x="0" y="0">1</tspan></text>
-    <text class="st5" transform="translate(296.5 200.09)"><tspan x="0" y="0">0</tspan></text>
-    <text class="st5" transform="translate(300.61 200.09)"><tspan x="0" y="0">3</tspan></text>
+    <text class="st5" text-anchor="middle" transform="translate(366.56 112.36)"><tspan x="0" y="0">P101</tspan></text>
+    <text class="st5" text-anchor="middle" transform="translate(366.56 200.08)"><tspan x="0" y="0">P102</tspan></text>
+    <text class="st5" text-anchor="middle" transform="translate(293.96 200.09)"><tspan x="0" y="0">P103</tspan></text>
     <text class="st5" transform="translate(253.56 200.09)"><tspan x="0" y="0">T</tspan></text>
     <text class="st5" transform="translate(258.47 200.09)"><tspan x="0" y="0">T</tspan></text>
     <text class="st5" transform="translate(263.38 200.09)"><tspan x="0" y="0">1</tspan></text>
@@ -752,11 +740,7 @@
     <text class="st5" transform="translate(183.82 200.09)"><tspan x="0" y="0">1</tspan></text>
     <text class="st5" transform="translate(188.29 200.09)"><tspan x="0" y="0">0</tspan></text>
     <text class="st5" transform="translate(192.77 200.09)"><tspan x="0" y="0">4</tspan></text>
-    <text class="st5" transform="translate(144.6 200.09)"><tspan x="0" y="0">P</tspan></text>
-    <text class="st5" transform="translate(149.6 200.09)"><tspan x="0" y="0">T</tspan></text>
-    <text class="st5" transform="translate(154.15 200.09)"><tspan x="0" y="0">1</tspan></text>
-    <text class="st5" transform="translate(158.26 200.09)"><tspan x="0" y="0">0</tspan></text>
-    <text class="st5" transform="translate(162.37 200.09)"><tspan x="0" y="0">4</tspan></text>
+    <text class="st5" text-anchor="middle" transform="translate(155.72 200.09)"><tspan x="0" y="0">P104</tspan></text>
     <text class="st5" transform="translate(123.6 79.01)"><tspan x="0" y="0">S</tspan></text>
     <text class="st5" transform="translate(128.44 79.01)"><tspan x="0" y="0">G</tspan></text>
     <text class="st5" transform="translate(134.17 79.01)"><tspan x="0" y="0">1</tspan></text>
@@ -767,11 +751,7 @@
     <text class="st5" transform="translate(223.57 79.01)"><tspan x="0" y="0">1</tspan></text>
     <text class="st5" transform="translate(227.52 79.01)"><tspan x="0" y="0">0</tspan></text>
     <text class="st5" transform="translate(231.47 79.01)"><tspan x="0" y="0">2</tspan></text>
-    <text class="st5" transform="translate(819.72 292.61)"><tspan x="0" y="0">P</tspan></text>
-    <text class="st5" transform="translate(824.72 292.61)"><tspan x="0" y="0">T</tspan></text>
-    <text class="st5" transform="translate(829.27 292.61)"><tspan x="0" y="0">2</tspan></text>
-    <text class="st5" transform="translate(833.38 292.61)"><tspan x="0" y="0">0</tspan></text>
-    <text class="st5" transform="translate(837.49 292.61)"><tspan x="0" y="0">1</tspan></text>
+    <text class="st5" text-anchor="middle" transform="translate(830.84 292.61)"><tspan x="0" y="0">PMAIN</tspan></text>
     <text class="st5" transform="translate(988.93 222.89)"><tspan x="0" y="0">T</tspan></text>
     <text class="st5" transform="translate(993.82 222.89)"><tspan x="0" y="0">u</tspan></text>
     <text class="st5" transform="translate(998.58 222.89)"><tspan x="0" y="0">r</tspan></text>
