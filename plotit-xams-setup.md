@@ -380,7 +380,7 @@ just to something that speaks TLS. `config/*.crt` is in `.gitignore`.
 ### 6c. Test the connection first, before touching the service
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import psycopg; c=psycopg.connect('host=plotit-xams.nikhef.nl dbname=xams user=xams_writer password=<pw> sslmode=verify-full sslrootcert=config/plotit-xams-ca.crt'); print(c.info.ssl_in_use)"
+.\.venv\Scripts\python.exe -c "import psycopg; c=psycopg.connect('host=plotit-xams.nikhef.nl dbname=xams user=xams_writer password=<pw> sslmode=verify-full sslrootcert=config/plotit-xams-ca.crt'); print(c.pgconn.ssl_in_use)"
 ```
 
 This should print `True`.
