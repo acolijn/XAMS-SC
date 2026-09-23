@@ -191,6 +191,33 @@
    one above the other. #}
 {% for s in supplies %}
 <div class="card" style="margin-bottom:1.2rem">
+  {# A TRIP the CAEN service has latched. It is not an alarm - nobody is
+     emailed or woken - so this banner is where it is announced. Stays until
+     somebody presses "clear trip", which is the acknowledgement. #}
+  {% for c in s.trips %}{% set t = c.trip %}
+  <div class="flash bad" style="margin:.9rem">
+    <strong>{{ c.label }} tripped at {{ (t.t or '')[11:19] }} UTC.</strong>
+    {{ t.cause }}.
+    {% if t.imon_peak is not none %}IMON peaked at
+      <strong>{{ '%.2f'|format(t.imon_peak) }} µA</strong>{% if t.vmon_at_imon_peak is not none %}
+      (at {{ '%+.0f'|format(t.vmon_at_imon_peak) }} V){% endif %} in the minute before.{% endif %}
+    {% if t.made_safe %}
+      Made safe automatically: {{ t.safe_detail }}.
+    {% else %}
+      <strong>It could NOT be made safe:</strong> {{ t.safe_detail or 'still trying' }}.
+    {% endif %}
+    {% if t.needs_power_cycle %}
+      <br><strong>It was cleared before and its output never came back, so
+      clearing does not recover it: power-cycle {{ s.id }}.</strong> Ramp the
+      other channels on {{ s.id }} down first — a power cycle takes all of
+      them.
+    {% else %}
+      <br>Find out why, then press <em>clear trip</em> on its row. It comes
+      back OFF at 0 V; if its output does not follow the setpoint once it is
+      on again, {{ s.id }} needs a power cycle.
+    {% endif %}
+  </div>
+  {% endfor %}
   {% if s.armed %}
   <div class="flash bad" style="margin:.9rem">
     <strong>{{ s.armed|length }} disabled channel{{ '' if s.armed|length == 1 else 's' }}
@@ -298,7 +325,10 @@
          its switch is flipped, and it does nothing until it is energised -
          which is a command, not the switch. #}
       <td>
-        {% if c.faults %}
+        {% if c.trip %}
+          <span class="dot bad"></span><span class="bad"
+            title="{{ c.trip.cause }}">TRIPPED</span>
+        {% elif c.faults %}
           <span class="dot bad"></span><span class="bad">{{ c.faults|join(', ') }}</span>
         {% elif c.energised is none %}
           <span class="dot bad"></span><span class="bad">no reading</span>
@@ -321,15 +351,15 @@
       {# Energising is its own form, submitted on its own: it is a different
          decision from moving a setpoint and must not ride along with one. #}
       <td>
-        {# A trip LATCHES: the channel is off and stays flagged until the
-           board alarm is cleared, and neither ON nor the enable switch does
-           that. Offered on any fault on a channel that is not energised -
-           the service checks the board's own TRIP bit and BDALARM, and says
-           so if there is nothing latched to clear. #}
-        {% if c.faults and c.energised == false %}
+        {# A trip LATCHES until somebody clears it here - that is the
+           acknowledgement, and the service refuses to turn the channel on
+           until it has one. Offered on a trip the service latched (which is
+           how the board's real trips show up: it sets no flag), on the
+           board's own TRIP bit, and on any fault on a channel that is off. #}
+        {% if c.trip or c.hw_tripped or (c.faults and c.energised == false) %}
           <button type="submit" form="clr-{{ c.vset_channel }}"
                   class="hv-btn off"
-                  title="zero the setpoint, then clear the board's latched alarm. The channel stays off at 0 V."
+                  title="zero the setpoint, switch it off and clear the board's alarm. The channel stays off at 0 V."
           >clear trip</button>
         {% elif c.energised is not none and not c.switched_off %}
           <button type="submit" form="out-{{ c.vset_channel }}"
@@ -406,10 +436,11 @@
    0 V and never ramps into whatever tripped it (§10a). #}
 <form method="post" action="/hv/clear" id="clr-{{ c.vset_channel }}"
       onsubmit='return confirm({{ ("Clear the trip on " ~ c.label ~ "?\n\n"
-         ~ "Its setpoint is set to 0 V first (and that of any other tripped "
-         ~ "channel on this supply), then the board alarm is cleared. "
-         ~ "The channel stays OFF. Find out why it tripped before turning it "
-         ~ "back on.") | tojson }});'>
+         ~ "Its setpoint is set to 0 V first and it is switched off (and so "
+         ~ "is any other tripped channel on this supply), then the board "
+         ~ "alarm is cleared. The channel stays OFF. Find out why it tripped "
+         ~ "before turning it back on, and raise it in small steps: if the "
+         ~ "output does not follow, the supply needs a power cycle.") | tojson }});'>
   <input type="hidden" name="channel" value="{{ c.vset_channel }}">
 </form>
 {% endfor %}{% endfor %}

@@ -19,8 +19,8 @@ from dataclasses import dataclass
 
 from ..bus import (ACK_HV_CLEAR, ACK_HV_OUTPUT, ACK_HV_VSET, ACK_LS_RANGE, ACK_LS_SETPOINT,
                    ACK_NOTIFY, TOPIC_ALARM, TOPIC_BACKUP, TOPIC_FLOW_RESET,
-                   TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS, AckInbox,
-                   Bus)
+                   TOPIC_HV_TRIP, TOPIC_MEAS, TOPIC_RELOAD, TOPIC_STATUS,
+                   AckInbox, Bus)
 from ..model import Measurement, Quality, ServiceState, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -89,6 +89,9 @@ class SystemState:
         self._backup: dict | None = None
         self._limits: dict | None = None
         self._notify: dict | None = None
+        # Latched HV trips, by hv_vset channel, from the CAEN service's
+        # retained records. Emptied by a clear.
+        self._hv_trips: dict[str, dict] = {}
         self.started = utcnow()
 
     # ---------------------------------------------------------------- inputs
@@ -257,6 +260,25 @@ class SystemState:
                                        "%.0f s; nothing was changed"
                                        % (topic.split("/")[2], timeout_s)}
 
+    def _on_hv_trip(self, topic: str, payload: str) -> None:
+        channel = topic.rsplit("/", 1)[-1]
+        with self._lock:
+            if not payload.strip():
+                self._hv_trips.pop(channel, None)
+                return
+            try:
+                record = json.loads(payload)
+            except ValueError:
+                return
+            if isinstance(record, dict):
+                self._hv_trips[channel] = record
+
+    def hv_trip(self, channel: str) -> dict | None:
+        """The latched trip on an hv_vset channel, or None."""
+        with self._lock:
+            record = self._hv_trips.get(channel)
+            return None if record is None else dict(record)
+
     def _on_ack(self, topic: str, payload: str) -> None:
         self._acks.deliver(topic, payload)
 
@@ -326,6 +348,7 @@ class SystemState:
         self.bus.subscribe(f"{TOPIC_MEAS}/#", self._on_measurement)
         self.bus.subscribe(f"{TOPIC_STATUS}/#", self._on_status)
         self.bus.subscribe(f"{TOPIC_ALARM}/#", self._on_alarm)
+        self.bus.subscribe(f"{TOPIC_HV_TRIP}/+", self._on_hv_trip)
         self.bus.subscribe(TOPIC_RELOAD, self._on_reload)
         self.bus.connect()
         self.bus.publish_state("webui", ServiceState.RUNNING)

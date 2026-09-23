@@ -55,7 +55,7 @@ from ..config import (ConfigError, load, read_hv_defaults,
                       validate_recipients, write_hv_defaults,
                       write_recipients)
 from ..hv_status import (ARMED_ABOVE_V, describe_status, is_disabled,
-                         is_energised, status_faults)
+                         is_energised, is_tripped, status_faults)
 from ..grafana import DriftWatcher, base_url as grafana_base_url
 from .logview import (ROTATIONS, colourise, log_files, newest_first,
                       rotated)
@@ -694,9 +694,9 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
     @app.post("/hv/clear")
     def hv_clear(request: Request, channel: str = Form(""),
                  by: str = Form("")):
-        """Clear a tripped channel (§10a *Recovering from a trip*).
+        """Acknowledge and clear a tripped channel (§10a *Recovering from a trip*).
 
-        The service zeroes the setpoint of every latched channel on that
+        The service zeroes and switches off every tripped channel on that
         supply, then clears the board alarm. The channel is left OFF at 0 V;
         turning it back on and restoring its voltage are separate steps.
         """
@@ -871,8 +871,15 @@ def create_app(broker: str = "127.0.0.1", port: int = 1883, *,
                     "vset_limits": (default_channel.limits or {}
                                     if default_channel else {}),
                     "sign": ch.sign,
+                    # The trip the CAEN service latched, or None. The board's
+                    # own flag is not required: on 23 September 2026 two
+                    # real trips set none, and a page that waited for it
+                    # offered nothing (caen.py, `_watch_trips`).
+                    "trip": state.hv_trip(vset_name),
+                    "hw_tripped": word is not None and is_tripped(word),
                 })
             supplies.append({
+                "trips": [c for c in channels if c.get("trip")],
                 "armed": [c for c in channels if c.get("armed")],
                 "id": spec["id"], "serial": spec.get("board_serial"),
                 "model": spec.get("board_name"),

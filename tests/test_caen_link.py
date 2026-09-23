@@ -49,6 +49,9 @@ class FakeReader:
         # is a read like any other and must fail the same way.
         return None if not self.alive else 1
 
+    def alarm_word(self):
+        return None if not self.alive else 0
+
     def close(self):
         self.closed = True
 

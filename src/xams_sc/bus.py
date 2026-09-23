@@ -83,6 +83,17 @@ ACK_HV_OUTPUT = "xams/ack/caen/output"
 TOPIC_HV_CLEAR = "xams/cmd/caen/clear"
 ACK_HV_CLEAR = "xams/ack/caen/clear"
 
+# A trip the CAEN service has detected, one RETAINED record per hv_vset
+# channel: `xams/hv/trip/<channel>`. Present from the moment a trip is seen
+# until somebody clears it, and emptied then. Retained so the page shows it
+# from the moment it connects and a restarted service still knows the
+# channel is waiting for an acknowledgement.
+#
+# Deliberately NOT an alarm (xams/alarm/...): an HV trip happens with people
+# in the lab, and it is nothing to wake anybody up for (A.P. Colijn,
+# 23 September 2026). It is shown on /hv, logged and audited.
+TOPIC_HV_TRIP = "xams/hv/trip"
+
 # THE MASTER NOTIFICATION SWITCH (§4.4a). Turns alarm DELIVERY off and on for
 # the whole system - the engine keeps evaluating, publishing and recording,
 # and simply stops waking people up. It exists because the slow control runs

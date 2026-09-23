@@ -62,6 +62,9 @@ class FakeReader:
     def status(self, channel):
         return self.stat if self.answers else None
 
+    def alarm_word(self):
+        return 0 if self.answers else None
+
     def monitor(self, channel, par):
         if not self.answers:
             return None
@@ -183,7 +186,7 @@ class TestPolarity:
         agrees and the audit looks clean.
 
         Today the RANGE check refuses this first, because every HV channel's
-        limits are one-sided (the cathode permits -2500..0). The reason
+        limits are one-sided (the cathode permits -3500..0). The reason
         reported is therefore the range, not the polarity - which is fine, and
         is asserted here as it actually behaves rather than as one might
         expect. The polarity check is the backstop for a channel whose limits
@@ -215,8 +218,8 @@ class TestPolarity:
 
 class TestTheSoftwareRange:
     def test_a_value_beyond_the_configured_limit_is_refused(self, service):
-        """channels.yaml permits the cathode -2500..0."""
-        ack = send(service, channel="hv_cathode_vset", value=-3000.0)
+        """channels.yaml permits the cathode -3500..0."""
+        ack = send(service, channel="hv_cathode_vset", value=-4000.0)
 
         assert ack["ok"] is False
         assert "outside the permitted range" in ack["reason"]

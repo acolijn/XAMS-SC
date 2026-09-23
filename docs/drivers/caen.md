@@ -219,31 +219,84 @@ running service's job is to recover.
 
 ## Recovering from a trip
 
-A trip **latches**. When over-current lasts past the channel's `TRIP` time the
-board ramps it down, switches it **off**, sets `STAT` bit 7 and raises its
-board alarm (`BDALARM`, one bit per channel) — and none of that clears on its
-own. Neither `ON` nor the front-panel enable switch clears it. Until 23
-September 2026 the only way back was a power cycle.
+### What a trip actually looks like
 
-`UNDER_VOLTAGE` usually shows alongside: while the board limits the current,
-`VMON` sags below `VSET`. That flag is a live condition, not a latch.
+The manual says a trip switches the channel off, sets `STAT` bit 7 and raises
+the board alarm (`BDALARM`, one bit per channel). **On `hv_2` (firmware 1.04)
+it did none of that.** The anode broke down twice on 23 September 2026 —
+20 µA at +2500 V, then 5 µA at +2400 V — and both times:
 
-The way back is **clear trip** on `/hv`, or `xams-ctl hv-clear-trip <channel>`.
-It does two things, in this order, inside one serial transaction:
+| | STAT | VMON | IMON |
+|---|---|---|---|
+| before | `1` ON | +2400.8 V | 0.1 µA |
+| breakdown | `33` ON, UNDER_VOLTAGE | +2044.7 V | **5.04 µA** |
+| 10 s later | `33` | +198 V | 0.15 µA |
+| a minute later | `33` | 0.0 V | 0.0 µA |
 
-1. **Sets `VSET` to 0 on every latched channel on that supply.** Every one,
-   not just the one clicked: `BDCLR` has no per-channel form, and a second
-   tripped channel left holding its setpoint would come out of the clear
-   armed. If any zeroing fails, nothing is cleared.
+The board cut the output and VMON decayed to zero, but the channel went on
+reporting **ON**. Bit 7 never appeared and `BDALARM` stayed 0. Turning it
+off and on, and cycling the enable switch, left the output dead: it accepted
+ON, ramped, and VMON stayed at 0 V. Only a **power cycle** brought it back.
+
+### Detection
+
+So the driver recognises a trip two ways, on every 1 Hz read (`_watch_trips`):
+
+- **the output collapsed:** the channel is ON, not ramping, `UNDER_VOLTAGE`
+  is set and VMON is below half of VSET (VSET at least 20 V), on 3 reads in
+  a row. A normal ramp has `RAMP_UP` set and cannot match. A channel
+  current-limiting just below its setpoint stays above half of it until the
+  board cuts it;
+- **the board flagged it:** `STAT` bit 7 or the channel's `BDALARM` bit, on 2
+  reads in a row. One corrupted status word is not enough: 683 and 819 were
+  each read once on 17–18 September, and both contain bit 7.
+
+### What happens then
+
+1. **It is made safe at once:** `VSET` 0, then `OFF`, audited with actor
+   `automatic (trip)`. In that order, so if `OFF` is refused (a board in
+   `LOCAL`) the setpoint is still gone. A failed attempt is retried every
+   30 s.
+2. **It is latched.** A retained record goes out on `xams/hv/trip/<channel>`
+   with the cause and the highest IMON in the minute before (the spike is
+   gone by the time the collapse is confirmed). `/hv` shows a banner and
+   `TRIPPED` on the row. The latch survives a restart of either service.
+3. **The channel cannot be turned on** until somebody clears it.
+4. **It is not an alarm.** Nobody is emailed or woken: an HV trip happens
+   with people in the lab (A.P. Colijn, 23 September 2026).
+
+### Clearing
+
+**clear trip** on `/hv`, or `xams-ctl hv-clear-trip <channel>`, is the
+acknowledgement. Inside one serial transaction:
+
+1. **Sets `VSET` to 0 and switches OFF every tripped channel on that
+   supply** — latched here, or flagged by the board. Every one, not just the
+   one clicked: `BDCLR` has no per-channel form. If any of this fails,
+   nothing is cleared.
 2. **Sends `BDCLR`**, then reads `STAT` and `BDALARM` back.
+3. **Drops the latch** and empties the retained record.
+
+A channel that is ON and has not tripped is refused. One that is off may be
+cleared even with nothing latched: that harms nothing, and it is what is left
+to try on a trip nothing saw.
 
 The channel is left **off at 0 V**. Turning it on energises at zero; the
 working voltage is one deliberate step away (*Load defaults*). Find out why it
-tripped before putting it back.
+tripped before putting it back, and raise it in small steps.
+
+**Whether `BDCLR` brings a dead DT1470ET output back is not yet known.** The
+driver finds out the next time it happens:
+
+- if a cleared channel then holds its setpoint, the log says so, and whether
+  the supply was relinked (power-cycled) in between;
+- if it collapses again first, the new trip is marked **needs power cycle**
+  and `/hv` says so. Ramp the other channels on that supply down first: a
+  power cycle takes all of them.
 
 Whether `BDCLR` drops `STAT` bit 7 itself, or only the next `ON` does, is not
-in the manual. If the bit is still set afterwards the acknowledgement says so
-and suggests turning on — safe, because the setpoint is already zero.
+in the manual either. If the bit is still set afterwards the acknowledgement
+says so and suggests turning on — safe, because the setpoint is already zero.
 
 `BDCLR` changes no limit: `MAXV`, `ISET`, `TRIP`, `RUP` and `RDW` stay what the
 front panel set (§10 rule 2).

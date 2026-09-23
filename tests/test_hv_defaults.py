@@ -40,7 +40,7 @@ def test_override_wins_over_channels_yaml(config_dir):
 
 def test_default_outside_limits_is_refused(config_dir):
     """The limit is in channels.yaml and the override cannot escape it."""
-    write_hv_defaults({"hv_cathode_vset": -2600.0}, "apc", config_dir)
+    write_hv_defaults({"hv_cathode_vset": -3600.0}, "apc", config_dir)
     with pytest.raises(ConfigError) as exc:
         load(config_dir)
     assert "outside its limits" in str(exc.value)
@@ -106,7 +106,7 @@ def test_page_shows_the_range_but_offers_no_box_for_it(webui):
     default. They are NOT an input, because that is the whole line (§4.6)."""
     http, _, _ = webui
     text = http.get("/hv/defaults").text
-    assert "-2500" in text or "−2500" in text
+    assert "-3500" in text or "−3500" in text
     assert 'name="limits"' not in text
     assert 'name="hv_cathode_vset_min"' not in text
 
@@ -130,7 +130,7 @@ def test_saving_writes_the_file_and_reloads(webui, config_dir):
 def test_saving_out_of_range_writes_nothing(webui, config_dir):
     http, app, _ = webui
     response = http.post("/hv/defaults",
-                         data={"hv_cathode_vset": "-2600", "by": "apc"},
+                         data={"hv_cathode_vset": "-3600", "by": "apc"},
                          follow_redirects=False)
     assert response.status_code == 303
     assert "error" in response.headers["location"]

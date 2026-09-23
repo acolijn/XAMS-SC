@@ -298,7 +298,7 @@ They are separate on purpose, and only the third is a command:
 | the board's `BDCTR` mode | **front panel only** | in `LOCAL` the board refuses every remote setpoint |
 | the channel **enable switch** | **front panel only** | clears `DISABLED`. Permits; energises nothing |
 | **turn ON / turn off** | this page, or `xams-ctl hv-on` / `hv-off` | energises a channel that is already enabled; it then ramps to `VSET` |
-| **clear trip** | this page, or `xams-ctl hv-clear-trip` | shown on a tripped channel instead of *turn ON*. Zeroes the setpoint of every tripped channel on that supply, then clears the latched board alarm. The channel stays off ([details](../drivers/caen.md#recovering-from-a-trip)) |
+| **clear trip** | this page, or `xams-ctl hv-clear-trip` | shown on a tripped channel instead of *turn ON*: the acknowledgement, without which the channel cannot be turned on. Zeroes and switches off every tripped channel on that supply, then clears the latched board alarm. The channel stays off ([details](../drivers/caen.md#recovering-from-a-trip)) |
 
 Nothing in the software can touch the first two, by design. Two hand gates sit
 between code and an electrode, and neither is reachable from here.

@@ -685,10 +685,12 @@ def cmd_hv_off(args) -> int:
 def cmd_hv_clear_trip(args) -> int:
     """Clear a tripped HV channel (10a, *Recovering from a trip*).
 
-    A trip latches until the board alarm is cleared; before this, the only
-    way back was a power cycle. The service zeroes the setpoint of every
-    latched channel on that supply FIRST - the clear is board-wide - and only
-    then clears the alarm. The channel is left off at 0 V.
+    A trip latches until it is cleared, and a tripped channel cannot be
+    turned on until then. The service zeroes and switches off every tripped
+    channel on that supply FIRST - the clear is board-wide - and only then
+    clears the board alarm. The channel is left off at 0 V. Works on a
+    channel whose trip the board never flagged, and on any channel that is
+    off; refused on one that is on and has not tripped.
     """
     from ..bus import ACK_HV_CLEAR, TOPIC_HV_CLEAR, BrokerUnreachable
 
@@ -872,8 +874,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     hv_clear = sub.add_parser(
         "hv-clear-trip",
-        help="clear a tripped HV channel: zero its setpoint, then clear the "
-             "board alarm (the channel stays off)")
+        help="acknowledge a tripped HV channel: zero its setpoint, switch it "
+             "off, then clear the board alarm (the channel stays off)")
     hv_clear.add_argument("channel", help="the hv_vset channel that tripped")
     hv_clear.add_argument("--by", help="who is doing this (recorded in audit)")
     hv_clear.set_defaults(func=cmd_hv_clear_trip)

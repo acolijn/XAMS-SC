@@ -311,3 +311,73 @@ class TestATrippedChannel:
         html = page_html(stat_word=self.TRIPPED, vmon=0.0, vset=-2250.0)
 
         assert "Its setpoint is set to 0 V first" in html
+
+
+@pytest.fixture
+def tripped_page(monkeypatch):
+    """/hv with the CAEN service's latched trip record on the anode.
+
+    The status word is what the board really showed after the anode's trips
+    on 23 September 2026 once the service had switched it off: nothing at
+    all. No TRIP bit, no fault. The record is the only evidence.
+    """
+    monkeypatch.setattr(app_module, "Bus", lambda **kw: RecordingBus())
+    monkeypatch.setattr(app_module, "DriftWatcher", StubDrift)
+    app = app_module.create_app()
+    state = app.state.system
+
+    def render(record):
+        def channel(name):
+            if name.endswith("_stat"):
+                return view(name, 0.0, "bits")
+            if name.endswith("_imon"):
+                return view(name, 0.0, "uA")
+            return view(name, 0.0)
+
+        monkeypatch.setattr(state, "channel", channel)
+        monkeypatch.setattr(state, "hv_trip",
+                            lambda n: record if n == "hv_anode_vset" else None)
+        response = ui_client(app).get("/hv")
+        assert response.status_code == 200
+        return response.text
+
+    return render
+
+
+TRIP_RECORD = {
+    "channel": "hv_anode_vset", "t": "2026-09-23T13:14:25.000Z",
+    "cause": "the output collapsed: VMON +3.5 V against a setpoint of "
+             "+2400.0 V", "imon_peak": 5.04, "vmon_at_imon_peak": 2044.7,
+    "made_safe": True, "safe_detail": "setpoint zeroed and output switched off",
+    "needs_power_cycle": False,
+}
+
+
+class TestATripTheBoardNeverFlagged:
+    def test_the_row_says_TRIPPED(self, tripped_page):
+        html = tripped_page(TRIP_RECORD)
+
+        assert "TRIPPED" in html
+
+    def test_clear_is_offered_and_turn_on_is_not(self, tripped_page):
+        html = tripped_page(TRIP_RECORD)
+
+        assert 'form="clr-hv_anode_vset"' in html
+        assert 'form="out-hv_anode_vset"' not in html
+
+    def test_the_banner_names_the_current_spike(self, tripped_page):
+        html = tripped_page(TRIP_RECORD)
+
+        assert "anode tripped at 13:14:25" in html
+        assert "5.04 µA" in html
+
+    def test_it_says_power_cycle_when_a_clear_did_not_help(self, tripped_page):
+        html = tripped_page(dict(TRIP_RECORD, needs_power_cycle=True))
+
+        assert "power-cycle hv_2" in html
+
+    def test_no_trip_no_banner(self, tripped_page):
+        html = tripped_page(None)
+
+        assert "TRIPPED" not in html
+        assert 'form="clr-' not in html

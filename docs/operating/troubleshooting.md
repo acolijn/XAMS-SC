@@ -425,19 +425,30 @@ accepts it — even though the channel then spends a minute ramping up.
 
 ### A channel tripped and will not come back
 
-The status shows `TRIP` (often with `UNDER_VOLTAGE`) and the channel is off.
-A trip latches: **turn ON** and the enable switch do not clear it, which is why
-it used to take a power cycle.
+`/hv` shows a red banner and `TRIPPED` on the row. The service has already set
+the setpoint to 0 and switched the channel off, and it will not turn it on
+again until the trip is cleared. The banner gives the highest IMON in the
+minute before the trip. No alarm is sent: that is deliberate.
 
-1. Find out why it tripped — look at `IMON` before the trip in Grafana.
+On these supplies a trip usually shows **no** `TRIP` flag: the board cuts the
+output and goes on reporting ON + `UNDER_VOLTAGE` while VMON falls to 0. The
+service recognises that pattern itself.
+
+1. Find out why it tripped — the IMON spike on the banner, and VMON/IMON in
+   Grafana.
 2. Press **clear trip** on `/hv` (or `xams-ctl hv-clear-trip hv_<name>_vset`).
-   It sets the setpoint to 0 V on every tripped channel on that supply first,
-   then clears the board alarm. The channel stays off.
-3. **Turn ON** — it energises at 0 V — then load and apply the working voltage.
+   It sets the setpoint to 0 V and switches off every tripped channel on that
+   supply, then clears the board alarm. The channel stays off.
+3. **Turn ON** — it energises at 0 V — then raise it in small steps.
+
+If VMON does not follow the setpoint in step 3, the output is still dead. It
+is flagged as tripped again, and the banner then says **power-cycle** the
+supply. Ramp the other channels on it down first: a power cycle takes all
+four. After a power cycle, clear the trip once more to acknowledge it.
 
 If the acknowledgement says *STAT still has TRIP*, step 3 usually clears it.
 If clearing is refused with *LOCAL mode*, switch the board to REMOTE at its
-front panel. Only if none of this works is a power cycle needed.
+front panel.
 
 ### Lake Shore serial settings
 

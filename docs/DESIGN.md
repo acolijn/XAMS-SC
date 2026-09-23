@@ -1606,6 +1606,19 @@ and belongs in `hv_defaults.yaml` anyway.
 
 `BDCLR` touches no limit, so it stays outside rule 2 below.
 
+**Revised the same evening, after two real trips on the anode set neither
+bit 7 nor `BDALARM`.** The board cut the output and went on reporting ON +
+UNDER_VOLTAGE, so nothing that waited for its flags ever fired. The driver
+now detects a trip from the output itself as well — ON, not ramping,
+UNDER_VOLTAGE, VMON below half of VSET, on 3 reads in a row — makes it safe at
+once (VSET 0, then OFF, audited as `automatic (trip)`), and latches it on the
+retained topic `xams/hv/trip/<channel>` until a person clears it. A latched
+channel cannot be turned on. A trip is **not an alarm**: nobody is notified,
+because it happens with people in the lab. Whether `BDCLR` actually recovers a
+dead output is still open; a channel that trips again after a clear without
+having worked in between is marked as needing a power cycle. Details in
+`docs/drivers/caen.md`.
+
 ### What the software must never do
 
 1. **Never flip a channel's front-panel enable.** No such command exists, in
