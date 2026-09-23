@@ -264,4 +264,4 @@ class TestTheDrawingFillsItsBox:
         build = pathlib.Path("tools/build_mimic.py").read_text()
         write = build.index("OUT.write_bytes")
 
-        assert build.index("box = tighten_viewbox(OUT)") > write
+        assert build.index("box = tighten_viewbox(OUT") > write

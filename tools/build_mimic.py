@@ -160,19 +160,40 @@ def relabel_aliased_tags(root) -> None:
     Each label is re-centred on where the old one was, so it stays over its
     bubble; the widths are measured with Helvetica, metrically equal to the
     drawing's Arial.
+
+    Illustrator packs several labels into ONE <tspan> ("PT102PT103TT103..."),
+    placing every glyph with its own entry in the `x` list. So a tag is found
+    by position within the run, and the replacement gets x positions of its
+    own; the other labels in the run keep theirs untouched.
     """
+    pattern = re.compile("|".join(map(re.escape, TAG_ALIASES)))
     for text in root.iter(f"{{{SVG_NS}}}text"):
-        el = text.find(f"{{{SVG_NS}}}tspan")
-        tag = (el.text or "").strip() if el is not None else ""
-        if tag not in TAG_ALIASES:
-            continue
-        new = TAG_ALIASES[tag].upper()
         size = float(text.get("font-size") or 8.04)
-        old_w = pymupdf.get_text_length(tag, fontname="helv", fontsize=size)
-        new_w = pymupdf.get_text_length(new, fontname="helv", fontsize=size)
-        # Drop the per-glyph x list: it spaces the OLD letters.
-        el.set("x", f"{(old_w - new_w) / 2:.2f}")
-        el.text = new
+        for el in text.iter(f"{{{SVG_NS}}}tspan"):
+            run = el.text or ""
+            xs = (el.get("x") or "").split()
+            if not pattern.search(run) or len(xs) != len(run):
+                continue
+            xs = [float(v) for v in xs]
+            out_text, out_x, pos = "", [], 0
+            for m in pattern.finditer(run):
+                i, j = m.span()
+                out_text += run[pos:i]
+                out_x += xs[pos:i]
+                new = TAG_ALIASES[m.group()].upper()
+                old_w = xs[j - 1] - xs[i] + pymupdf.get_text_length(
+                    run[j - 1], fontname="helv", fontsize=size)
+                new_w = pymupdf.get_text_length(new, fontname="helv", fontsize=size)
+                x = xs[i] + (old_w - new_w) / 2
+                for ch in new:
+                    out_x.append(x)
+                    x += pymupdf.get_text_length(ch, fontname="helv", fontsize=size)
+                out_text += new
+                pos = j
+            out_text += run[pos:]
+            out_x += xs[pos:]
+            el.text = out_text
+            el.set("x", " ".join(f"{v:.2f}" for v in out_x))
 
 
 def channel_for(tag: str, channels: set[str]) -> str | None:
@@ -190,7 +211,7 @@ INK_MARGIN_X = 18.0
 INK_MARGIN_Y = 12.0
 
 
-def tighten_viewbox(path: Path) -> tuple[float, float, float, float] | None:
+def tighten_viewbox(path: Path, labels=None) -> tuple[float, float, float, float] | None:
     """Crop the viewBox to what is actually drawn, plus a margin.
 
     The PDF is a drawing sheet, so the page is bigger than the drawing: after
@@ -227,10 +248,17 @@ def tighten_viewbox(path: Path) -> tuple[float, float, float, float] | None:
         return None                      # nothing drawn; leave it alone
 
     sx, sy = page_w / w, page_h / h
-    x0 = max(0.0, minx * sx - INK_MARGIN_X)
-    y0 = max(0.0, miny * sy - INK_MARGIN_Y)
-    x1 = min(page_w, maxx * sx + INK_MARGIN_X)
-    y1 = min(page_h, maxy * sy + INK_MARGIN_Y)
+    ix0, iy0, ix1, iy1 = minx * sx, miny * sy, maxx * sx, maxy * sy
+    # The drawing's own labels, measured from the PDF. pymupdf's SVG renderer
+    # does not draw every label an Illustrator-saved PDF produces, so the
+    # rendering alone cropped GT101, the leftmost label, in half.
+    if labels is not None:
+        ix0, iy0 = min(ix0, labels[0]), min(iy0, labels[1])
+        ix1, iy1 = max(ix1, labels[2]), max(iy1, labels[3])
+    x0 = max(0.0, ix0 - INK_MARGIN_X)
+    y0 = max(0.0, iy0 - INK_MARGIN_Y)
+    x1 = min(page_w, ix1 + INK_MARGIN_X)
+    y1 = min(page_h, iy1 + INK_MARGIN_Y)
     return (x0, y0, x1 - x0, y1 - y0)
 
 
@@ -451,7 +479,11 @@ def main() -> int:
 
     # Crop to the ink. Done after writing because it is measured by rendering
     # the finished file, values and all.
-    box = tighten_viewbox(OUT)
+    corners = [rotated(x, y) for x0, y0, x1, y1, *_ in page.get_text("words")
+               for x, y in ((x0, y0), (x1, y1))]
+    labels = (min(c[0] for c in corners), min(c[1] for c in corners),
+              max(c[0] for c in corners), max(c[1] for c in corners))
+    box = tighten_viewbox(OUT, labels)
     if box is not None:
         x, y, w, h = box
         root.set("viewBox", f"{x:.1f} {y:.1f} {w:.1f} {h:.1f}")
