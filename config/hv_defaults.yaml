@@ -12,10 +12,10 @@
 # Nothing here reaches an instrument. Changing a number changes what
 # a box on /hv is filled with; a person still presses Apply.
 
-updated: '2026-09-20T08:28:09+00:00'
+updated: '2026-09-22T16:01:04+00:00'
 by: AP
 defaults:
-  hv_pmt_bot_vset: -700.0
+  hv_pmt_bot_vset: -750.0
   hv_pmt_top_vset: 0.0
   hv_ts_vset: -500.0
   hv_bs_vset: -600.0
