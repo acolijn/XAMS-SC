@@ -29,6 +29,21 @@ Three rules hold throughout:
 
 Status: connectivity from the lab PC to `plotit-xams.nikhef.nl` has been checked ✔
 
+> **Shortcut: `tools/vm/install_vm.sh` does steps 1–5, 8 and 9 in one go**
+> (the VM is Ubuntu 24.04, so use the appendix commands where they differ).
+> It is safe to rerun, remembers its settings in `/etc/xams-vm/vm.env`, and
+> generates the passwords into `/etc/xams-vm/credentials`:
+>
+> ```bash
+> ssh plotit-xams
+> sudo git clone https://github.com/acolijn/XAMS-SC.git /opt/xams-sc
+> sudo /opt/xams-sc/tools/vm/install_vm.sh
+> # later, once known:
+> sudo LABPC_IP=<ip> WATCHDOG_EMAIL=<addr> SMTP_HOST=<relay:port> /opt/xams-sc/tools/vm/install_vm.sh
+> ```
+>
+> The steps below explain what it does, and are the manual route.
+
 ---
 
 ## Step 0: Find out before starting

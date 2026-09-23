@@ -1,0 +1,78 @@
+# The watchdog on the VM: one rule, about silence. See DESIGN.md §12.
+#
+# The alarm engine cannot report that the lab PC is off, because it runs on
+# the lab PC. This can: a different machine, a different network, a code path
+# that shares nothing with the lab. It says one thing — no measurement has
+# arrived for 15 minutes — and duplicates nothing in config/alarms.yaml.
+#
+# NO DATA AND ERRORS ALSO FIRE. An empty table, or a database this Grafana
+# cannot reach, is not "fine"; a watchdog that stays quiet when it cannot see
+# is the failure it exists to catch.
+#
+# Installed by tools/vm/install_vm.sh only when WATCHDOG_EMAIL is set; the
+# address comes from the service environment, never from this file.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: xams-watchdog
+    receivers:
+      - uid: xams-watchdog-email
+        type: email
+        settings:
+          addresses: ${XAMS_WATCHDOG_EMAIL}
+          singleEmail: true
+
+# The VM exists for this one rule, so it is the root policy.
+policies:
+  - orgId: 1
+    receiver: xams-watchdog
+    group_by: ["alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+
+groups:
+  - orgId: 1
+    name: watchdog
+    folder: XAMS
+    interval: 1m
+    rules:
+      - uid: xams-lab-pc-silent
+        title: XAMS lab PC silent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: xams-postgres
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT extract(epoch FROM now() - max(t))::float AS age_s
+                FROM meas WHERE src = 'xams'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [900] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 0s
+        annotations:
+          summary: No XAMS measurement for over 15 minutes
+          # No template values here: Grafana expands $NAME in provisioning
+          # files as environment variables, so `$values` would vanish.
+          description: >-
+            No new reading has reached plotit-xams for over 15 minutes. The
+            lab PC is off, crashed, rebooting, its services are stopped, or
+            the network to Nikhef is down. Its local alarms cannot tell you
+            this.
+        labels:
+          system: xams
