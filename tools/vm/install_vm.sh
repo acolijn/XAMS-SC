@@ -33,10 +33,21 @@
 #   SMTP_FROM       sender address                (default: xams-watchdog@<SERVER_NAME>)
 #   WATCHDOG_EMAIL  who is told when the lab PC goes quiet (default: none = no rule)
 #   USE_UFW         yes/no, manage the host firewall (default: yes)
-#   LETSENCRYPT     yes = get a browser-trusted certificate from Let's Encrypt,
-#                   renewed automatically; needs port 80 reachable from the
-#                   internet (default: no = self-signed, or your own in /etc/xams-vm/web)
-#   LE_EMAIL        contact address for Let's Encrypt (default: none)
+#   ACME            yes = get a browser-trusted web certificate by ACME (certbot),
+#                   renewed automatically (default: no = self-signed, or your
+#                   own in /etc/xams-vm/web)
+#   ACME_SERVER     the ACME directory URL (default: Let's Encrypt, which needs
+#                   port 80 reachable from the internet; Nikhef uses HARICA)
+#   ACME_EMAIL      account contact address (default: none)
+#
+# A CA that needs External Account Binding (HARICA does) takes its Key ID and
+# HMAC key from /etc/xams-vm/acme-eab, a root-only file you write yourself:
+#     ACME_EAB_KID=...
+#     ACME_EAB_HMAC=...
+# They are used once, to register the account, and the file is then deleted:
+# renewals use the registered account. They never pass through vm.env, git or
+# a command you type (certbot does receive them as arguments for the few
+# seconds it runs, which only root and the one login user could see).
 
 set -euo pipefail
 
@@ -80,7 +91,7 @@ fi
 install -d -m 755 "$CONF_DIR"
 # Command-line environment wins over the remembered file.
 declare -A GIVEN=()
-for k in LABPC_IP SERVER_NAME ANON_VIEW SMTP_HOST SMTP_FROM WATCHDOG_EMAIL USE_UFW LETSENCRYPT LE_EMAIL; do
+for k in LABPC_IP SERVER_NAME ANON_VIEW SMTP_HOST SMTP_FROM WATCHDOG_EMAIL USE_UFW ACME ACME_SERVER ACME_EMAIL; do
     if [[ -n ${!k+x} ]]; then GIVEN[$k]=${!k}; fi
 done
 if [[ -f $ENV_FILE ]]; then . "$ENV_FILE"; fi
@@ -93,8 +104,11 @@ SMTP_HOST=${SMTP_HOST:-}
 SMTP_FROM=${SMTP_FROM:-xams-watchdog@$SERVER_NAME}
 WATCHDOG_EMAIL=${WATCHDOG_EMAIL:-}
 USE_UFW=${USE_UFW:-yes}
-LETSENCRYPT=${LETSENCRYPT:-no}
-LE_EMAIL=${LE_EMAIL:-}
+# LETSENCRYPT / LE_EMAIL were the names before ACME_SERVER existed; an older
+# vm.env still carries them.
+ACME=${ACME:-${LETSENCRYPT:-no}}
+ACME_SERVER=${ACME_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+ACME_EMAIL=${ACME_EMAIL:-${LE_EMAIL:-}}
 
 if [[ -n $LABPC_IP && ! $LABPC_IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
     die "LABPC_IP must be one IPv4 address, got '$LABPC_IP'"
@@ -109,8 +123,9 @@ SMTP_HOST='$SMTP_HOST'
 SMTP_FROM='$SMTP_FROM'
 WATCHDOG_EMAIL='$WATCHDOG_EMAIL'
 USE_UFW='$USE_UFW'
-LETSENCRYPT='$LETSENCRYPT'
-LE_EMAIL='$LE_EMAIL'
+ACME='$ACME'
+ACME_SERVER='$ACME_SERVER'
+ACME_EMAIL='$ACME_EMAIL'
 EOF
 chmod 644 "$ENV_FILE"
 
@@ -308,7 +323,7 @@ say "nginx"
 install -d -m 755 "$WEB_TLS" /var/www/acme
 if [[ ! -f $WEB_TLS/fullchain.crt ]]; then
     # The fallback: a real certificate from Nikhef CT goes here under the same
-    # names, or LETSENCRYPT=yes replaces it with one that browsers trust.
+    # names, or ACME=yes replaces it with one that browsers trust.
     openssl req -new -x509 -days 825 -nodes -subj "/CN=$SERVER_NAME" \
         -addext "subjectAltName=DNS:$SERVER_NAME" \
         -keyout "$WEB_TLS/privkey.key" -out "$WEB_TLS/fullchain.crt" 2>/dev/null
@@ -369,27 +384,50 @@ systemctl enable -q nginx
 systemctl reload nginx || systemctl restart nginx
 }
 
-LE_LIVE=/etc/letsencrypt/live/$SERVER_NAME
-if [[ $LETSENCRYPT == yes && -f $LE_LIVE/fullchain.pem ]]; then
-    write_nginx "$LE_LIVE/fullchain.pem" "$LE_LIVE/privkey.pem"
-    note "Let's Encrypt certificate; certbot.timer renews it"
-elif [[ $LETSENCRYPT == yes ]]; then
-    # nginx must already be serving port 80 for the challenge, so start on
-    # the fallback certificate and switch once the real one exists.
+ACME_LIVE=/etc/letsencrypt/live/$SERVER_NAME
+EAB_FILE=$CONF_DIR/acme-eab
+# The certificate must come from the CA configured NOW. A lineage from an
+# earlier server (a Let's Encrypt attempt, say) is not reused.
+acme_current() {
+    [[ -f $ACME_LIVE/fullchain.pem ]] \
+        && grep -qF "server = $ACME_SERVER" "/etc/letsencrypt/renewal/$SERVER_NAME.conf" 2>/dev/null
+}
+if [[ $ACME == yes ]] && acme_current; then
+    write_nginx "$ACME_LIVE/fullchain.pem" "$ACME_LIVE/privkey.pem"
+    note "ACME certificate from $(awk -F'/' '{print $3}' <<<"$ACME_SERVER"); certbot.timer renews it"
+elif [[ $ACME == yes ]]; then
+    # nginx must already be serving port 80 in case the CA asks for an
+    # http-01 challenge, so start on the fallback and switch once issued.
     write_nginx "$WEB_TLS/fullchain.crt" "$WEB_TLS/privkey.key"
     apt-get install -yq certbot >/dev/null
-    if [[ -n $LE_EMAIL ]]; then le_contact=(--email "$LE_EMAIL"); else le_contact=(--register-unsafely-without-email); fi
-    if certbot certonly -q --non-interactive --agree-tos "${le_contact[@]}" \
+    acme_args=(--server "$ACME_SERVER")
+    if [[ -n $ACME_EMAIL ]]; then acme_args+=(--email "$ACME_EMAIL"); else acme_args+=(--register-unsafely-without-email); fi
+    if [[ -f $EAB_FILE ]]; then
+        chmod 600 "$EAB_FILE"
+        ACME_EAB_KID=$(sed -n 's/^ACME_EAB_KID=//p' "$EAB_FILE" | tr -d '[:space:]')
+        ACME_EAB_HMAC=$(sed -n 's/^ACME_EAB_HMAC=//p' "$EAB_FILE" | tr -d '[:space:]')
+        [[ -n $ACME_EAB_KID && -n $ACME_EAB_HMAC ]] \
+            || die "$EAB_FILE needs both ACME_EAB_KID= and ACME_EAB_HMAC= lines"
+        acme_args+=(--eab-kid "$ACME_EAB_KID" --eab-hmac-key "$ACME_EAB_HMAC")
+    fi
+    # --cert-name pins the lineage directory; --force-renewal replaces a
+    # lineage from another CA rather than keeping it because it is "not due".
+    if certbot certonly -q --non-interactive --agree-tos "${acme_args[@]}" \
+            --cert-name "$SERVER_NAME" --force-renewal \
             --webroot -w /var/www/acme -d "$SERVER_NAME"; then
-        write_nginx "$LE_LIVE/fullchain.pem" "$LE_LIVE/privkey.pem"
-        note "Let's Encrypt certificate obtained; certbot.timer renews it"
+        write_nginx "$ACME_LIVE/fullchain.pem" "$ACME_LIVE/privkey.pem"
+        note "ACME certificate obtained from $(awk -F'/' '{print $3}' <<<"$ACME_SERVER"); certbot.timer renews it"
+        if [[ -f $EAB_FILE ]]; then
+            rm -f "$EAB_FILE"
+            note "account registered; removed $EAB_FILE (renewals do not need it)"
+        fi
     else
-        warn "Let's Encrypt failed (is port 80 reachable from the internet?); keeping the self-signed certificate"
+        warn "ACME failed; keeping the current certificate. Details: /var/log/letsencrypt/letsencrypt.log"
     fi
 else
     write_nginx "$WEB_TLS/fullchain.crt" "$WEB_TLS/privkey.key"
     if openssl x509 -in "$WEB_TLS/fullchain.crt" -noout -issuer | grep -q "CN *= *$SERVER_NAME\$"; then
-        warn "self-signed web certificate; browsers will warn. Rerun with LETSENCRYPT=yes, or put a real one in $WEB_TLS"
+        warn "self-signed web certificate; browsers will warn. Rerun with ACME=yes, or put a real one in $WEB_TLS"
     fi
 fi
 
