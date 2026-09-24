@@ -174,8 +174,8 @@ does not fetch them twice.
 **Why the loopback binding matters.** Control commands travel over MQTT
 (`xams/cmd/#`), so anything that can reach the broker can set a high voltage. A
 broker listening on `0.0.0.0` — the default in most tutorials — is an
-unauthenticated control interface on the building network. If remote viewing is
-ever wanted, the answer is an SSH tunnel or a read-only mirror, never opening
+unauthenticated control interface on the building network. Remote viewing is
+done by a read-only mirror, [the Nikhef VM](vm.md), never by opening
 the port (§8).
 
 **What the script does not do:** install the XAMS services themselves as

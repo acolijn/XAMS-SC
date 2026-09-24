@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install or update the XAMS plotting VM (plotit-xams). See DESIGN.md §12 and
-# plotit-xams-setup.md, which this script carries out.
+# docs/vm.md, which describes what it does and how to run it.
 #
 # First time, on the VM:
 #

@@ -1,5 +1,5 @@
 # VM variant of ../../provisioning/datasources/xams.yaml, for plotit-xams
-# (DESIGN.md §12, plotit-xams-setup.md step 4b). Identical except for the
+# (DESIGN.md §12, docs/vm.md). Identical except for the
 # role: Grafana on the VM reads as xams_reader, which has SELECT only.
 #
 # Same uid, xams-postgres, so every dashboard in grafana/dashboards-archive/
