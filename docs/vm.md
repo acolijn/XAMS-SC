@@ -102,7 +102,9 @@ Given as environment variables in front of the command, and **remembered** in
 | `WATCHDOG_EMAIL` | who hears when the lab PC goes silent | *not set* |
 | `SMTP_FROM` | sender | `xams-watchdog@<SERVER_NAME>` |
 | `USE_UFW` | manage the host firewall | `yes` |
-| `LETSENCRYPT` | try a Let's Encrypt certificate (needs internet on port 80 — not possible here) | `no` |
+| `ACME` | get the web certificate by ACME (certbot), renewed automatically | `yes` |
+| `ACME_SERVER` | the CA's ACME directory | HARICA, Nikhef's account |
+| `ACME_EMAIL` | account contact | *not set* |
 
 Changing one is running the script with the new value, e.g.
 
@@ -118,7 +120,8 @@ sudo LABPC_IP=<new address> /opt/xams-sc/tools/vm/install_vm.sh
 | `/etc/xams-vm/vm.env` | the settings above |
 | `/etc/xams-vm/credentials` | the four generated passwords, root only |
 | `/etc/xams-vm/plotit-xams-ca.crt` | the database certificate, public — the lab PC's copy |
-| `/etc/xams-vm/web/` | the web certificate, `fullchain.crt` + `privkey.key` |
+| `/etc/letsencrypt/live/plotit-xams.nikhef.nl/` | the web certificate (certbot's directory, whichever CA) |
+| `/etc/xams-vm/web/` | the self-signed fallback, used only when `ACME=no` |
 | `/etc/postgresql/18/main/conf.d/xams.conf`, `pg_hba.conf` | written by the script; edits are overwritten |
 | `/etc/systemd/system/grafana-server.service.d/xams.conf` | Grafana's settings, as environment |
 | `/var/lib/grafana/grafana.db` | Grafana's own database: the live dashboards |
@@ -206,7 +209,7 @@ credentials file. Better, make yourself a personal Admin or Editor account under
 *Administration → Users and access → Users* and keep `admin` for emergencies.
 
 **Edit on the VM only**, then save to git from your own machine through a
-tunnel (which also sidesteps the self-signed web certificate):
+tunnel:
 
 ```bash
 ssh -L 3001:127.0.0.1:3000 plotit-xams                     # terminal 1
@@ -224,29 +227,49 @@ Nothing yet checks the VM's dashboards for unsaved edits.
 
 ## The web certificate
 
-Until Nikhef CT issues one, the site uses a self-signed certificate and
-browsers warn. The connection is encrypted all the same.
+A browser-trusted certificate from **HARICA** (GÉANT TLS), through Nikhef's
+ACME account, issued 24 September 2026 and valid to April 2027.
+**`certbot.timer` renews it by itself**, twice daily checks, and a deploy
+hook reloads nginx when it does. Nothing to do by hand.
 
-Let's Encrypt cannot be used: it has to reach the VM from the internet, and the
-Nikhef firewall — rightly — does not let it. A certificate request is ready on
-the VM, its key beside it:
-
-```
-/etc/xams-vm/web/pending/plotit-xams.csr
-/etc/xams-vm/web/pending/privkey.key
-```
-
-Send the CSR to CT; when the certificate comes back:
+The installer runs certbot with `ACME=yes` and the HARICA directory URL from
+Nikhef CT in `ACME_SERVER`. HARICA needs *External Account Binding*: a Key ID
+and HMAC key from CT, needed only once, to register the account. They went
+into a root-only file written by hand, never into git, vm.env or this chat:
 
 ```bash
-scp plotit-xams.crt plotit-xams:/tmp/
-ssh plotit-xams
-sudo mv /tmp/plotit-xams.crt /etc/xams-vm/web/fullchain.crt          # server cert first, then the chain
-sudo mv /etc/xams-vm/web/pending/privkey.key /etc/xams-vm/web/privkey.key
-sudo systemctl reload nginx
+ssh -t plotit-xams 'sudo install -m 600 /dev/null /etc/xams-vm/acme-eab && sudo nano /etc/xams-vm/acme-eab'
+#   ACME_EAB_KID=<Key ID>
+#   ACME_EAB_HMAC=<HMAC key>
 ```
 
-Later runs of the installer keep it. It expires, typically after a year.
+The installer used them to register and then **deleted the file**; renewals
+use the registered account in `/etc/letsencrypt/accounts/`. So the keys are
+needed again only on a new VM, or if that directory is lost — ask CT.
+
+Nikhef has evidently validated nikhef.nl with HARICA in advance: issuance
+worked although nothing on the internet can reach the VM. Let's Encrypt could not:
+it must fetch a file over port 80 from outside, and the Nikhef firewall does
+not let it.
+
+Check it from anywhere at Nikhef:
+
+```bash
+echo | openssl s_client -connect plotit-xams.nikhef.nl:443 2>/dev/null | openssl x509 -noout -issuer -enddate
+ssh plotit-xams 'sudo certbot certificates'
+```
+
+**Do not test renewal with `certbot renew --dry-run`.** A dry run is sent to
+Let's Encrypt's staging server, not to HARICA, and that server cannot reach the
+VM — so it always fails here, and says nothing about the real renewal. What
+matters is that `/etc/letsencrypt/renewal/plotit-xams.nikhef.nl.conf` names the
+HARICA `server` and the registered `account`, and that `systemctl list-timers
+certbot.timer` shows the timer. Renewal starts about a month before expiry.
+
+**If renewal ever fails**, the site keeps serving the old certificate until it
+expires. `journalctl -u certbot` and `/var/log/letsencrypt/letsencrypt.log`
+say why; the usual cause would be the ACME account having been withdrawn by
+CT.
 
 ---
 
