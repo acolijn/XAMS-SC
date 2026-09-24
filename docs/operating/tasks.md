@@ -121,6 +121,64 @@ the database after you delete it. Clearing the broker is the only fix.
 
 ---
 
+## Replaying the archive into a database
+
+`tools/replay_jsonl.py` copies the JSONL archive (`data/raw/`) into PostgreSQL.
+It is how a database gets back what it missed: after an outage, after a
+rebuild, or on a new machine. **Always start with `--dry-run`**, which reads
+the files and connects to nothing.
+
+**Into the local database** (the `postgres:` block of `secrets.yaml`):
+
+```powershell
+.\.venv\Scripts\python.exe tools\replay_jsonl.py --target postgres --since 2026-09-01 --dry-run
+.\.venv\Scripts\python.exe tools\replay_jsonl.py --target postgres --since 2026-09-01
+```
+
+**Into the Nikhef VM** (`postgres_remote:`, and the default when `--target`
+is left out):
+
+```powershell
+.\.venv\Scripts\python.exe tools\replay_jsonl.py --since 2026-09-01
+```
+
+| Option | |
+|---|---|
+| `--since` | first UTC day, `YYYY-MM-DD` (required) |
+| `--until` | last UTC day; default is everything up to today |
+| `--target` | `postgres` = local, `postgres_remote` = the VM (default) |
+| `--data-dir` | `data\imported` for the LabVIEW history; default `data\raw` |
+| `--dry-run` | count only, write nothing |
+
+**Safe to run twice.** Rows go in with `ON CONFLICT DO NOTHING` against the
+unique index on `(t, channel, src)`, so only what is missing is added. Each
+day prints how many rows it read and how many were **new**:
+
+```
+  2026-09-22    431,208 read          0 new
+  2026-09-23    428,977 read      1,340 new
+```
+
+`0 new` means that day was already complete. On the local database that is
+the normal answer, because the local writer seldom misses anything. It refuses
+to run against a database without the unique index, since there a replay would
+double every row.
+
+**When to use it:**
+
+- the sinks log says `DATA LOST` (local) or `[nikhef-vm] ... not sent` (VM):
+  the log line names the `--since` to use;
+- the local database was lost or rebuilt: apply `sql\schema.sql`, then replay
+  everything;
+- getting the LabVIEW history onto the VM: `--data-dir data\imported`.
+  The importer's own `--to-postgres` works for the local database only, because
+  it deletes before inserting and the VM's writer role cannot delete.
+
+How it works and why the database may be thrown away: [Storage and
+sinks](../software/storage.md#why-the-database-is-disposable).
+
+---
+
 ## Saving a Grafana dashboard
 
 After **every** editing session in the Grafana UI:
