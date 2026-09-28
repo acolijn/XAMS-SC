@@ -115,5 +115,6 @@ That is the only direction that needs the admin password, and the only time this
 command should be run.
 
 **Grafana binds to `127.0.0.1` only**, like everything else here. If remote
-viewing is ever wanted, the answer is an SSH tunnel or a read-only mirror of the
-data — never opening a port (§8).
+viewing is wanted, the answer is a read-only mirror of the data — never opening
+a port (§8). That mirror exists: [the Nikhef VM](../vm.md), with its own Grafana
+and the same dashboards.

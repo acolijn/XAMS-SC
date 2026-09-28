@@ -118,9 +118,12 @@ procedure exercises.
 **To rebuild from the archive:**
 
 1. `psql -U postgres -d xams -f sql/schema.sql` — the schema is idempotent.
-2. Replay the JSONL into it. Every record carries its own timestamp, channel
-   and `src`, so the unique index makes the replay repeatable: run it twice
-   and the row count does not change.
+2. Replay the JSONL into it:
+   `tools\replay_jsonl.py --target postgres --since <first day>` (see
+   [Replaying the archive](../operating/tasks.md#replaying-the-archive-into-a-database)).
+   Every record carries its own timestamp, channel and `src`, so the unique
+   index makes the replay repeatable: run it twice and the row count does not
+   change.
 3. Nothing else. No driver, no configuration and no dashboard is aware that
    it happened.
 
@@ -162,7 +165,8 @@ night went.
 
 **The rows discarded are not lost from the system**, only from the database:
 they are in the JSONL archive, which is what makes the database disposable in
-the first place. Replay recovers them.
+the first place. [Replay](../operating/tasks.md#replaying-the-archive-into-a-database)
+recovers them.
 
 **When the database comes back the backlog drains in one pass**, in seconds,
 not at one batch per flush interval. That matters because the slow version was

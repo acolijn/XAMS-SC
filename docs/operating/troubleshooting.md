@@ -258,7 +258,13 @@ What to do, in order:
    returns to green by itself once the queue is empty and nothing further has
    been lost.
 3. **Replay the gap** from the archive if you want the database complete for
-   plotting — the unique index makes replaying a range twice harmless.
+   plotting — the unique index makes replaying a range twice harmless:
+
+    ```powershell
+    .\.venv\Scripts\python.exe tools\replay_jsonl.py --target postgres --since <day of the outage>
+    ```
+
+    See [Replaying the archive](tasks.md#replaying-the-archive-into-a-database).
 
 A warning *before* any loss is the one to act on:
 

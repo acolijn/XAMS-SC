@@ -917,6 +917,8 @@ The same applies to everything else that opens a port:
 
 If remote viewing is wanted later, the answer is an SSH tunnel or a read-only mirror of the data — never opening the control port. Adding remote access is a decision with a security consequence, and should be recorded as such.
 
+**Recorded, 23 September 2026:** remote viewing is the read-only mirror on the Nikhef VM `plotit-xams` (§12). The lab PC opens nothing; it connects out, to one port, over TLS, as a role that can only insert. Operating it: `docs/vm.md`.
+
 ### What loopback does not protect against
 
 **The bind address is a network boundary, not a browser one.** Everything above keeps the building network out. It does nothing about the browser already running on the lab PC, and for a while this section read as though it did — which is the more dangerous kind of mistake, because it stops anyone from looking further.
@@ -1818,6 +1820,8 @@ It is also the strongest argument for setting up the VM — stronger than collea
 ### Deployment and topology
 
 The lab PC is self-contained: everything needed to acquire, store, plot and alarm runs there, and none of it depends on any other machine. A Nikhef VM, if one is added later, is a copy plus a window for the rest of the group.
+
+**The VM exists since 23 September 2026:** `plotit-xams.nikhef.nl`, installed by `tools/vm/install_vm.sh`. How to run it is in `docs/vm.md`.
 
 | Component | Lab PC | Nikhef VM (optional) |
 |---|---|---|

@@ -93,6 +93,7 @@ nav:
       - grafana/index.md
       - Editing dashboards: grafana/dashboards.md
       - Drift test: grafana/drift.md
+  - The Nikhef VM: vm.md
   - Reference:
       - Command line: reference/cli.md
       - Channels: reference/channels.md

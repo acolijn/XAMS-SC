@@ -126,6 +126,6 @@ see [Project status](../status.md).
 | Web UI | <http://127.0.0.1:8000> |
 
 **Everything binds to loopback, deliberately.** Commands travel over MQTT, so
-anything that can reach the broker can change a setpoint. If remote viewing is
-wanted, the answer is an SSH tunnel or a read-only mirror — never opening the
+anything that can reach the broker can change a setpoint. Remote viewing is
+[the Nikhef VM](../vm.md), a read-only mirror — never opening the
 control port (§8).
