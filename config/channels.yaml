@@ -281,7 +281,7 @@ channels:
   # CAEN hv_2 — serial 79. Cathode and gate negative; anode and NaI positive.
   # ------------------------------------------------------------------
   - {name: hv_cathode_vmon, device: hv_2, phys: 0, kind: hv_vmon, unit: V, sign: -1,
-     legacy: "Cathode", limits: {min: -3500.0, max: 0.0}, description: "TPC cathode"}
+     legacy: "Cathode", limits: {min: -4000.0, max: 0.0}, description: "TPC cathode"}
   - {name: hv_cathode_imon, device: hv_2, phys: 0, kind: hv_imon, unit: uA,
      description: "TPC cathode current"}
   - {name: hv_gate_vmon, device: hv_2, phys: 1, kind: hv_vmon, unit: V, sign: -1,
