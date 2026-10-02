@@ -173,14 +173,36 @@ channels:
      enabled: false, description: "not connected"}
 
   # ------------------------------------------------------------------
-  # NI 9226 (PT1000, tt201..tt207) REMOVED 2026-10-02: the unit was destroyed by
-  # an HV trip on 28 September 2026 and is sent to NI for repair. Without
-  # channels the module gets no task and no identity check, so the cDAQ runs
-  # without it and no staleness alarms are raised. The full channel map,
-  # including the 9226 block, is kept in channels.yaml.allsystem — copy it back
-  # (or restore the block) when the unit returns; a replacement unit with a
-  # different serial also needs the serial in devices.yaml.
+  # NI 9226 — PT1000, three-wire. tt201..tt207 on ai0:6; ai7 not connected.
   # ------------------------------------------------------------------
+  - {name: tt201, device: cdaq, phys: 9226/ai0, kind: rtd, unit: C, legacy: TT201,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "suction tube"}
+  # SENSOR FAILED, 17 September 2026. Reads open-circuit: swings between roughly
+  # -245 and +1327 C, identically to the unconnected 9226/ai7, where a working
+  # sensor is stable to better than 0.5 C.
+  #
+  # Disabled rather than left enabled, deliberately. Enabled it would publish
+  # quality=error every cycle and, from milestone 6, hold a permanent alarm —
+  # and an alarm that is always on is one nobody reads. The failure is tracked
+  # in DESIGN.md §16 instead, which is where it stays visible.
+  #
+  # WHEN THE SENSOR IS REPLACED: set enabled: true. Nothing else changes.
+  - {name: tt202, device: cdaq, phys: 9226/ai1, kind: rtd, unit: C, legacy: TT202,
+     enabled: false,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3},
+     description: "bottom of the detector vessel - SENSOR FAILED 2026-09-17, awaiting replacement"}
+  - {name: tt203, device: cdaq, phys: 9226/ai2, kind: rtd, unit: C, legacy: TT203,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
+  - {name: tt204, device: cdaq, phys: 9226/ai3, kind: rtd, unit: C, legacy: TT204,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
+  - {name: tt205, device: cdaq, phys: 9226/ai4, kind: rtd, unit: C, legacy: TT205,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
+  - {name: tt206, device: cdaq, phys: 9226/ai5, kind: rtd, unit: C, legacy: TT206,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "bottom of the bucket"}
+  - {name: tt207, device: cdaq, phys: 9226/ai6, kind: rtd, unit: C, legacy: TT207,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "bottom of the bucket"}
+  - {name: spare_9226_ai7, device: cdaq, phys: 9226/ai7, kind: rtd, unit: C, enabled: false,
+     rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "not connected"}
 
   # ------------------------------------------------------------------
   # NI 9216_1 — PT100, three-wire. ai7 not connected.
