@@ -170,8 +170,45 @@ class AlarmEngine:
                     return name, str(spec.get("severity", "minor"))
         return None, "ok"
 
+    def _watched(self, channel: str) -> bool:
+        """Is this channel enabled in channels.yaml? Unknown ones are watched.
+
+        A channel set `enabled: false` is one somebody has decided not to
+        read - a failed sensor, a broken readout unit. It must not alarm, and
+        it must not alarm as STALE either, which is what happens otherwise:
+        its driver stops publishing and 60 s later the silence is an alarm.
+        """
+        cfg = self.config.channels.get(channel)
+        return cfg is None or cfg.enabled
+
+    def _on_retained_alarm(self, topic: str, payload: str) -> None:
+        """Withdraw an alarm left on the broker for a channel now disabled.
+
+        A channel disabled while it was in alarm keeps that state RETAINED,
+        and after a restart this engine never sees the channel again - so
+        nothing would ever publish it back to ok, and every page would show
+        it in alarm forever. Its own `ok` comes back here too, and stops.
+        """
+        channel = topic.rsplit("/", 1)[-1]
+        if self._watched(channel) or not payload.strip():
+            return
+        try:
+            if json.loads(payload).get("state", "ok") == "ok":
+                return
+        except (ValueError, AttributeError):
+            return
+        with self._lock:
+            if channel in self._states:
+                return
+        log.info("%s: disabled in channels.yaml, withdrawing its retained "
+                 "alarm", channel)
+        self._publish(ChannelState(channel, since=utcnow()), None)
+
     def on_measurement(self, m: Measurement) -> None:
         """Evaluate one reading. Called from the bus handler."""
+        if not self._watched(m.channel):
+            # The driver may still be publishing it until it is restarted.
+            return
         with self._lock:
             first_time = m.channel not in self._states
             state = self._states.setdefault(m.channel, ChannelState(m.channel))
@@ -447,6 +484,21 @@ class AlarmEngine:
         self.min_repeat_s = float(self.defaults.get("min_repeat_minutes", 15)) * 60
         self.hysteresis_fraction = float(self.defaults.get("hysteresis", 0.02))
 
+        # A channel that has been DISABLED is forgotten entirely: its alarm is
+        # withdrawn and it is no longer checked for staleness. Withdrawn by
+        # publishing it as ok rather than deleting the retained topic, so the
+        # alarm history records that it ended instead of keeping "major" as
+        # the channel's last word.
+        with self._lock:
+            for name in [n for n in self._states if not self._watched(n)]:
+                state = self._states.pop(name)
+                if state.state == "ok" and not state.stale:
+                    continue
+                log.info("%s: disabled in channels.yaml, alarm withdrawn", name)
+                state.state, state.threshold, state.stale = "ok", None, False
+                state.since = utcnow()
+                self._publish(state, None)
+
         # A channel that no longer has any threshold must not stay in alarm on
         # a limit that has been deleted.
         with self._lock:
@@ -593,6 +645,7 @@ class AlarmEngine:
                 log.exception("could not evaluate message on %s", topic)
 
         self.bus.subscribe(f"{TOPIC_MEAS}/#", handler)
+        self.bus.subscribe(f"{TOPIC_ALARM}/+", self._on_retained_alarm)
         self._publish_limits()
         self.publish_notifications()
 

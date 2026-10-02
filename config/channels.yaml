@@ -174,8 +174,15 @@ channels:
 
   # ------------------------------------------------------------------
   # NI 9226 — PT1000, three-wire. tt201..tt207 on ai0:6; ai7 not connected.
+  #
+  # READOUT UNIT FAILED, 28 September 2026: the NI 9226 itself is broken, so
+  # every channel on it reads error. tt201 and tt203..tt207 are disabled for
+  # the same reason tt202 is below - an alarm that is always on is one nobody
+  # reads. WHEN THE MODULE IS REPLACED: remove the `enabled: false` from
+  # tt201 and tt203..tt207 (tt202 stays off until its own sensor is replaced).
   # ------------------------------------------------------------------
   - {name: tt201, device: cdaq, phys: 9226/ai0, kind: rtd, unit: C, legacy: TT201,
+     enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "suction tube"}
   # SENSOR FAILED, 17 September 2026. Reads open-circuit: swings between roughly
   # -245 and +1327 C, identically to the unconnected 9226/ai7, where a working
@@ -192,14 +199,19 @@ channels:
      rtd: {type: PT3750, r0: 1000.0, wiring: 3},
      description: "bottom of the detector vessel - SENSOR FAILED 2026-09-17, awaiting replacement"}
   - {name: tt203, device: cdaq, phys: 9226/ai2, kind: rtd, unit: C, legacy: TT203,
+     enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
   - {name: tt204, device: cdaq, phys: 9226/ai3, kind: rtd, unit: C, legacy: TT204,
+     enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
   - {name: tt205, device: cdaq, phys: 9226/ai4, kind: rtd, unit: C, legacy: TT205,
+     enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "top of the bucket"}
   - {name: tt206, device: cdaq, phys: 9226/ai5, kind: rtd, unit: C, legacy: TT206,
+     enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "bottom of the bucket"}
   - {name: tt207, device: cdaq, phys: 9226/ai6, kind: rtd, unit: C, legacy: TT207,
+     enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "bottom of the bucket"}
   - {name: spare_9226_ai7, device: cdaq, phys: 9226/ai7, kind: rtd, unit: C, enabled: false,
      rtd: {type: PT3750, r0: 1000.0, wiring: 3}, description: "not connected"}

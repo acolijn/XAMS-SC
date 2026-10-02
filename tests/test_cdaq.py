@@ -67,7 +67,9 @@ class TestTaskBuilding:
 
     def test_connected_modules_all_present(self, service):
         aliases = {m.alias for m in service._modules}
-        assert aliases == {"9207", "9216_1", "9226"}
+        # 9226 is absent: its readout unit failed on 28 September 2026 and
+        # all its channels are disabled.
+        assert aliases == {"9207", "9216_1"}
 
     def test_channels_are_ordered_by_physical_index(self, service):
         """Read order must match the order channels were added to the task,
@@ -77,24 +79,26 @@ class TestTaskBuilding:
             assert idx == sorted(idx), f"{mod.alias} channels out of order"
 
     def test_channel_count_matches_what_is_actually_wired(self, service):
-        """21 live channels: 6 voltage + 2 current + 13 RTD.
+        """15 live channels: 6 voltage + 2 current + 7 RTD.
 
         Milestone 2 read 20 (6 + 14). tt202 was then found to be a failed
         sensor — it reads open-circuit — and disabled on 17 September 2026,
         so the 9226 now contributes 6 RTDs rather than 7. On 22 September 2026
         the strain gauges sg101/sg102 were wired to the 9207's current half,
-        which had until then been read by nothing.
+        which had until then been read by nothing. On 28 September 2026 the
+        NI 9226 readout unit failed and tt201, tt203..tt207 were disabled
+        too, taking the 9226 to none.
 
         This asserts an exact count on purpose. A channel silently appearing
         or disappearing is worth a failing test: it means either the wiring
         or channels.yaml changed, and both deserve a look.
         """
         total = sum(len(m.channels) for m in service._modules)
-        assert total == 21
+        assert total == 15
         kinds = [c.kind for m in service._modules for c in m.channels]
         assert kinds.count("voltage") == 6
         assert kinds.count("current") == 2
-        assert kinds.count("rtd") == 13
+        assert kinds.count("rtd") == 7
 
     def test_failed_sensor_is_not_read(self, config, service):
         """tt202 is disabled, so no task should reference 9226/ai1."""

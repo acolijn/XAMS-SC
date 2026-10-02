@@ -145,14 +145,14 @@ class TestQualityIsAnAlarm:
     def test_error_quality_raises(self):
         """A sensor that is not reporting is not a sensor that is fine."""
         engine, _, notifier = engine_with({})
-        engine.on_measurement(reading("tt202", None, Quality.ERROR))
+        engine.on_measurement(reading("tt103", None, Quality.ERROR))
         assert engine.active()[0].state == "major"
         assert len(notifier.sent) == 1
 
     def test_recovery_from_error_clears(self):
         engine, _, _ = engine_with({})
-        engine.on_measurement(reading("tt202", None, Quality.ERROR))
-        engine.on_measurement(reading("tt202", -60.0))
+        engine.on_measurement(reading("tt103", None, Quality.ERROR))
+        engine.on_measurement(reading("tt103", -60.0))
         assert engine.active() == []
 
 
@@ -444,3 +444,78 @@ class TestTheMasterSwitch:
         second = engine.set_notifications(False, "apc")
         assert first["was"] is True and second["was"] is False
         assert second["ok"] and engine.notifications_enabled is False
+
+
+class TestDisabledChannels:
+    """A channel set `enabled: false` in channels.yaml raises nothing.
+
+    28 September 2026: the NI 9226 readout failed and tt201..tt207 held six
+    permanent major alarms. Disabling them in channels.yaml has to end those,
+    and must not turn them into staleness alarms once the driver goes quiet.
+    """
+
+    @staticmethod
+    def disable(engine, name):
+        import dataclasses
+        cfg = engine.config
+        cfg.channels = dict(cfg.channels)
+        cfg.channels[name] = dataclasses.replace(cfg.channels[name],
+                                                 enabled=False)
+        return cfg
+
+    def test_a_disabled_channel_raises_nothing(self):
+        engine, _, notifier = engine_with({})
+        self.disable(engine, "tt103")
+
+        engine.on_measurement(reading("tt103", None, Quality.ERROR))
+
+        assert engine.active() == []
+        assert notifier.sent == []
+
+    def test_disabling_withdraws_the_alarm_on_reload(self):
+        engine, bus, _ = engine_with({})
+        engine.on_measurement(reading("tt103", None, Quality.ERROR))
+        assert [s.channel for s in engine.active()] == ["tt103"]
+
+        engine.reload(self.disable(engine, "tt103"))
+
+        assert engine.active() == []
+        assert bus.last_json("xams/alarm/tt103")["state"] == "ok"
+
+    def test_it_does_not_come_back_as_stale(self):
+        engine, _, _ = engine_with({})
+        engine.on_measurement(reading("tt103", None, Quality.ERROR))
+        engine.reload(self.disable(engine, "tt103"))
+
+        engine._states.get("tt103") and setattr(
+            engine._states["tt103"], "last_seen", 0.0)
+        engine.check_staleness()
+
+        assert engine.active() == []
+
+    def test_a_retained_alarm_is_withdrawn_after_a_restart(self):
+        """A fresh engine never sees the disabled channel, so without this
+        the alarm left on the broker would show on every page forever."""
+        engine, bus, _ = engine_with({})
+        self.disable(engine, "tt103")
+
+        engine._on_retained_alarm("xams/alarm/tt103", json.dumps(
+            {"state": "major", "threshold": "quality=error"}))
+
+        assert bus.last_json("xams/alarm/tt103")["state"] == "ok"
+
+    def test_its_own_ok_does_not_loop(self):
+        engine, bus, _ = engine_with({})
+        self.disable(engine, "tt103")
+
+        engine._on_retained_alarm("xams/alarm/tt103", json.dumps({"state": "ok"}))
+
+        assert bus.published_on("xams/alarm/tt103") == []
+
+    def test_an_enabled_channel_is_left_alone(self):
+        engine, bus, _ = engine_with({})
+
+        engine._on_retained_alarm("xams/alarm/tt103", json.dumps(
+            {"state": "major"}))
+
+        assert bus.published_on("xams/alarm/tt103") == []
