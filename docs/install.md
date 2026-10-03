@@ -1,7 +1,31 @@
 # Installation
 
 **This page is for someone reinstalling the system from scratch.** To run a
-system that is already installed, see [Operating](operating/index.md).
+system that is already installed, see [Operating](operating/index.md). If the
+old PC is lost rather than merely being reinstalled, read
+[Backup and restore](operating/backup.md) first: the measurement archive comes
+back from the Nikhef cluster, and that is the one thing that cannot be redone.
+
+## Order of work
+
+The sections below are numbered by topic; on a new PC do them in this order.
+
+| Step | What | Section |
+|---|---|---|
+| 0 | Windows, network name, OpenSSH Server (with Nikhef CT); fetch the archive and the NI driver from the cluster | [Backup and restore](operating/backup.md#restoring) |
+| 1 | Git, Python ≥ 3.11, clone, `.venv`, `pip install -e ".[hardware,api,notify,docs]"`, `xams_ctl check` | [§1](#1-python) |
+| 2 | NI-DAQmx 24.5.0 from the archived cache, the NI-MAX aliases | [§2](#2-ni-daqmx-and-the-module-aliases) |
+| 3 | Mosquitto, PostgreSQL, Grafana; `config/secrets.yaml` | [§3](#3-mosquitto-postgresql-and-grafana) |
+| 4 | Put the archive back and replay it into PostgreSQL | [§7](#7-putting-the-data-back) |
+| 5 | Grafana first login, load the dashboards | [§4](#4-grafana-first-login) |
+| 6 | Check the cDAQ on its own | [§2.3](#23-check-it) |
+| 7 | Install the XAMS services as Windows services | [§5](#5-windows-services) |
+| 8 | Scheduled tasks: nightly backup, daily report | [§8](#8-scheduled-tasks-backup-and-daily-report) |
+| 9 | Read-only access for the DAQ (SSH) | [§9](#9-read-only-access-for-the-daq) |
+| 10 | Check the whole system | [§10](#10-checking-the-installation) |
+
+[§11](#11-versions-this-system-runs-with) lists the versions of everything as
+read from the lab PC; install those, not "the latest".
 
 ## 1. Python
 
@@ -140,17 +164,36 @@ That needs the broker, so it has to wait until §3 is done:
 .\.venv\Scripts\python.exe -m xams_sc.devices cdaq
 ```
 
-A good start logs the chassis serial and then all four module serials as
-confirmed, before any reading is published. Ctrl-C once you have seen them.
-Any `FATAL:` line names exactly what disagrees — a missing alias, or a serial
-that does not match `config/devices.yaml`.
+A good start logs the chassis serial and then the serial of every module that
+has enabled channels as confirmed, before any reading is published. Ctrl-C once
+you have seen them. Any `FATAL:` line names exactly what disagrees — a missing
+alias, or a serial that does not match `config/devices.yaml`.
 
-!!! warning "Fill this in at the lab PC"
+A module with **no enabled channels gets no task**, and its serial is then not
+checked either (`no task for 9216_2 - no enabled channels`). That is expected,
+not a fault.
 
-    **TODO(lab PC):** paste a known-good startup log here — the chassis line
-    and the four module lines. A recorded good output is what makes this
-    section checkable rather than merely readable, and it is the thing you
-    compare against at two in the morning.
+A known-good start, recorded on the lab PC on 28 September 2026
+(`logs\cdaq.log`; timestamps and the config hash will differ):
+
+```text
+INFO [cdaq] xams_sc.devices.cdaq: module 9207 (NI9207): 8 enabled channels
+INFO [cdaq] xams_sc.devices.cdaq: module 9216_1 (NI9216): 7 enabled channels
+INFO [cdaq] xams_sc.devices.cdaq: module 9226 (NI9226): 6 enabled channels
+INFO [cdaq] xams_sc.devices.cdaq: no task for 9216_2 - no enabled channels
+INFO [cdaq] xams_sc.bus: connected to broker 127.0.0.1:1883
+INFO [cdaq] xams_sc.devices.cdaq: chassis cDAQ1 serial 20C5E1C confirmed
+INFO [cdaq] xams_sc.devices.cdaq: module 9207 serial 20DFD57 confirmed
+INFO [cdaq] xams_sc.devices.cdaq: module 9216_1 serial 20F64D1 confirmed
+INFO [cdaq] xams_sc.devices.cdaq: module 9226 serial 2159CBB confirmed
+INFO [cdaq] xams_sc.devices.cdaq: task for 9207 ready (8 channels)
+INFO [cdaq] xams_sc.devices.cdaq: task for 9216_1 ready (7 channels)
+INFO [cdaq] xams_sc.devices.cdaq: task for 9226 ready (6 channels)
+INFO [cdaq] xams_sc.service: cdaq started (simulate=False, read 1.0s, log 10.0s, config 6652d1c)
+INFO [cdaq] xams_sc.service: state: starting -> running
+```
+
+The log prints serials without the leading zero (`20C5E1C` for `020C5E1C`).
 
 ## 3. Mosquitto, PostgreSQL and Grafana
 
@@ -179,9 +222,9 @@ done by a read-only mirror, [the Nikhef VM](vm.md), never by opening
 the port (§8).
 
 **What the script does not do:** install the XAMS services themselves as
-Windows services. Auto-start stays off while LabVIEW is the fallback, because
-every device admits only one process and a service starting at boot would lock
-LabVIEW out (§12).
+Windows services. That is [§5](#5-windows-services), deliberately a separate
+step: a service that starts at boot claims the instruments, and every device
+admits only one process.
 
 ## 4. Grafana first login
 
@@ -203,9 +246,32 @@ Grafana's own database is lost when that database is — see
 
 ## 5. Windows services
 
-The steps above leave the services running as plain processes, which **would
-not survive a reboot**. Installing them properly is the first entry in
-[what still needs doing](status.md).
+The steps above leave the XAMS services as plain processes, which would not
+survive a reboot. Install them as Windows services, in an **elevated**
+PowerShell from the repository root:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\tools\install_services.ps1
+```
+
+It downloads NSSM 2.24 into `tools\installers\` and installs eight services,
+each started at boot and restarted on a crash, running as `LocalSystem`:
+`XAMS-sinks`, `XAMS-cdaq`, `XAMS-caen`, `XAMS-lakeshore`, `XAMS-ups`,
+`XAMS-derived`, `XAMS-alarms`, `XAMS-webui`. It also builds this manual (§6).
+Idempotent: re-running updates the services in place.
+
+| Option | |
+|---|---|
+| `-Manual` | restart on crash, but not at boot |
+| `-Uninstall` | remove the services again |
+
+To hand the instruments to another program, `xams-ctl stop --for-labview` stops
+the services **and** suspends their auto-start, so a reboot does not quietly
+take the hardware back; `xams-ctl start` restores both.
+
+Check: `xams-ctl status` lists every service running, and
+`Get-Service XAMS-*` shows them `Running` / `Automatic`.
 
 ## 6. The manual
 
@@ -217,3 +283,134 @@ the building network is. `install_services.ps1` builds it. By hand:
 .\.venv\Scripts\python.exe -m pip install -e ".[docs]"
 .\.venv\Scripts\python.exe tools\build_docs.py
 ```
+
+## 7. Putting the data back
+
+Only on a replacement PC; a reinstall on the same disk keeps `data\`.
+
+1. Copy the archive back from `/data/xenon/xams_slow_control/archive/` on the
+   cluster into the repository: `data\raw\`, `data\events\`,
+   `data\quarantine\` and `data\fm101_total.json` (the flow integrator's
+   running total). If the old disk is still readable, take its `data\` folder
+   as well — it may hold the last day, which the nightly copy had not sent yet.
+2. Fill the new database from it. `setup_services.ps1` (§3) has applied
+   `sql\schema.sql`; then, dry run first:
+
+```powershell
+.\.venv\Scripts\python.exe tools\replay_jsonl.py --target postgres --since <first day> --dry-run
+.\.venv\Scripts\python.exe tools\replay_jsonl.py --target postgres --since <first day>
+```
+
+Details and options: [Routine tasks](operating/tasks.md#replaying-the-archive-into-a-database).
+The alarm history, flow periods and audit trail are only in PostgreSQL and do
+not come back ([why](operating/backup.md#the-database-is-not-entirely-an-index)).
+The Nikhef VM needs nothing: it keeps its own copy.
+
+## 8. Scheduled tasks: backup and daily report
+
+Two Windows Scheduled Tasks, registered once from an **elevated** prompt. Both
+run as `localadmin` (not as a service: the backup's SSH key lives in that
+user's profile, see [Backup and restore](operating/backup.md#how-it-runs)):
+
+```powershell
+.\tools\install_backup_task.ps1 -RunNow     # "XAMS nightly backup", daily 03:30
+.\tools\install_report_task.ps1             # "XAMS daily report",   daily 07:30
+```
+
+The backup needs, before it can work:
+
+- a **dedicated** SSH key without passphrase in
+  `C:\Users\localadmin\.ssh\` (on the lab PC `id_ed25519_xams_backup`),
+  used for nothing else;
+- two entries in `C:\Users\localadmin\.ssh\config`: `nikhef-jump`
+  (`login.nikhef.nl`) and `nikhef-backup` (`stbc-i2.nikhef.nl`, with
+  `ProxyJump nikhef-jump`), both with that key;
+- the public key authorized on a Nikhef account that can write
+  `/data/xenon/xams_slow_control/archive/`.
+
+The report needs `email.smtp_host` in `config/secrets.yaml`; without it the
+task exits with an error and nothing is sent.
+
+Check: `-RunNow` ends with a verified copy, and the overview page of the web UI
+shows `backup ok`. `Get-ScheduledTaskInfo "XAMS nightly backup"` shows
+`LastTaskResult 0`.
+
+## 9. Read-only access for the DAQ
+
+The XAMS DAQ stores the slow-control values at the start and end of every run
+in its run database. It reads them over SSH, with a key that can do exactly one
+thing: fetch `/api/state` from the web UI on this PC. Nothing on the lab PC
+connects to the DAQ.
+
+1. **OpenSSH Server**: install the Windows optional feature, start `sshd`,
+   start type Automatic.
+2. **`C:\ProgramData\ssh\sshd_config`**: comment out the Windows default
+   block at the end,
+
+    ```text
+    #Match Group administrators
+    #       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
+    ```
+
+    so that `localadmin` (an administrator) uses its own
+    `C:\Users\localadmin\.ssh\authorized_keys`. Keep
+    `PubkeyAuthentication yes`. Restart `sshd`.
+3. **`authorized_keys`**: the maintainers' personal public keys, one per line,
+   and the DAQ's key restricted to the one command:
+
+    ```text
+    command="curl.exe -s -m 10 http://127.0.0.1:8000/api/state",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 <DAQ public key> xams sc_snapshot read-only
+    ```
+
+    Write it as plain ASCII, one key per line. In PowerShell, build the lines as
+    an array (`@(...)`) and use `Set-Content -Encoding ascii`; appending to a
+    string with `+=` glues the lines together and every key on it stops working.
+4. The DAQ side (its key, its `known_hosts` after a reinstall, the test) is
+   described in the XAMS handbook, "Rebuild the slow-control PC".
+
+Check from the DAQ host: `ssh <alias>` returns the JSON state within a few
+seconds. Whatever command the client asks for, the forced command runs instead,
+so the key cannot do anything else.
+
+## 10. Checking the installation
+
+- `xams-ctl status`: every service running. The web UI
+  (<http://127.0.0.1:8000>) and Grafana (<http://127.0.0.1:3000>) show current
+  values for every enabled channel.
+- Ports: 1883, 3000, 5432 and 8000 listen on `127.0.0.1` only
+  (`Get-NetTCPConnection -State Listen`); only `sshd` (22) faces the network.
+- The cDAQ log shows the chassis and every module with enabled channels
+  confirmed (§2.3).
+- The backup ran once successfully (§8) and the overview shows it.
+- The Nikhef VM ([plotit-xams](vm.md)) shows new data.
+- The DAQ's read-only access works (§9).
+
+## 11. Versions this system runs with
+
+Read from the lab PC on 3 October 2026. Install these, not "the latest"; an
+upgrade is a separate, deliberate change.
+
+| Component | Version |
+|---|---|
+| Windows | 10 Enterprise LTSC, build 19044, 64-bit |
+| Python (`.venv`) | 3.12.0 (3.11 also works) |
+| NI-DAQmx | 24.5.0, cDAQ firmware 24.5.0 |
+| NI Measurement & Automation Explorer | 24.3.0 |
+| NI Package Manager | 25.3 |
+| Mosquitto | 2.1.2 |
+| PostgreSQL | 18.6-1 |
+| Grafana | 13.2.2 |
+| NSSM | 2.24 |
+| Git | 2.42.0 |
+
+Python packages in `.venv` (there is no lock file; these are the versions that
+run):
+
+| Package | Version | Package | Version |
+|---|---|---|---|
+| nidaqmx | 1.6.0 | fastapi | 0.141.1 |
+| pyserial | 3.5 | uvicorn | 0.53.0 |
+| lakeshore | 1.10.0 | Jinja2 | 3.1.6 |
+| pywinusb | 0.4.2 | messagebird | 2.2.0 |
+| paho-mqtt | 2.1.0 | PyYAML | 6.0.3 |
+| psycopg / psycopg-binary | 3.3.5 | mkdocs-material | 9.7.7 |
