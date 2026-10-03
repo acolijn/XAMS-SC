@@ -164,26 +164,9 @@ destination against the earlier figure reports a mismatch on a perfectly good
 backup, every single night — and a check that cries wolf nightly is the one
 people learn to ignore. The comparison is against the tar's own listing.
 
-```powershell
-# Sketch, not a working script. Copies anything written since the last
-# successful run, then records the new high-water mark.
-$dest  = "TODO@TODO:TODO/xams-backup"     # see below
-$stamp = "$env:LOCALAPPDATA\xams-backup.stamp"
-
-$since = if (Test-Path $stamp) { Get-Content $stamp | Get-Date }
-         else { [DateTime]::MinValue }
-
-$files = Get-ChildItem data\raw, data\events -File |
-         Where-Object { $_.LastWriteTime -gt $since }
-
-foreach ($f in $files) { scp -i $key $f.FullName $dest }
-scp -i $key data\fm101_total.json $dest
-
-(Get-Date -Format o) | Set-Content $stamp
-```
-
-Run it from Task Scheduler, as a task that runs whether or not anyone is logged
-in.
+The script is `tools\backup.ps1`; it is registered as the Scheduled Task
+`XAMS nightly backup` by `tools\install_backup_task.ps1` and runs whether or
+not anyone is logged in. On a new PC: [Installation §8](../install.md#8-scheduled-tasks-backup-and-daily-report).
 
 ### Making a failed backup visible
 
@@ -311,9 +294,6 @@ The order matters, and only the first step is urgent.
     write.
 
 !!! warning "Still to do"
-
-    **The nightly copy itself.** Until it exists the measurement archive has
-    one copy, on the lab PC.
 
     **The restore rehearsal.** Pull one day back and replay it into a scratch
     database. The replay path is claimed by the architecture and has never been

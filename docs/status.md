@@ -18,7 +18,7 @@ the next before the current one passes.
 
 | 8 | Control path | **in progress** — Lake Shore and HV both writable from the UI and the CLI; the shared staged plan of §10a is not built |
 | 9 | Procedures | not started |
-| 10 | Production | **partly** — running as services, auto-start, nightly backup |
+| 10 | Production | **partly** — running as services, auto-start, nightly backup, daily report; the restore rehearsal is outstanding |
 
 ### Where milestone 8 actually stands, 18 September 2026
 
@@ -226,26 +226,14 @@ carries **19 live channels, not 20**.
 
 ## What still needs doing
 
-**One action, now:** the services run as plain processes and **would not
-survive a reboot**. To install them as Windows services that start at boot and
-restart on crash, in an elevated PowerShell:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-.\tools\install_services.ps1
-```
-
-`-Manual` installs them with restart-on-crash but not at boot; `-Uninstall`
-reverses it. Afterwards **`xams-ctl stop --for-labview`** is what hands the
-hardware back: it stops the services *and* suspends auto-start, so a Windows
-Update reboot at three in the morning does not quietly reclaim the
-instruments.
+**Done:** the services run as Windows services that start at boot and restart
+on a crash (`tools\install_services.ps1`, NSSM; verified running on
+3 October 2026). How to (re)install them: [Installation §5](install.md#5-windows-services).
 
 Then, roughly in order of how much it matters:
 
 | | Why it matters |
 |---|---|
-| **Email delivery** — set `smtp_host` in `config/secrets.yaml` | SMS works and has been proven with a real message; email has never been sent. Try the Nikhef relay with no credentials first. |
 | **The heater cut on a `pmain` hihi** (§10) — decided 18 Sep, not built | The decision is recorded and the threshold is live in `alarms.yaml`, but nothing joins them: a `pmain` hihi notifies a person, and a person cuts the heaters. The safe direction for the gap to be in, but it must not be described to an operator as something the software does. |
 | **The Nikhef VM watchdog** — one Grafana rule, "no measurement for 15 minutes" (§12) | The one failure this system cannot report is its own machine being off. Auto-start makes that *less* likely to be noticed, not more, because the system now looks after itself well enough that nobody checks. |
 | **Replace the `tt202` sensor** | Then `enabled: true` in `channels.yaml` and `xams-ctl reload`. Nothing else changes. |
