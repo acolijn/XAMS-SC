@@ -212,3 +212,25 @@ class TestCodesAreNotAveraged:
         svc._accumulate([Measurement(t=t, channel="turbo_error", value=6.0, unit="code")])
         svc._emit_window()
         assert bus.measurements[-1].value == 6.0
+
+
+class TestStartup:
+    def test_startup_waits_for_every_configured_parameter(self, config, bus, monkeypatch):
+        """The first read must not find half the channels missing.
+
+        On the first deployment the service started on the first reply, the
+        next read lacked 305 and 306, and the alarm engine raised both as
+        major alarms for one log interval. Every restart would do the same.
+        """
+        wanted = sorted({int(c.phys) for c in config.channels_for("turbo")})
+        replies = [with_checksum(f"00110{p:03d}06000000") for p in wanted]
+        first, rest = replies[:2], replies[2:]
+        port = FakePort([("\r".join(first) + "\r").encode(), b"",
+                         ("\r".join(rest) + "\r").encode()])
+        monkeypatch.setattr(turbo, "_ReceiveOnlyPort", lambda *a: port)
+        monkeypatch.setattr(TurboService, "_find_port", lambda self: "COM_TEST")
+        monkeypatch.setattr(turbo.time, "sleep", lambda s: None)
+        svc = TurboService(config, bus)
+        assert svc.verify_identity() is True
+        assert set(wanted) <= set(svc._tap.latest)
+        assert all(m.quality is Quality.OK for m in svc.read())
