@@ -161,7 +161,7 @@ load.
 ### The turbo on the drawing
 
 The turbo pump's **outline** is coloured by its state, and the speed is written
-beside the *Turbopump* label. The card in the column says the same state in
+underneath the pump. The card in the column says the same state in
 words, so nothing depends on colour alone.
 
 | Outline | Card says | Meaning |

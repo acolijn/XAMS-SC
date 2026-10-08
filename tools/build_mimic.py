@@ -58,10 +58,10 @@ TAG_PATTERN = re.compile(r"[A-Z]{1,3}\d{2,3}|PMAIN")
 # find.
 EXTRA_PLACEMENTS = {
     "ls_heater_1_w": ("Heater", 0.0, 12.0),
-    # The turbo speed, just past the end of the "Turbopump" label. The symbol
-    # itself sits below the label in the final orientation, so the reading
-    # goes beside it rather than under it, where it would land on the pipe.
-    "turbo_speed": ("Turbopump", 44.0, 0.0),
+    # The turbo speed, centred UNDER the pump symbol. The label sits above the
+    # symbol in the final orientation, and the pipe runs through the symbol
+    # sideways, so below it is clear and reads as belonging to the pump.
+    "turbo_speed": ("Turbopump", 0.0, 42.0),
 }
 
 # Decimals for a value on the drawing where the general rule (two below 10,
