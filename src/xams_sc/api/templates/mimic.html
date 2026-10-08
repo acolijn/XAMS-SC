@@ -132,7 +132,6 @@
        Both cryostat sensors stay on the drawing only; what is not there is
        the number the cryostat is being HELD to, which is the one you want
        when the temperatures on the drawing start moving. #}
-    <div class="note">Output 1.</div>
   </div>
 
   <div class="card">
@@ -203,7 +202,8 @@
       <tr><td>over temperature</td>
           <td class="num"><span id="s-turbo-ot" class="dim">&mdash;</span></td></tr>
     </table>
-    <div class="note" id="s-turbo-note">HiPace 80, read from the DCU's RS-485 link.</div>
+    {# Empty, and hidden, unless there is something to say. #}
+    <div class="note" id="s-turbo-note" hidden></div>
   </div>
 
   <div class="card">
@@ -472,9 +472,9 @@ function drawTurbo(by) {
   if (note) {
     const speedMissing = st.key !== "nodata" && (!sp || !sp.healthy || sp.value === null);
     note.textContent = speedMissing
-      ? "Speed not on the bus: set the DCU service line (795) to 309."
-      : "HiPace 80, read from the DCU's RS-485 link.";
+      ? "Speed not on the bus: set the DCU service line (795) to 309." : "";
     note.className = speedMissing ? "note warn" : "note";
+    note.hidden = !speedMissing;
   }
 
   // The outline on the drawing. Off is the drawing's own line, untouched:
