@@ -66,8 +66,8 @@ a driver.
   cdaq ─┐
   caen ─┤                    ┌─► jsonl_writer ──► data/raw/*.jsonl   the archive
   ls335 ┼─► MQTT (mosquitto) ┼─► pg_writer ─────► PostgreSQL ──► Grafana
-  ups  ─┘                    ├─► alarm engine ──► SMS / email
-                             └─► web UI (FastAPI, 127.0.0.1:8000)
+  ups  ─┤                    ├─► alarm engine ──► SMS / email
+  turbo┘                    └─► web UI (FastAPI, 127.0.0.1:8000)
 ```
 
 **The files are the truth; the database is an index over them.** If PostgreSQL

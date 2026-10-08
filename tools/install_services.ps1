@@ -8,6 +8,13 @@
         .\tools\install_services.ps1              # start at boot (production)
         .\tools\install_services.ps1 -Manual      # restart on crash, not at boot
         .\tools\install_services.ps1 -Uninstall   # remove them again
+        .\tools\install_services.ps1 -Only turbo  # add or update ONE service,
+                                                  # leaving the others running
+
+    -Only touches nothing but the services named: no other service is stopped,
+    no other process is killed and no other lock is removed. It is how a new
+    driver is added to a running system without a gap in the data or in the
+    alarms.
 
     Idempotent: re-running updates the existing services in place.
 
@@ -36,6 +43,7 @@
 param(
     [switch]$Manual,
     [switch]$Uninstall,
+    [string[]]$Only,
     [string]$NssmVersion = "2.24"
 )
 
@@ -60,6 +68,18 @@ $Services = [ordered]@{
     "derived"   = @("-m", "xams_sc.devices", "derived")
     "alarms"    = @("-m", "xams_sc.alarms")
     "webui"     = @("-m", "xams_sc.api")
+}
+
+if ($Only) {
+    foreach ($n in $Only) {
+        if (-not $Services.Contains($n)) {
+            Write-Host "  FAIL unknown service '$n'; known: $($Services.Keys -join ', ')" -ForegroundColor Red
+            exit 1
+        }
+    }
+    foreach ($n in @($Services.Keys)) {
+        if ($Only -notcontains $n) { $Services.Remove($n) }
+    }
 }
 
 function Say  ($m) { Write-Host "  $m" }
@@ -209,13 +229,24 @@ if ($LASTEXITCODE -eq 0) {
 Step "Starting"
 
 # Stop anything xams-ctl left running as a plain process, or the new services
-# hit their own single-instance locks and refuse.
-Get-CimInstance Win32_Process -Filter "name='python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'xams_sc' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 3
-Get-ChildItem (Join-Path $LogDir "*.lock") -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
+# hit their own single-instance locks and refuse. With -Only, only the named
+# services' processes and locks: everything else keeps running.
+if ($Only) {
+    foreach ($name in $Services.Keys) {
+        Get-CimInstance Win32_Process -Filter "name='python.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { ($_.CommandLine -join " ") -match ("xams_sc\S*\s+" + $name + "(\s|$)") } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Remove-Item (Join-Path $LogDir "$name.lock") -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+} else {
+    Get-CimInstance Win32_Process -Filter "name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'xams_sc' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 3
+    Get-ChildItem (Join-Path $LogDir "*.lock") -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 foreach ($name in $Services.Keys) {
     $svc = "$Prefix$name"

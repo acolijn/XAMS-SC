@@ -25,6 +25,8 @@ page is the *what*.
 
 ::: xams_sc.devices.ups
 
+::: xams_sc.devices.turbo
+
 ::: xams_sc.devices.derived
 
 ::: xams_sc.devices.serial_id

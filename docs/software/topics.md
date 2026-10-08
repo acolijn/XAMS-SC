@@ -24,7 +24,7 @@ Source: [the design specification](../DESIGN.md) §3 and `src/xams_sc/bus.py`.
 | `xams/backup/status` | the nightly backup's last result | **yes** |
 
 `<channel>` is a name from [`channels.yaml`](config.md). `<service>` is a
-service name — `cdaq`, `caen`, `lakeshore`, `ups`, `derived`, `sinks`,
+service name — `cdaq`, `caen`, `lakeshore`, `ups`, `turbo`, `derived`, `sinks`,
 `alarms`, `webui`.
 
 **Retained is a deliberate choice, not a default.** It is what lets a page, a

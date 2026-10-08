@@ -43,7 +43,7 @@ heartbeat. Heartbeat ages come from the **retained MQTT topics, not the
 database** — the status view works even when PostgreSQL does not, which is
 precisely when it is needed.
 
-**All eight services publish a heartbeat**, `sinks` and `alarms` included, so
+**Every service publishes a heartbeat**, `sinks` and `alarms` included, so
 silence means the same thing for any of them. Those two used to be exempt,
 which left the service that writes the archive and the service that telephones
 people as the two the status view could never show as broken.

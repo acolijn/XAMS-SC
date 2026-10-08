@@ -255,16 +255,17 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\tools\install_services.ps1
 ```
 
-It downloads NSSM 2.24 into `tools\installers\` and installs eight services,
+It downloads NSSM 2.24 into `tools\installers\` and installs nine services,
 each started at boot and restarted on a crash, running as `LocalSystem`:
 `XAMS-sinks`, `XAMS-cdaq`, `XAMS-caen`, `XAMS-lakeshore`, `XAMS-ups`,
-`XAMS-derived`, `XAMS-alarms`, `XAMS-webui`. It also builds this manual (§6).
+`XAMS-turbo`, `XAMS-derived`, `XAMS-alarms`, `XAMS-webui`. It also builds this manual (§6).
 Idempotent: re-running updates the services in place.
 
 | Option | |
 |---|---|
 | `-Manual` | restart on crash, but not at boot |
 | `-Uninstall` | remove the services again |
+| `-Only <name>` | add or update only the named service(s); nothing else is stopped. How a new driver joins a running system, e.g. `-Only turbo` |
 
 To hand the instruments to another program, `xams-ctl stop --for-labview` stops
 the services **and** suspends their auto-start, so a reboot does not quietly

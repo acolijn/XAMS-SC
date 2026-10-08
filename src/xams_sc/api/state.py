@@ -394,7 +394,7 @@ class SystemState:
                 "state": states.get(name, "unknown"),
                 "age_s": age,
                 # EVERY service publishes a heartbeat now, so silence is
-                # evidence for all seven alike. `sinks` and `alarms` used to
+                # evidence for all of them alike. `sinks` and `alarms` used to
                 # be exempt because they are not BaseService, which meant the
                 # two that matter most — the archive, and the thing that
                 # telephones people — were the two the page could never show

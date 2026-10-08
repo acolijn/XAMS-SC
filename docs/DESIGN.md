@@ -68,7 +68,8 @@ xams-sc/
 │   │   ├── derived.py           flow integrator (§7.5)
 │   │   ├── caen.py
 │   │   ├── lakeshore.py
-│   │   └── ups.py
+│   │   ├── ups.py
+│   │   └── turbo.py             HiPace 80, listen-only RS-485 tap (§7.4a)
 │   ├── sinks/
 │   │   ├── __main__.py          one process runs them all (§9.4b: one lock)
 │   │   ├── pg_writer.py         PostgreSQL — measurements
@@ -275,7 +276,7 @@ One entry per channel. Schema:
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | channel identity (§3) |
-| `device` | yes | `cdaq` / `hv_1` / `hv_2` / `lakeshore` / `ups` |
+| `device` | yes | `cdaq` / `hv_1` / `hv_2` / `lakeshore` / `ups` / `turbo` |
 | `phys` | yes | physical address, e.g. `9207/ai5`, or HV channel index |
 | `kind` | yes | `voltage` / `current` / `rtd` / `hv_vmon` / `hv_imon` / `temperature` / `status` |
 | `unit` | yes | engineering unit string |
@@ -856,6 +857,21 @@ thing that already protects the machine.
   asked, and precisely the failure this service exists to catch.
 
 ---
+
+### 7.4a Turbo pump service (`devices/turbo.py`)
+
+Pfeiffer HiPace 80 (TC 110) in a HiCube 80 Eco, added 8 October 2026. Read by
+**listening** to the RS-485 link between the pump and the station's DCU, via a
+Y-piece and an EXSYS EX-13009 (FTDI) adapter. **It never transmits**: the DCU
+is the bus master, and a telegram from this PC would collide with its polls or
+be obeyed as a command. The port wrapper has no write method.
+
+Consequences: only parameters the DCU polls can be read (the status set
+always; the speed while the DCU display or service line, parameter 795, shows
+309), and identity is the adapter's USB serial plus valid replies from the
+pump address rather than an `*IDN?` (§6.2). A parameter the DCU stops polling
+is published as `quality=error`. The vacuum pressure is not on this bus. See
+[the driver page](drivers/turbo.md).
 
 ### 7.5 Derived channels — the flow integrator
 
