@@ -310,10 +310,19 @@ class TurboService(BaseService):
             log.critical("FATAL: cannot open %s: %s", port, exc)
             return False
 
+        # Listen until every configured parameter has been heard once, not
+        # just the first reply. The DCU polls them one after another, and a
+        # first read that finds half of them missing publishes those as
+        # errors - which the alarm engine raises as a major alarm on every
+        # restart (seen on the first deployment, 2026-10-08).
+        wanted = {int(ch.phys) for ch in self._channels}
         deadline = time.monotonic() + self._identify_s
-        while time.monotonic() < deadline and tap.last_reply is None:
+        while time.monotonic() < deadline and not wanted <= set(tap.latest):
             tap.poll()
             time.sleep(0.2)
+        if tap.last_reply is not None and not wanted <= set(tap.latest):
+            log.warning("parameters not polled by the DCU at startup: %s",
+                        sorted(wanted - set(tap.latest)))
         if tap.last_reply is None:
             log.critical(
                 "FATAL: %s opened, but no valid reply from pump address %03d in "
