@@ -8,7 +8,7 @@
 <style>
 /* Only values invite a click (§8.2a) - a valve is manual hardware, and a
    pointer cursor on the whole drawing would teach the wrong habit. */
-.mimic-body [id^="v-"] { cursor:pointer; }
+.mimic-body [id^="v-"], .mimic-body [data-history] { cursor:pointer; }
 
 /* The drawing, and beside it the things a pipework diagram has no place for.
    24rem is chosen so the column fits a channel name, a number and a state
@@ -182,6 +182,30 @@
     </table>
   </div>
 
+  {# THE TURBO, read by listening to its RS-485 link with the DCU (§7.4a).
+     The state is derived here from the status channels - on, at speed,
+     accelerating, error, over-temperature - and drawn in the same colour as
+     the outline of the pump on the drawing.
+
+     The speed is on the drawing as well, beside the pump. Kept here for the
+     same reason as the heater watts in the cryostat card: the card reads as
+     one thing, what state the pump is in and how fast it is turning, and
+     both render from the same fetch of the same channel, so they cannot come
+     to disagree. #}
+  <div class="card">
+    <h2>Turbo pump</h2>
+    <table>
+      <tr><td>state</td>
+          <td class="num"><span id="s-turbo-state" class="dim">&mdash;</span></td></tr>
+      <tr><td>speed</td>
+          <td class="num"><span id="s-turbo_speed" class="dim">&mdash;</span>
+              <span class="unit">Hz</span></td></tr>
+      <tr><td>over temperature</td>
+          <td class="num"><span id="s-turbo-ot" class="dim">&mdash;</span></td></tr>
+    </table>
+    <div class="note" id="s-turbo-note">HiPace 80, read from the DCU's RS-485 link.</div>
+  </div>
+
   <div class="card">
     <h2>Alarms</h2>
     <div id="s-alarms"><div class="note">&mdash;</div></div>
@@ -255,7 +279,11 @@ async function refresh() {
       text = "—"; colour = STALE_COLOUR;
     } else {
       const m = Math.abs(c.value);
-      text = (m >= 1000 ? c.value.toFixed(0)
+      // A slot may say how many decimals it wants (build_mimic.py DIGITS):
+      // a stopped turbo is "0 Hz", not "0.00 Hz".
+      text = node.dataset.digits !== undefined
+           ? c.value.toFixed(Number(node.dataset.digits))
+           : (m >= 1000 ? c.value.toFixed(0)
             : m >= 10   ? c.value.toFixed(1)
                         : c.value.toFixed(2));
       colour = ALARM_COLOUR[c.alarm] || ALARM_COLOUR.ok;
@@ -372,6 +400,8 @@ function drawSide(state) {
   setValue("s-ups_battery_pct", by["ups_battery_pct"], 0);
   setValue("s-ups_runtime_min", by["ups_runtime_min"], 0);
 
+  drawTurbo(by);
+
   // Not a number: a boolean where the two values mean very different things,
   // so it is spelled out rather than printed as 1 and 0.
   const mains = by["ups_on_battery"];
@@ -383,6 +413,85 @@ function drawSide(state) {
     setText("s-ups_on_battery", "line power", "good");
   }
   markLive(state);
+}
+
+// --- the turbo: one state, drawn twice - in the card and as the colour of
+// the pump's outline on the drawing. ---
+
+// The flags arrive as means over the publish window (0..1), so "set" is
+// "more than half the window". The error code is published as its last value.
+function turboState(by) {
+  const ch = n => by["turbo_" + n];
+  const read = n => { const c = ch(n);
+                      return (c && c.healthy && c.value !== null) ? c.value : null; };
+  const on = read("on"), at = read("at_speed"), acc = read("accelerating"),
+        err = read("error"), ote = read("overtemp_elec"), otp = read("overtemp_pump"),
+        speed = read("speed");
+  if ([on, at, acc, err, ote, otp].some(v => v === null)) {
+    return {key: "nodata", text: "no data"};
+  }
+  if (err > 0) {
+    return {key: "bad", text: "Err " + String(Math.round(err)).padStart(3, "0")};
+  }
+  if (ote > 0.5 || otp > 0.5) return {key: "bad", text: "over temperature"};
+  if (on < 0.5) {
+    // Switched off but still turning: running down. Worth telling apart from
+    // stopped, because venting a spinning turbo is the mistake to avoid.
+    return (speed !== null && speed > 0)
+      ? {key: "warn", text: "running down"} : {key: "off", text: "off"};
+  }
+  if (at > 0.5)  return {key: "good", text: "at speed"};
+  if (acc > 0.5) return {key: "warn", text: "accelerating"};
+  return {key: "warn", text: "below set speed"};
+}
+
+const TURBO_OUTLINE = {good: ALARM_COLOUR.ok, warn: ALARM_COLOUR.minor,
+                       bad: ALARM_COLOUR.major, nodata: STALE_COLOUR};
+
+function drawTurbo(by) {
+  const st = turboState(by);
+  setText("s-turbo-state", st.text,
+          st.key === "off" ? "" : st.key === "nodata" ? "dim" : st.key);
+  setValue("s-turbo_speed", by["turbo_speed"], 0);
+
+  const ote = by["turbo_overtemp_elec"], otp = by["turbo_overtemp_pump"];
+  if (!ote || !otp || !ote.healthy || !otp.healthy
+      || ote.value === null || otp.value === null) {
+    setText("s-turbo-ot", "\u2014", "dim");
+  } else {
+    const where = [ote.value > 0.5 ? "electronics" : null,
+                   otp.value > 0.5 ? "pump" : null].filter(Boolean);
+    setText("s-turbo-ot", where.length ? "YES: " + where.join(", ") : "no",
+            where.length ? "bad" : "");
+  }
+
+  // The one reason the speed goes missing while the rest reads: the DCU only
+  // polls 309 while its display or service line shows it.
+  const sp = by["turbo_speed"];
+  const note = document.getElementById("s-turbo-note");
+  if (note) {
+    const speedMissing = st.key !== "nodata" && (!sp || !sp.healthy || sp.value === null);
+    note.textContent = speedMissing
+      ? "Speed not on the bus: set the DCU service line (795) to 309."
+      : "HiPace 80, read from the DCU's RS-485 link.";
+    note.className = speedMissing ? "note warn" : "note";
+  }
+
+  // The outline on the drawing. Off is the drawing's own line, untouched:
+  // colour is kept for states that say something.
+  const sym = document.getElementById("sym-turbo");
+  if (sym) {
+    const colour = TURBO_OUTLINE[st.key];
+    sym.setAttribute("stroke", colour || "none");
+    sym.setAttribute("stroke-dasharray", st.key === "nodata" ? "3 2" : "none");
+    sym.setAttribute("stroke-width", st.key === "nodata" ? "1.5" : "2.2");
+    let t = sym.querySelector("title");
+    if (!t) {
+      t = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      sym.appendChild(t);
+    }
+    t.textContent = "turbo pump: " + st.text + " — click for speed history";
+  }
 }
 
 // --- is what you are looking at still live? --------------------------------
@@ -495,6 +604,9 @@ function closePanel() {
 // One listener on the drawing rather than one per value: channels come and
 // go with channels.yaml and the SVG is rebuilt independently of this script.
 document.querySelector(".mimic-body").addEventListener("click", (e) => {
+  // Equipment outlines name the channel whose history they open.
+  const history = e.target && e.target.dataset && e.target.dataset.history;
+  if (history) { openPanel(history); return; }
   const id = e.target && e.target.id;
   if (!id || !id.startsWith("v-")) return;   // valves and pipes do nothing
   openPanel(id.slice(2));

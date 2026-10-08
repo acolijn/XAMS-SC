@@ -491,7 +491,9 @@ channels:
   # set 2026-10-08). A parameter the DCU stops polling is published as
   # quality=error, not left at its last value.
   #
-  # Not on the P&ID as channels: the drawing shows the turbo as a symbol only.
+  # On the P&ID: the speed beside the "Turbopump" label, and the symbol's
+  # outline coloured from the status channels (tools/build_mimic.py SYMBOLS).
+  # The status channels themselves have no slot of their own.
   # ------------------------------------------------------------------
   - {name: turbo_on, device: turbo, phys: "010", kind: status, unit: bool, on_pid: false,
      description: "turbo pumping station on (Pfeiffer 010 PumpgStatn)"}
@@ -505,7 +507,7 @@ channels:
      description: "turbo electronics over temperature (Pfeiffer 304 OvTempElec)"}
   - {name: turbo_overtemp_pump, device: turbo, phys: "305", kind: status, unit: bool, on_pid: false,
      description: "turbo pump over temperature (Pfeiffer 305 OvTempPump)"}
-  - {name: turbo_speed, device: turbo, phys: "309", kind: status, unit: Hz, on_pid: false,
+  - {name: turbo_speed, device: turbo, phys: "309", kind: status, unit: Hz,
      description: "turbo rotation speed (Pfeiffer 309 ActualSpd); needs DCU service line or display on 309"}
 
   # ------------------------------------------------------------------

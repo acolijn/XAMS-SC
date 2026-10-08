@@ -58,6 +58,28 @@ TAG_PATTERN = re.compile(r"[A-Z]{1,3}\d{2,3}|PMAIN")
 # find.
 EXTRA_PLACEMENTS = {
     "ls_heater_1_w": ("Heater", 0.0, 12.0),
+    # The turbo speed, just past the end of the "Turbopump" label. The symbol
+    # itself sits below the label in the final orientation, so the reading
+    # goes beside it rather than under it, where it would land on the pipe.
+    "turbo_speed": ("Turbopump", 44.0, 0.0),
+}
+
+# Decimals for a value on the drawing where the general rule (two below 10,
+# one below 1000) would be wrong. The turbo speed is a whole number of Hz, and
+# "0.00 Hz" for a stopped pump reads as a measurement with three digits of
+# precision.
+DIGITS = {"turbo_speed": 0}
+
+# Drawn equipment whose OUTLINE is coloured by its state (section 8.2).
+#
+# symbol id -> (label beside it on the drawing, channel whose history a click
+# opens). The symbol is found next to its label, and its own line work is
+# copied into an overlay path with that id; the page colours the overlay and
+# leaves the drawing underneath untouched. A copy rather than an edit of the
+# drawing's paths, because the generated SVG gives those no stable names and a
+# revised drawing would silently lose the colouring.
+SYMBOLS = {
+    "turbo": ("Turbopump", "turbo_speed"),
 }
 
 
@@ -202,6 +224,67 @@ def tighten_viewbox(path: Path, labels=None) -> tuple[float, float, float, float
     x1 = min(page_w, ix1 + INK_MARGIN_X)
     y1 = min(page_h, iy1 + INK_MARGIN_Y)
     return (x0, y0, x1 - x0, y1 - y0)
+
+
+def symbol_outline(page, anchor: str, rotated) -> str | None:
+    """SVG path data for the equipment symbol beside a label, in final coordinates.
+
+    The symbol is the roughly square drawing (a pump circle is about 23 pt
+    across) nearest the label, plus whatever is drawn inside it - the chevron
+    of a pump. Pipes run past the same label and are excluded by size: a
+    drawing longer than the symbol in either direction is not part of it.
+
+    Lines and Bezier curves are copied; anything else in the symbol is reported
+    rather than guessed at.
+    """
+    spot = next((w for w in page.get_text("words") if w[4] == anchor), None)
+    if spot is None:
+        return None
+    lx, ly = (spot[0] + spot[2]) / 2, (spot[1] + spot[3]) / 2
+
+    drawings = page.get_drawings()
+    best, best_d2 = None, 45.0 ** 2
+    for d in drawings:
+        r = d["rect"]
+        if not (15 <= r.width <= 40 and 15 <= r.height <= 40):
+            continue
+        if abs(r.width - r.height) > 0.25 * max(r.width, r.height):
+            continue
+        d2 = ((r.x0 + r.x1) / 2 - lx) ** 2 + ((r.y0 + r.y1) / 2 - ly) ** 2
+        if d2 < best_d2:
+            best, best_d2 = d, d2
+    if best is None:
+        return None
+
+    box = best["rect"]
+    parts = [d for d in drawings
+             if d is best or (d["rect"].x0 >= box.x0 - 1 and d["rect"].x1 <= box.x1 + 1
+                              and d["rect"].y0 >= box.y0 - 1 and d["rect"].y1 <= box.y1 + 1)]
+
+    def pt(p):
+        x, y = rotated(p.x, p.y)
+        return f"{x:.2f},{y:.2f}"
+
+    out, last = [], None
+    for d in parts:
+        for item in d["items"]:
+            kind = item[0]
+            if kind == "l":
+                a, b = item[1], item[2]
+                if last is None or abs(last.x - a.x) > 0.01 or abs(last.y - a.y) > 0.01:
+                    out.append("M" + pt(a))
+                out.append("L" + pt(b))
+                last = b
+            elif kind == "c":
+                a, c1, c2, b = item[1:5]
+                if last is None or abs(last.x - a.x) > 0.01 or abs(last.y - a.y) > 0.01:
+                    out.append("M" + pt(a))
+                out.append("C" + " ".join(pt(q) for q in (c1, c2, b)))
+                last = b
+            else:
+                print(f"  WARNING: {anchor} symbol has a {kind!r} element; not copied")
+        last = None
+    return " ".join(out) if out else None
 
 
 def main() -> int:
@@ -380,6 +463,25 @@ def main() -> int:
 
         placed[channel] = (word, "bubble" if bubble is not None else "beside")
 
+    # Equipment outlines coloured by state. See SYMBOLS.
+    for sym, (anchor, history) in SYMBOLS.items():
+        path = symbol_outline(page, anchor, rotated)
+        if path is None:
+            print(f"  WARNING: no symbol found beside {anchor!r}; {sym} is not coloured")
+            continue
+        el = ET.SubElement(root, f"{{{SVG_NS}}}path")
+        el.set("id", f"sym-{sym}")
+        el.set("d", path)
+        el.set("fill", "none")
+        # Invisible until the page knows the state: an equipment symbol that
+        # is green before anything has been read is a claim nobody made.
+        el.set("stroke", "none")
+        el.set("stroke-width", "2.2")
+        el.set("stroke-linejoin", "round")
+        el.set("stroke-linecap", "round")
+        el.set("data-history", history)
+        placed[f"sym-{sym}"] = (anchor, "outline")
+
     # Channels anchored to a plain label rather than to an instrument tag.
     for channel, (anchor, dx, dy) in EXTRA_PLACEMENTS.items():
         if channel not in known or channel in placed:
@@ -412,6 +514,8 @@ def main() -> int:
         value.set("fill", "#6e7681")
         value.set("data-unit", unit_text)
         value.set("data-unit-inline", "1")
+        if channel in DIGITS:
+            value.set("data-digits", str(DIGITS[channel]))
         value.text = "—"
         placed[channel] = (anchor, "anchored")
 

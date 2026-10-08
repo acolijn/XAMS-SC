@@ -145,6 +145,7 @@ Top to bottom, and the order is deliberate:
 | **Xenon moved** | the integrated total since the period started |
 | **High voltage** | `VMON` and the decoded state of every channel |
 | **Mains** | line power or battery, charge, UPS runtime |
+| **Turbo pump** | state in words, speed, over-temperature; says so when the speed is not on the bus |
 | **Alarms** | what is firing, and whether anybody is being told |
 
 **Alarms is last because it is the only card that changes height.** It grows
@@ -156,6 +157,24 @@ The cryostat card shows the heater in **watts**, with the percentage beside
 it. Percent is of full scale, so it answers "how hard is it working" only once
 you know what full scale is; watts is the number to compare against the heat
 load.
+
+### The turbo on the drawing
+
+The turbo pump's **outline** is coloured by its state, and the speed is written
+beside the *Turbopump* label. The card in the column says the same state in
+words, so nothing depends on colour alone.
+
+| Outline | Card says | Meaning |
+|---|---|---|
+| the drawing's own line | `off` | pumping station off, rotor stopped |
+| amber | `accelerating`, `below set speed`, `running down` | turning, but not at set speed (running down: switched off and still spinning — do not vent) |
+| green | `at speed` | at set speed |
+| red | `Err 006`, `over temperature` | the pump reports an error or warning, or an over-temperature |
+| dashed grey | `no data` | the status is not being read: service, DCU or cable |
+
+Clicking the pump opens the speed history. If the speed shows a dash while the
+rest reads, the DCU is no longer polling it: set the DCU's service line
+(parameter 795) back to 309. See [the driver page](../drivers/turbo.md).
 
 **The cards that correspond to something changeable carry a link** — *change
 →*, *reset →*, *set →* — which takes you to the matching section of

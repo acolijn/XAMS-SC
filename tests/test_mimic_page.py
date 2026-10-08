@@ -43,7 +43,7 @@ class TestTheColumnOrder:
                    if h != "P&amp;I &mdash; live values"]
 
         assert sidebar == ["Cryostat setpoint", "Xenon moved", "High voltage",
-                           "Mains", "Alarms"]
+                           "Mains", "Turbo pump", "Alarms"]
 
     def test_alarms_are_last_because_that_card_changes_height(self, page):
         assert headings(page)[-1] == "Alarms", \
@@ -265,3 +265,43 @@ class TestTheDrawingFillsItsBox:
         write = build.index("OUT.write_bytes")
 
         assert build.index("box = tighten_viewbox(OUT") > write
+
+
+class TestTheTurbo:
+    """The pump's state, drawn as the colour of its outline and in a card.
+
+    The outline is a COPY of the drawing's own line work, so the drawing
+    underneath is untouched and "off" is simply the copy left invisible.
+    """
+
+    @pytest.fixture
+    def svg(self):
+        return pathlib.Path(
+            "src/xams_sc/api/static/xams_pid.svg").read_text(encoding="utf-8")
+
+    def test_the_drawing_carries_the_outline_and_the_speed(self, svg):
+        assert 'id="sym-turbo"' in svg
+        assert 'id="v-turbo_speed"' in svg
+
+    def test_the_outline_is_invisible_until_a_state_is_known(self, svg):
+        """Green before anything has been read is a claim nobody made."""
+        tag = re.search(r'<path id="sym-turbo"[^>]*>', svg).group(0)
+        assert 'stroke="none"' in tag
+        assert 'fill="none"' in tag
+
+    def test_clicking_the_pump_opens_the_speed_history(self, svg, page):
+        tag = re.search(r'<path id="sym-turbo"[^>]*>', svg).group(0)
+        assert 'data-history="turbo_speed"' in tag
+        assert "dataset.history" in page
+
+    def test_the_speed_is_a_whole_number(self, svg):
+        tag = re.search(r'<text id="v-turbo_speed"[^>]*>', svg).group(0)
+        assert 'data-digits="0"' in tag
+
+    def test_the_card_says_why_the_speed_is_missing(self, page):
+        assert "service line (795) to 309" in page
+
+    @pytest.mark.parametrize("state", ["at speed", "accelerating", "running down",
+                                       "over temperature", "no data", "Err "])
+    def test_every_state_has_words_as_well_as_a_colour(self, page, state):
+        assert state in page
