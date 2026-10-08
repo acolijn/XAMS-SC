@@ -383,7 +383,7 @@ class SystemState:
         return [v for v in views if v is not None]
 
     def services(self) -> list[dict]:
-        known = ["cdaq", "caen", "lakeshore", "ups", "derived", "alarms", "sinks"]
+        known = ["cdaq", "caen", "lakeshore", "ups", "turbo", "derived", "alarms", "sinks"]
         with self._lock:
             beats, states = dict(self._heartbeats), dict(self._states)
         out = []

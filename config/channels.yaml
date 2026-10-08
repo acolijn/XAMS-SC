@@ -482,6 +482,33 @@ channels:
      description: "estimated runtime remaining"}
 
   # ------------------------------------------------------------------
+  # Turbo pump - Pfeiffer HiPace 80, LISTENED TO on its RS-485 link with the
+  # HiCube DCU (devices.yaml `turbo`, docs/drivers/turbo.md). `phys` is the
+  # Pfeiffer parameter number.
+  #
+  # Only what the DCU polls is on the bus: the status set always, the speed
+  # (309) only while it is on the DCU display or service line (DCU 795 = 309,
+  # set 2026-10-08). A parameter the DCU stops polling is published as
+  # quality=error, not left at its last value.
+  #
+  # Not on the P&ID as channels: the drawing shows the turbo as a symbol only.
+  # ------------------------------------------------------------------
+  - {name: turbo_on, device: turbo, phys: "010", kind: status, unit: bool, on_pid: false,
+     description: "turbo pumping station on (Pfeiffer 010 PumpgStatn)"}
+  - {name: turbo_at_speed, device: turbo, phys: "306", kind: status, unit: bool, on_pid: false,
+     description: "turbo at set speed (Pfeiffer 306 SetSpdAtt)"}
+  - {name: turbo_accelerating, device: turbo, phys: "307", kind: status, unit: bool, on_pid: false,
+     description: "turbo accelerating (Pfeiffer 307 PumpAccel)"}
+  - {name: turbo_error, device: turbo, phys: "303", kind: status, unit: code, on_pid: false,
+     description: "turbo error / warning number, 0 = none (Pfeiffer 303); text in turbo.log"}
+  - {name: turbo_overtemp_elec, device: turbo, phys: "304", kind: status, unit: bool, on_pid: false,
+     description: "turbo electronics over temperature (Pfeiffer 304 OvTempElec)"}
+  - {name: turbo_overtemp_pump, device: turbo, phys: "305", kind: status, unit: bool, on_pid: false,
+     description: "turbo pump over temperature (Pfeiffer 305 OvTempPump)"}
+  - {name: turbo_speed, device: turbo, phys: "309", kind: status, unit: Hz, on_pid: false,
+     description: "turbo rotation speed (Pfeiffer 309 ActualSpd); needs DCU service line or display on 309"}
+
+  # ------------------------------------------------------------------
   # Derived (§7.5). Not read from hardware; computed by devices/derived.py.
   # ------------------------------------------------------------------
   - {name: fm101_total, device: derived, phys: "integrate:fm101", kind: voltage, unit: g,

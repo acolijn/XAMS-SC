@@ -166,5 +166,6 @@ could not be told apart from measurements afterwards.
 | [CAEN DT1470ET](caen.md) | two supplies, eight HV channels |
 | [Lake Shore 335](lakeshore.md) | cryostat temperature control |
 | [UPS](ups.md) | mains and battery |
+| [Turbo pump](turbo.md) | HiPace 80 status and speed, listen-only on RS-485 |
 | [Derived channels](derived.md) | computed, not read |
 | [Writing a new driver](writing.md) | start to finish |

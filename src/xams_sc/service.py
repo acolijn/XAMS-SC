@@ -223,6 +223,10 @@ class BaseService:
     # data, not a list of channel names to keep in step (§6.1).
     BITMASK_UNIT = "bits"
 
+    # The same holds for a code: the turbo's error number is a label, and the
+    # mean of "no error" and "Err006" is a third error that never happened.
+    LAST_VALUE_UNITS = frozenset({BITMASK_UNIT, "code"})
+
     def _accumulate(self, batch: list[Measurement]) -> None:
         for m in batch:
             self._window.setdefault(m.channel, []).append(m)
@@ -258,7 +262,7 @@ class BaseService:
             # holds. Quality is still judged over the whole window, because a
             # window with an unreadable sample in it is still a window that
             # was not fully read.
-            if good[-1].unit == self.BITMASK_UNIT:
+            if good[-1].unit in self.LAST_VALUE_UNITS:
                 self.bus.publish_measurement(
                     Measurement(
                         t=good[-1].t, channel=channel, value=good[-1].value,
