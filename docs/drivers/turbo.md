@@ -87,6 +87,16 @@ number is a plausible wrong value. Fragments are counted and dropped.
 
 ---
 
+## On the P&I page
+
+The pump's outline on the drawing is coloured by state and the speed is written
+beside it; a card in the column says the state in words. See [the web UI
+page](../operating/webui.md#the-turbo-on-the-drawing). The outline is a copy of
+the drawing's own line work, made by `tools/build_mimic.py` (`SYMBOLS`), so a
+revised drawing keeps the colouring.
+
+---
+
 ## What a fault looks like from the outside
 
 | Seen | Meaning |
