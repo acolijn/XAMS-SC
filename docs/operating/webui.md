@@ -477,7 +477,7 @@ crossed it. *Acknowledged* means the repeating notification has been stopped —
 the same thing.
 
 **Services** — one row per service, with its state and how long ago it last sent
-a heartbeat. A few seconds is normal. All seven publish one, so **silent**
+a heartbeat. A few seconds is normal. Every one publishes one, so **silent**
 means silent for any of them, including `sinks` and `alarms`. Green is beating
 and reporting itself running; amber is beating but degraded — the sinks go
 amber when they have had to discard data; red is silent, stopped, or in a

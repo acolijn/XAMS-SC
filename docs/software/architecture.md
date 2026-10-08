@@ -24,11 +24,12 @@ full argument and the decisions that were rejected.
   CAEN hv_2   ──▶            ─┤                              │             PostgreSQL
   Lake Shore  ──▶  lakeshore ─┼─▶  xams/meas/<channel>  ─────┼─▶  alarms ──▶ SMS / email
   APC UPS     ──▶  ups       ─┤    (retained)                │
+  HiPace 80   ──▶  turbo     ─┤    (listen-only tap)         │
                    derived   ─┘                              └─▶  webui ──▶ browser
                                                                    Grafana ◀── PostgreSQL
 ```
 
-Eight processes, each started and stopped by
+Nine processes, each started and stopped by
 [`xams-ctl`](../reference/cli.md). Every one of them is an ordinary Python
 process with no state worth preserving — except `derived`, which is the one
 exception and says so loudly.
@@ -40,6 +41,7 @@ exception and says so loudly.
 | `caen` | both HV supplies, in one process |
 | `lakeshore` | the 335 temperature controller |
 | `ups` | mains and battery state |
+| `turbo` | HiPace 80 turbo status and speed, listening on its RS-485 link — never transmits |
 | `derived` | the flow integrator — **the only stateful service** |
 | `alarms` | evaluation, notification, flight recorder |
 | `webui` | the pages, and this manual |

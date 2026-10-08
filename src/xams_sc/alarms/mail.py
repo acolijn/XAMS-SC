@@ -254,7 +254,7 @@ def digest(state, when: datetime) -> tuple[str, str, str]:
     backup_text = ("%.0f h ago" % backup["age_h"]) if (
         backup["state"] == "ok" and backup["age_h"] is not None) else backup["state"]
     body.append(table([
-        # All seven are counted now that all seven publish a heartbeat. This
+        # All are counted now that every service publishes a heartbeat. This
         # used to count only the five that did, because including the two
         # that did not made a healthy system report "5 of 7" and look as
         # though something had died.

@@ -96,3 +96,26 @@ ups:
   model: "APC Legacy Communication Card"
   match: {vid: "051D", pid: "0002", serial: "3S2005X18782"}
   connection: usb-hid
+
+turbo:
+  # Pfeiffer HiPace 80 (TC 110 electronics) in a HiCube 80 Eco pumping
+  # station. Read by LISTENING on the RS-485 link between the pump and its
+  # DCU, via a Pfeiffer M12 Y-piece and an EXSYS EX-13009 USB/RS-485 adapter
+  # (FTDI). Connected and checked 2026-10-08. See docs/drivers/turbo.md.
+  #
+  # NOTHING IS EVER SENT. The DCU is the bus master; this service only reads
+  # its polls and the pump's replies.
+  #
+  # The serial is what pyserial reports for the FTDI port: the USB serial
+  # DIBIURQ3 plus the interface letter A. Windows shows the adapter as
+  # USB\VID_0403&PID_6001\DIBIURQ3 (COM7 at the time).
+  model: "Pfeiffer HiPace 80 / TC 110, via EXSYS EX-13009 RS-485 tap"
+  match: {vid: "0403", pid: "6001", serial: "DIBIURQ3A"}
+  connection: rs485-listen-only
+  baud: 9600          # Pfeiffer protocol: 9600 8N1
+  address: 1          # the pump's RS-485 address (parameter 797)
+  # A parameter not seen for this long is published as quality=error. The DCU
+  # polls each one about twice a second.
+  max_age_s: 5
+  # Startup listens this long for a valid reply before refusing to start.
+  identify_s: 5

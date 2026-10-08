@@ -383,7 +383,7 @@ class SystemState:
         return [v for v in views if v is not None]
 
     def services(self) -> list[dict]:
-        known = ["cdaq", "caen", "lakeshore", "ups", "derived", "alarms", "sinks"]
+        known = ["cdaq", "caen", "lakeshore", "ups", "turbo", "derived", "alarms", "sinks"]
         with self._lock:
             beats, states = dict(self._heartbeats), dict(self._states)
         out = []
@@ -394,7 +394,7 @@ class SystemState:
                 "state": states.get(name, "unknown"),
                 "age_s": age,
                 # EVERY service publishes a heartbeat now, so silence is
-                # evidence for all seven alike. `sinks` and `alarms` used to
+                # evidence for all of them alike. `sinks` and `alarms` used to
                 # be exempt because they are not BaseService, which meant the
                 # two that matter most — the archive, and the thing that
                 # telephones people — were the two the page could never show
